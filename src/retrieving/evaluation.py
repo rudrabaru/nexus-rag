@@ -29,7 +29,6 @@ class RetrievedChunkInfo(BaseModel):
     heading_path: List[str] = []
     metadata: Dict[str, Any] = {}
 
-    # New V3 fields
     raw_identifier: str = ""
     normalized_identifier: List[str] = []
     matched_target: str = ""
@@ -130,10 +129,14 @@ class Evaluator:
                 if raw_path:
                     try:
                         parsed = json.loads(raw_path)
-                        heading_path = parsed if isinstance(parsed, list) else [str(parsed)]
+                        heading_path = (
+                            parsed if isinstance(parsed, list) else [str(parsed)]
+                        )
                     except (json.JSONDecodeError, TypeError):
                         # Legacy fallback: if stored as " > " joined string
-                        heading_path = [s.strip() for s in str(raw_path).split(" > ") if s.strip()]
+                        heading_path = [
+                            s.strip() for s in str(raw_path).split(" > ") if s.strip()
+                        ]
                 heading_path_str = (
                     " > ".join(heading_path)
                     if isinstance(heading_path, list)

@@ -39,15 +39,7 @@ class URLFilter:
         # Ensure lowercase domain
         parsed = urlparse(url)
 
-        # Strip 'hl' parameter for language canonicalization (English default)
-        from urllib.parse import parse_qs, urlencode
-
-        qs = parse_qs(parsed.query)
-        if "hl" in qs:
-            del qs["hl"]
-        new_query = urlencode(qs, doseq=True)
-
-        return f"{parsed.scheme}://{parsed.netloc.lower()}{parsed.path}{'?' + new_query if new_query else ''}"
+        return f"{parsed.scheme}://{parsed.netloc.lower()}{parsed.path}{'?' + parsed.query if parsed.query else ''}"
 
     def is_domain_allowed(self, url: str) -> bool:
         """Check if URL domain is in allowed list."""

@@ -1,6 +1,5 @@
 import json
 import logging
-from pathlib import Path
 from typing import List, Dict, Any
 import chromadb
 from src.embedding.models import EmbeddedChunk
@@ -50,7 +49,11 @@ class ChromaDBManager:
             "content_type": chunk.content_type,
             "chunk_version": chunk.chunk_version,
             "document_version": chunk.document_version,
+            "visibility": chunk.visibility or "public",
         }
+
+        if chunk.tenant_id:
+            metadata["tenant_id"] = chunk.tenant_id
 
         # Store heading_path as a JSON array string for lossless round-trip parsing.
         # Consumers must use json.loads() to reconstruct the list.
@@ -79,58 +82,20 @@ class ChromaDBManager:
 
         max_batch_size = 5000
         total_added = 0
-        
+
         try:
             for i in range(0, len(ids), max_batch_size):
-                self.collection.add(
-                    ids=ids[i:i + max_batch_size],
-                    embeddings=embeddings[i:i + max_batch_size],
-                    metadatas=metadatas[i:i + max_batch_size],
-                    documents=documents[i:i + max_batch_size]
+                self.collection.upsert(
+                    ids=ids[i : i + max_batch_size],
+                    embeddings=embeddings[i : i + max_batch_size],
+                    metadatas=metadatas[i : i + max_batch_size],
+                    documents=documents[i : i + max_batch_size],
                 )
-                total_added += len(ids[i:i + max_batch_size])
+                total_added += len(ids[i : i + max_batch_size])
             return total_added
         except Exception as e:
             logger.error(f"Failed to load chunks into ChromaDB: {e}")
             return total_added
-
-    def load_from_directory(self, embeddings_dir: str, batch_size: int = 100) -> int:
-        """
-        Reads all embedded chunk JSON files from a directory and loads them into ChromaDB in batches.
-        """
-        dir_path = Path(embeddings_dir)
-        json_files = list(dir_path.glob("*.json"))
-
-        logger.info(f"Found {len(json_files)} embedded chunk files in {embeddings_dir}")
-
-        total_loaded = 0
-        current_batch = []
-
-        for i, file_path in enumerate(json_files, 1):
-            try:
-                with open(file_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                    chunk = EmbeddedChunk(**data)
-                    current_batch.append(chunk)
-            except Exception as e:
-                logger.warning(f"Failed to read/parse {file_path}: {e}")
-
-            if len(current_batch) >= batch_size or i == len(json_files):
-                if current_batch:
-                    loaded = self.load_chunks(current_batch)
-                    total_loaded += loaded
-                    current_batch = []
-
-            if i % 500 == 0:
-                logger.info(f"Processed {i}/{len(json_files)} files...")
-
-        # Load any remaining chunks
-        if current_batch:
-            loaded = self.load_chunks(current_batch)
-            total_loaded += loaded
-
-        logger.info(f"Successfully loaded {total_loaded} chunks into ChromaDB.")
-        return total_loaded
 
     def get_collection_size(self) -> int:
         """Returns the number of items in the collection."""

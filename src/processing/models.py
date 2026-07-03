@@ -13,9 +13,7 @@ class BlockMetrics(BaseModel):
     link_density: float = 0.0
     document_frequency: float = 0.0
     position_ratio: float = 0.0
-    information_density: float = 0.0
     unique_word_ratio: float = 0.0
-    context_penalty: float = 0.0
 
 
 class Block(BaseModel):

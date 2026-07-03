@@ -8,7 +8,7 @@ class EmbeddingConfig(BaseModel):
     """
 
     model_name: str = Field(
-        "all-MiniLM-L6-v2", description="Name of the sentence-transformers model"
+        "BAAI/bge-small-en-v1.5", description="Name of the sentence-transformers model"
     )
     batch_size: int = Field(32, description="Batch size for generating embeddings")
     output_version: str = Field(

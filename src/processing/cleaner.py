@@ -191,13 +191,13 @@ class DocumentCleaner:
                 score -= 3.0
                 reasons.append("High Info Density (Long Explanation)")
 
-            # Signal 6: Content Diversity
+            # Signal 5: Content Diversity
             if block.metrics.word_count > 5 and block.metrics.unique_word_ratio < 0.5:
                 score += 2.0
                 signals_triggered.append("diversity_low")
                 reasons.append(f"Low Diversity ({block.metrics.unique_word_ratio:.2f})")
 
-            # Signal 5: Context (Check neighbors for high link density or edge position)
+            # Signal 6: Context (Check neighbors for high link density or edge position)
             # If previous or next block is a small link block
             context_penalty = 0.0
             if (

@@ -12,35 +12,18 @@ This module implements the core chunking algorithm:
 import json
 import logging
 import re
+import hashlib
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
 
 from .metadata import ChunkMetadata, ChunkingConfig
 from .tokenizer import TokenCounter, TokenBudget
+from .models import Section, Block
+from .parsers import parse_sections, extract_blocks
+from .merger import merge_tiny_chunks
 
 logger = logging.getLogger(__name__)
-
-
-class Section:
-    """Represents a section under a specific heading."""
-
-    def __init__(self, title: str, level: int, heading_path: List[str]):
-        self.title = title
-        self.level = level
-        self.heading_path = heading_path
-        self.blocks = []  # List of Block
-        self.text = ""
-
-
-class Block:
-    """Represents an atomic unit of text within a section."""
-
-    def __init__(self, text: str, block_type: str, token_count: int, char_start: int):
-        self.text = text
-        self.block_type = block_type  # 'text', 'code', 'table'
-        self.token_count = token_count
-        self.char_start = char_start
 
 
 class DocumentChunker:
@@ -122,132 +105,22 @@ class DocumentChunker:
         )
         return all_chunks
 
-    def save_reports(
-        self,
-        output_dir: str = "./reports/chunking",
-        filename: str = "chunking_report.json",
-    ) -> str:
-        output_path = Path(output_dir)
-        output_path.mkdir(parents=True, exist_ok=True)
-        report_file = output_path / filename
-
-        report = {"config": self.config.model_dump(), "stats": self.stats}
-
-        with open(report_file, "w", encoding="utf-8") as f:
-            json.dump(report, f, indent=2, default=str)
-
-        logger.info(f"Chunking report saved to {report_file}")
-        return str(report_file)
-
     def _extract_doc_name(self, url: str) -> str:
-        import hashlib
-
         # Use an MD5 hash of the full URL to guarantee global uniqueness
         # and prevent collisions across generic documentation sites.
         return hashlib.md5(url.encode("utf-8")).hexdigest()
-
-    def _parse_sections(self, content: str) -> List[Section]:
-        """Parse markdown content into sections based on headings."""
-        sections = []
-        heading_stack = []  # List of tuples: (level, title)
-
-        lines = content.split("\n")
-
-        current_section = Section(title="Introduction", level=0, heading_path=[])
-        current_text = []
-
-        # Regex to capture markdown headings
-        heading_re = re.compile(r"^(#{1,6})\s+(.*)$")
-
-        for line in lines:
-            match = heading_re.match(line)
-            if match:
-                # Save current section
-                if current_text:
-                    current_section.text = "\n".join(current_text)
-                    sections.append(current_section)
-                    current_text = []
-                elif current_section.title == "Introduction" and not sections:
-                    # Empty introduction, just skip
-                    pass
-                else:
-                    current_section.text = ""
-                    sections.append(current_section)
-
-                level = len(match.group(1))
-                title = match.group(2).strip()
-
-                # Update stack
-                while heading_stack and heading_stack[-1][0] >= level:
-                    heading_stack.pop()
-                heading_stack.append((level, title))
-
-                heading_path = [item[1] for item in heading_stack]
-                current_section = Section(
-                    title=title, level=level, heading_path=heading_path
-                )
-                current_text.append(line)  # Include the heading in the section text
-            else:
-                current_text.append(line)
-
-        if current_text:
-            current_section.text = "\n".join(current_text)
-            sections.append(current_section)
-
-        return [s for s in sections if s.text.strip()]
-
-    def _extract_blocks(self, text: str, char_offset_base: int) -> List[Block]:
-        """Extract atomic blocks (Code, Table, Paragraph) from a section's text."""
-        blocks = []
-
-        # Markdown code block: ``` ... ```
-        code_block_re = re.compile(r"(```.*?```)", re.DOTALL)
-
-        # Split by double newline to get paragraphs
-        raw_paragraphs = re.split(r"\n\n+", text.strip())
-
-        current_char = char_offset_base
-
-        for para in raw_paragraphs:
-            if not para.strip():
-                continue
-
-            # Classify
-            is_code = para.startswith("```") and para.endswith("```")
-            is_table = "\n|" in para or para.startswith("|")
-
-            block_type = "text"
-            if is_code:
-                block_type = "code"
-            elif is_table:
-                block_type = "table"
-
-            token_count = self.token_counter.count_tokens(para)
-            blocks.append(
-                Block(
-                    text=para,
-                    block_type=block_type,
-                    token_count=token_count,
-                    char_start=current_char,
-                )
-            )
-
-            # Approximate char advance
-            current_char += len(para) + 2
-
-        return blocks
 
     def _split_content(
         self, content: str, url: str, title: str, doc_name: str
     ) -> List[ChunkMetadata]:
 
-        sections = self._parse_sections(content)
+        sections = parse_sections(content)
         chunks = []
         chunk_index = 0
         char_offset = 0
 
         for section in sections:
-            blocks = self._extract_blocks(section.text, char_offset)
+            blocks = extract_blocks(section.text, char_offset, self.token_counter)
 
             current_chunk_blocks = []
             current_tokens = 0
@@ -309,113 +182,7 @@ class DocumentChunker:
 
             char_offset += len(section.text) + 1
 
-        return self._merge_tiny_chunks(chunks)
-
-    def _merge_tiny_chunks(self, chunks: List[ChunkMetadata]) -> List[ChunkMetadata]:
-        if not chunks:
-            return []
-
-        merged = []
-        current = chunks[0]
-
-        for next_chunk in chunks[1:]:
-            # 1. Semantic Completeness Checks
-            lines_current = [
-                line for line in current.chunk_text.strip().split("\n") if line.strip()
-            ]
-            current_is_heading_only = (
-                current.starts_with_heading
-                and len(lines_current) <= 2
-                and current.token_count < 40
-            )
-            current_is_tiny = current.token_count < 40
-
-            # Note: We don't check next_chunk's incompleteness to force a merge into current.
-            # If next_chunk is incomplete (e.g. a heading), it will become `current` on the next iteration,
-            # and the text *after* it will be merged into it. Merging a heading into the end of an existing
-            # complete chunk is semantically wrong.
-
-            # 2. Content Type Checks
-            is_content_clash = (
-                current.content_type == "table" and next_chunk.content_type == "table"
-            ) or (current.content_type == "code" and next_chunk.content_type == "code")
-
-            # 3. Hierarchy Checks
-            # Sibling: same parent path
-            is_sibling = False
-            if (
-                len(current.heading_path) == len(next_chunk.heading_path)
-                and len(current.heading_path) > 0
-            ):
-                if current.heading_path[:-1] == next_chunk.heading_path[:-1]:
-                    is_sibling = True
-
-            # Parent-Child: next is child of current
-            is_parent_child = False
-            if len(current.heading_path) < len(next_chunk.heading_path):
-                if (
-                    next_chunk.heading_path[: len(current.heading_path)]
-                    == current.heading_path
-                ):
-                    is_parent_child = True
-
-            # Same Exact Path
-            is_same_path = current.heading_path == next_chunk.heading_path
-
-            # Are they related enough to consider merging?
-            is_related = is_same_path or is_parent_child or is_sibling
-            if not current.heading_path or not next_chunk.heading_path:
-                is_related = True  # Top level elements
-
-            should_merge = False
-
-            if not is_content_clash and is_related:
-                # Always merge if current is just a heading, to give it body text
-                # We enforce max_chunk_tokens unless current is JUST a tiny heading that MUST be merged.
-                if current_is_heading_only:
-                    should_merge = True
-                # Otherwise, merge if current is tiny, or if both are under min threshold, AS LONG AS it fits in max
-                elif current_is_tiny or (
-                    current.token_count < self.config.min_chunk_tokens
-                    or next_chunk.token_count < self.config.min_chunk_tokens
-                ):
-                    if (
-                        current.token_count + next_chunk.token_count
-                        <= self.config.max_chunk_tokens
-                    ):
-                        should_merge = True
-
-            if should_merge:
-                current.chunk_text += "\n\n" + next_chunk.chunk_text
-                current.token_count += next_chunk.token_count
-                current.char_end = next_chunk.char_end
-                current.contains_code = (
-                    current.contains_code or next_chunk.contains_code
-                )
-                current.contains_table = (
-                    current.contains_table or next_chunk.contains_table
-                )
-                current.tiny_chunk_merged = True
-
-                if current.content_type != next_chunk.content_type:
-                    current.content_type = "mixed"
-
-                if current_is_heading_only and len(next_chunk.heading_path) > len(
-                    current.heading_path
-                ):
-                    current.heading_path = next_chunk.heading_path
-                    current.section_title = next_chunk.section_title
-            else:
-                merged.append(current)
-                current = next_chunk
-
-        merged.append(current)
-
-        for i, c in enumerate(merged):
-            c.chunk_index = i
-            c.total_chunks = len(merged)
-
-        return merged
+        return merge_tiny_chunks(chunks, self.config)
 
     def _get_overlap_blocks(self, blocks: List[Block]) -> List[Block]:
         overlap_tokens = 0

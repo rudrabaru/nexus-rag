@@ -3,9 +3,28 @@ Metadata schemas for crawled documents using Pydantic.
 Ensures type safety and consistent data structure across the pipeline.
 """
 
+from __future__ import annotations
 from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field
+
+
+class VisualChunkDraft(BaseModel):
+    """Draft representation of a visual element and its generated description."""
+
+    text: str = Field(..., description="Generated text description of the visual")
+    asset_ref: str = Field(..., description="Path to source image file")
+    asset_type: str = Field(
+        ..., description="chart|flowchart|diagram|table_image|photo"
+    )
+    page_number: Optional[int] = Field(None, description="Source page number")
+
+
+class AdapterResult(BaseModel):
+    """Result returned by ingestion adapters."""
+
+    documents: List[CrawledDocument]
+    visual_chunks: List[VisualChunkDraft] = Field(default_factory=list)
 
 
 class CrawledDocument(BaseModel):
@@ -38,14 +57,12 @@ class CrawledDocument(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "url": "https://docs.cloud.google.com/load-balancing/docs/overview",
+                "url": "https://example.com/docs/overview",
                 "title": "Load Balancing Overview",
                 "markdown_content": "# Load Balancing Overview\n\nLoad balancing...",
                 "crawl_depth": 1,
                 "crawled_at": "2026-05-28T10:00:00",
-                "outgoing_links": [
-                    "https://docs.cloud.google.com/load-balancing/docs/features"
-                ],
+                "outgoing_links": ["https://example.com/docs/features"],
                 "word_count": 1500,
                 "status_code": 200,
             }
@@ -77,10 +94,10 @@ class CrawlConfig(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "start_url": "https://docs.cloud.google.com/load-balancing/docs/load-balancing-overview",
+                "start_url": "https://example.com/docs/overview",
                 "max_depth": 3,
                 "max_pages": 300,
-                "allowed_domains": ["docs.cloud.google.com"],
+                "allowed_domains": ["example.com"],
                 "exclude_patterns": [r".*\.pdf$", r".*\?page="],
                 "timeout_seconds": 30,
                 "delay_seconds": 0.5,

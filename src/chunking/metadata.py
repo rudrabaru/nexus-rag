@@ -41,7 +41,14 @@ class ChunkMetadata(BaseModel):
     )
     contains_table: bool = Field(False, description="Chunk contains markdown tables")
     content_type: str = Field(
-        "mixed", description="Primary content type: text, code, table, mixed"
+        "mixed",
+        description="Primary content type: text, code, table, mixed, visual_description",
+    )
+    visual_asset_ref: Optional[str] = Field(
+        None, description="Path to source image file"
+    )
+    visual_asset_type: Optional[str] = Field(
+        None, description="chart|flowchart|diagram|table_image|photo"
     )
     document_version: str = Field(..., description="Version of the processed doc used")
     chunk_version: str = Field(..., description="Chunking version used")
@@ -52,6 +59,10 @@ class ChunkMetadata(BaseModel):
     tiny_chunk_merged: bool = Field(
         False, description="Was this chunk created by merging tiny chunks"
     )
+
+    # Multi-tenancy
+    visibility: str = Field("public", description="Public or private access")
+    tenant_id: Optional[str] = Field(None, description="Tenant ID for private docs")
 
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
