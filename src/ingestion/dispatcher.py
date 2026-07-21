@@ -1,10 +1,7 @@
 import logging
 from src.crawling.metadata import AdapterResult
 from src.ingestion.adapters.web import WebAdapter
-from src.ingestion.adapters.pdf import PDFAdapter
-from src.ingestion.adapters.docx import DocxAdapter
-from src.ingestion.adapters.markdown import MarkdownAdapter
-from src.ingestion.adapters.rst import RSTAdapter
+from src.ingestion.adapters.universal_adapter import UniversalAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -16,10 +13,7 @@ class IngestionDispatcher:
 
     def __init__(self):
         self.web_adapter = WebAdapter()
-        self.pdf_adapter = PDFAdapter()
-        self.docx_adapter = DocxAdapter()
-        self.md_adapter = MarkdownAdapter()
-        self.rst_adapter = RSTAdapter()
+        self.universal_adapter = UniversalAdapter()
 
     async def _detect_http_content_type(self, url: str) -> str:
         """HEAD request to detect actual content type before routing."""
@@ -48,24 +42,20 @@ class IngestionDispatcher:
         result = None
         if source_lower.startswith("http://") or source_lower.startswith("https://"):
             content_type = await self._detect_http_content_type(source)
-            if content_type == "pdf":
-                result = await self.pdf_adapter.ingest(source, **kwargs)
-            elif content_type in ("txt", "md"):
-                result = await self.md_adapter.ingest(source, **kwargs)
+            logger.info(f"DISPATCHER | URL detected content_type={content_type!r} source={source!r}")
+            if content_type in ("pdf", "txt", "md"):
+                result = await self.universal_adapter.ingest(source, **kwargs)
             else:
                 result = await self.web_adapter.ingest(source, **kwargs)
-        elif source_lower.endswith(".pdf"):
-            result = await self.pdf_adapter.ingest(source, **kwargs)
-        elif source_lower.endswith(".docx"):
-            result = await self.docx_adapter.ingest(source, **kwargs)
-        elif source_lower.endswith(".rst"):
-            result = await self.rst_adapter.ingest(source, **kwargs)
-        elif source_lower.endswith(".md") or source_lower.endswith(".txt"):
-            result = await self.md_adapter.ingest(source, **kwargs)
+        elif any(source_lower.endswith(ext) for ext in [".pdf", ".docx", ".rst", ".md", ".txt", ".csv", ".xlsx", ".pptx"]):
+            ext = source_lower.rsplit(".", 1)[-1]
+            logger.info(f"DISPATCHER | File upload routed to UniversalAdapter | ext={ext!r} source={source!r}")
+            result = await self.universal_adapter.ingest(source, **kwargs)
         else:
-            logger.error(f"Unsupported input format for source: {source}")
+            logger.error(f"DISPATCHER | Unsupported input format for source: {source!r}")
             return AdapterResult(documents=[], visual_chunks=[])
 
         if isinstance(result, list):
             return AdapterResult(documents=result, visual_chunks=[])
         return result
+
