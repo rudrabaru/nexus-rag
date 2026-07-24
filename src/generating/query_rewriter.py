@@ -1,9 +1,14 @@
 import logging
 from typing import List, Dict
+import json
+from pydantic import BaseModel
 from src.generating.llm_client import LLMClient
 from src.generating.models import GenerationConfig
 
 logger = logging.getLogger(__name__)
+
+class RewrittenQuery(BaseModel):
+    rewritten_query: str
 
 
 class QueryRewriter:
@@ -34,8 +39,7 @@ Your task is to take a conversation history and a new follow-up query, and rewri
 
 CRITICAL RULES:
 - Do NOT answer the query.
-- Do NOT add conversational filler like "Here is the rewritten query".
-- ONLY output the rewritten search query text itself.
+- Output ONLY a valid JSON object matching the requested schema.
 
 History:
 {history_text}
@@ -45,12 +49,20 @@ Standalone query:"""
 
         try:
             # Call LLM
-            answer, _, _, _ = self.llm_client.call_llm(prompt)
-            rewritten = answer.strip()
+            answer, _, _, _ = self.llm_client.call_llm(
+                prompt, response_schema=RewrittenQuery
+            )
+            
+            clean_text = answer.strip()
+            if clean_text.startswith("```json"):
+                clean_text = clean_text[7:]
+            if clean_text.startswith("```"):
+                clean_text = clean_text[3:]
+            if clean_text.endswith("```"):
+                clean_text = clean_text[:-3]
 
-            # Clean up if the LLM leaked the prompt template prefix
-            if rewritten.lower().startswith("standalone query:"):
-                rewritten = rewritten[len("standalone query:") :].strip()
+            parsed = json.loads(clean_text.strip())
+            rewritten = parsed.get("rewritten_query", query).strip()
 
             logger.info(f"Rewrote query from '{query}' to '{rewritten}'")
             return rewritten

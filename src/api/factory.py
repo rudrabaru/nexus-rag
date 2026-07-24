@@ -1,0 +1,100 @@
+import os
+import logging
+from pathlib import Path
+from dataclasses import dataclass
+
+from src.retrieving.vector_store import ChromaDBManager
+from src.retrieving.retriever import DenseRetriever, OptionalReranker
+from src.generating.models import GenerationConfig
+from src.generating.generator import RAGGenerator
+from src.generating.evaluator import FaithfulnessEvaluator
+from src.generating.query_rewriter import QueryRewriter
+from src.embedding.generator import EmbeddingGenerator
+from src.embedding.config import EmbeddingConfig
+
+logger = logging.getLogger(__name__)
+
+from typing import Optional, Union
+from src.retrieving.retriever import HybridRetriever
+
+@dataclass
+class PipelineComponents:
+    retriever: Union[DenseRetriever, HybridRetriever]
+    reranker: Optional[OptionalReranker]
+    generator: RAGGenerator
+    evaluator: FaithfulnessEvaluator
+    provider: str
+    model_name: str
+    rewriter: QueryRewriter
+    embedding_generator: EmbeddingGenerator
+
+
+def _init_components() -> PipelineComponents:
+    """Shared factory function to initialize core pipeline components."""
+    distance_metric = "cosine"
+    
+    try:
+        collection_name = os.environ.get("CHROMA_COLLECTION", "unified_corpus_v2")
+        db_manager = ChromaDBManager(
+            collection_name=collection_name, distance_metric=distance_metric
+        )
+        logger.info("ChromaDB initialized successfully as primary vector store.")
+    except Exception as e:
+        logger.critical(f"ChromaDB failed to initialize: {e}")
+        raise e
+        
+    retriever = DenseRetriever(vector_store=db_manager)
+
+    from src.registry.database import DocumentRegistry
+    registry = DocumentRegistry()
+
+    retriever = HybridRetriever(
+        dense_retriever=retriever, registry=registry
+    )
+    logger.info("HybridRetriever loaded with SQLite FTS5 + Dense.")
+
+    enable_reranker = os.environ.get("ENABLE_RERANKER", "true").lower() == "true"
+    if enable_reranker:
+        reranker = OptionalReranker()
+    else:
+        reranker = None
+        logger.info("Reranker disabled via ENABLE_RERANKER env var.")
+
+    provider = os.environ.get("LLM_PROVIDER", "gemini")
+    model_name = os.environ.get(
+        "LLM_MODEL_NAME",
+        "gemini-2.0-flash-lite" if provider == "gemini" else "llama-3.3-70b-versatile",
+    )
+
+    fallback_config = None
+    if provider == "gemini" and os.environ.get("GROQ_API_KEY"):
+        logger.info(
+            "GROQ_API_KEY detected. Configuring Groq as automatic fallback for rate limits."
+        )
+        fallback_config = {
+            "provider": "groq",
+            "model_name": "llama-3.3-70b-versatile",
+            "max_output_tokens": 4096,
+            "temperature": 0.1,
+        }
+
+    config = GenerationConfig(
+        provider=provider, model_name=model_name, fallback_config=fallback_config
+    )
+    generator = RAGGenerator(retriever=retriever, config=config)
+    evaluator = FaithfulnessEvaluator(config=config)
+    rewriter = QueryRewriter(config=config)
+    
+    embed_config = EmbeddingConfig()
+    embedding_generator = EmbeddingGenerator(embed_config)
+
+    return PipelineComponents(
+        retriever=retriever,
+        reranker=reranker,
+        generator=generator,
+        evaluator=evaluator,
+        provider=provider,
+        model_name=model_name,
+        rewriter=rewriter,
+        embedding_generator=embedding_generator,
+    )

@@ -1,142 +1,101 @@
 import json
 import logging
 import datetime
+from typing import Optional, Any
 import asyncio
-from pathlib import Path
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
+from src.api.auth import get_current_tenant, get_real_ip
 from slowapi import Limiter
-from slowapi.util import get_remote_address
-from langdetect import detect, LangDetectException
 
-from src.api.models import QueryRequest, QueryResponse, SourceDocument
-from src.api.startup import app_state
+from src.api.models.query_models import QueryRequest, QueryResponse, SourceDocument
+from src.api.dependencies import get_generator, get_retriever, get_reranker, get_evaluator, get_rewriter, get_pipeline_logger
 from src.generating.generator import RAGGenerator
 from src.retrieving.retriever import DenseRetriever, OptionalReranker
 from src.generating.evaluator import FaithfulnessEvaluator
+from src.generating.query_rewriter import QueryRewriter
+from src.services.query_service import QueryService
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-limiter = Limiter(key_func=get_remote_address)
-
+limiter = Limiter(key_func=get_real_ip)
 
 @router.post("/query", response_model=QueryResponse)
 @limiter.limit("15/minute")
-async def query_rag(request: Request, body: QueryRequest):
-    if "init_error" in app_state:
-        raise HTTPException(status_code=500, detail=app_state["init_error"])
-    if "registry" not in app_state:
-        raise HTTPException(
-            status_code=503, detail="Service initializing, try again in 15s"
+async def query_rag(
+    request: Request,
+    body: QueryRequest,
+    background_tasks: BackgroundTasks,
+    tenant_id: Optional[str] = Depends(get_current_tenant),
+    generator: RAGGenerator = Depends(get_generator),
+    retriever: DenseRetriever = Depends(get_retriever),
+    reranker: OptionalReranker = Depends(get_reranker),
+    evaluator: FaithfulnessEvaluator = Depends(get_evaluator),
+    rewriter: Optional[QueryRewriter] = Depends(get_rewriter),
+    pipeline_logger: Any = Depends(get_pipeline_logger),
+):
+    if not tenant_id:
+        return QueryResponse(
+            answer="Please provide a valid API key (X-API-Key header) to query your private workspace. Generate one at the /register endpoint.",
+            sources=[], faithfulness_score=None, faithfulness_reasoning=None, latency_ms=0,
         )
 
+    query_start_time = datetime.datetime.now(datetime.timezone.utc).timestamp()
+    if pipeline_logger:
+        pipeline_logger.log_event("query_started", query_text=body.query, tenant_id=tenant_id)
+
     try:
-        generator: RAGGenerator = app_state["generator"]
-        retriever: DenseRetriever = app_state["retriever"]
-        reranker: OptionalReranker = app_state["reranker"]
-        evaluator: FaithfulnessEvaluator = app_state["evaluator"]
-        rewriter = app_state.get("rewriter")
-
-        try:
-            if detect(body.query) != "en":
-                raise HTTPException(
-                    status_code=400, detail="Only English queries are supported."
+        registry = getattr(request.app.state, "registry", None)
+        if registry:
+            doc_count = await asyncio.to_thread(registry.get_doc_count, tenant_id)
+            if doc_count == 0:
+                return QueryResponse(
+                    answer="Your workspace has no documents yet. Please go to the 'Add Source(s)' tab and upload a document or URL first.",
+                    sources=[], faithfulness_score=None, faithfulness_reasoning=None, latency_ms=0,
                 )
-        except LangDetectException:
-            pass  # Too short to detect, allow it
 
-        search_query = body.query
-        if body.history and rewriter:
-            search_query = await asyncio.to_thread(
-                rewriter.rewrite, body.query, body.history
+        retrieval_result = await QueryService.run_retrieval(body, retriever, reranker, rewriter, pipeline_logger, tenant_id)
+
+        gen_start = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        result = await asyncio.to_thread(
+            generator.generate,
+            body.query, top_k=body.top_k, retrieval_result=retrieval_result, chat_history=body.history,
+        )
+        if pipeline_logger:
+            pipeline_logger.log_event(
+                "generation_complete", query_text=body.query, completion_tokens=result.completion_tokens,
+                prompt_tokens=result.prompt_tokens, duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - gen_start) * 1000
             )
 
-        if body.use_reranker:
-            dense_result = await asyncio.to_thread(
-                retriever.retrieve,
-                search_query,
-                top_k=body.top_k * 4,
-                tenant_id=body.tenant_id,
-            )
-            retrieval_result = await asyncio.to_thread(
-                reranker.rerank, search_query, dense_result.chunks, top_k=body.top_k
-            )
-            retrieval_result.embedding_latency_ms = dense_result.embedding_latency_ms
-            retrieval_result.search_latency_ms = dense_result.search_latency_ms
-            retrieval_result.latency_ms += dense_result.latency_ms
-            result = await asyncio.to_thread(
-                generator.generate,
-                body.query,
-                top_k=body.top_k,
-                retrieval_result=retrieval_result,
-                chat_history=body.history,
-            )
-        else:
-            retrieval_result = await asyncio.to_thread(
-                retriever.retrieve,
-                search_query,
-                top_k=body.top_k,
-                tenant_id=body.tenant_id,
-            )
-            result = await asyncio.to_thread(
-                generator.generate,
-                body.query,
-                top_k=body.top_k,
-                retrieval_result=retrieval_result,
-                chat_history=body.history,
-            )
+        sources = QueryService.construct_sources(result)
+
+        if pipeline_logger:
+            pipeline_logger.log_event("query_complete", query_text=body.query, duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000)
+
+        metrics_store = getattr(request.app.state, "metrics_store", None)
+        log_id = None
+        if metrics_store:
+            details = {
+                "top_k_requested": body.top_k, "faithfulness_reasoning": None,
+                "retrieved_context": [{"chunk_id": c.chunk_id, "source_url": c.source_url, "similarity_score": c.similarity_score} for c in result.context_window.included_chunks],
+            }
+            try:
+                log_id = metrics_store.log_query(
+                    tenant_id=tenant_id, query=body.query, latency_ms=result.total_latency_ms,
+                    tokens_used=result.prompt_tokens + result.completion_tokens, faithfulness_score=None,
+                    details=details, embedding_tokens=retrieval_result.embedding_tokens,
+                    generation_input_tokens=result.prompt_tokens, generation_output_tokens=result.completion_tokens,
+                    rerank_tokens=retrieval_result.rerank_tokens, provider=getattr(result, "provider", "gemini")
+                )
+            except Exception as e:
+                logger.error(f"Failed to log query: {e}")
 
         if body.evaluate_faithfulness:
-            result = await asyncio.to_thread(evaluator.evaluate, result)
-
-        sources = [
-            SourceDocument(
-                url=chunk.source_url,
-                section=" > ".join(chunk.heading_path) if chunk.heading_path else "",
-                similarity_score=chunk.similarity_score,
-                chunk_preview=(
-                    chunk.text[:200] + "..." if len(chunk.text) > 200 else chunk.text
-                ),
-            )
-            for chunk in result.context_window.included_chunks
-        ]
-
-        # Unified Trace Approach: Log to observability
-        observability_dir = Path("observability")
-        observability_dir.mkdir(parents=True, exist_ok=True)
-
-        log_entry = {
-            "timestamp": datetime.datetime.utcnow().isoformat() + "Z",
-            "query": body.query,
-            "tenant_id": body.tenant_id,
-            "top_k_requested": body.top_k,
-            "answer": result.answer,
-            "faithfulness_score": result.faithfulness_score,
-            "faithfulness_reasoning": result.faithfulness_reasoning,
-            "latency_ms": result.total_latency_ms,
-            "tokens_used": result.prompt_tokens + result.completion_tokens,
-            "retrieved_context": [
-                {
-                    "chunk_id": chunk.chunk_id,
-                    "source_url": chunk.source_url,
-                    "similarity_score": chunk.similarity_score,
-                    "content": chunk.text,
-                }
-                for chunk in result.context_window.included_chunks
-            ],
-        }
-
-        today_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
-        log_file = observability_dir / f"chat_logs_{today_str}.jsonl"
-        with open(log_file, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry) + "\n")
+            background_tasks.add_task(QueryService.run_faithfulness_eval_async, evaluator, result, log_id, metrics_store, pipeline_logger)
 
         return QueryResponse(
-            answer=result.answer,
-            sources=sources,
-            faithfulness_score=result.faithfulness_score,
-            faithfulness_reasoning=result.faithfulness_reasoning,
-            latency_ms=result.total_latency_ms,
+            answer=result.answer, sources=sources, faithfulness_score=None, faithfulness_reasoning=None,
+            latency_ms=result.total_latency_ms, latency_breakdown={"retrieval": result.retrieval_latency_ms, "generation": result.generation_latency_ms}
         )
     except Exception as e:
         logger.error(f"Error during query: {e}")
@@ -145,64 +104,76 @@ async def query_rag(request: Request, body: QueryRequest):
 
 @router.post("/query/stream")
 @limiter.limit("15/minute")
-async def query_rag_stream(request: Request, body: QueryRequest):
-    if "init_error" in app_state:
-        raise HTTPException(status_code=500, detail=app_state["init_error"])
-    if "registry" not in app_state:
-        raise HTTPException(
-            status_code=503, detail="Service initializing, try again in 15s"
-        )
+async def query_rag_stream(
+    request: Request,
+    body: QueryRequest,
+    tenant_id: Optional[str] = Depends(get_current_tenant),
+    generator: RAGGenerator = Depends(get_generator),
+    retriever: DenseRetriever = Depends(get_retriever),
+    reranker: OptionalReranker = Depends(get_reranker),
+    rewriter: Optional[QueryRewriter] = Depends(get_rewriter),
+    pipeline_logger: Any = Depends(get_pipeline_logger),
+):
+    if not tenant_id:
+        return StreamingResponse(iter(["Please provide a valid API key (X-API-Key header) to query your private workspace. Generate one at the /register endpoint."]), media_type="text/event-stream")
+
+    query_start_time = datetime.datetime.now(datetime.timezone.utc).timestamp()
+    if pipeline_logger:
+        pipeline_logger.log_event("query_started", query_text=body.query, tenant_id=tenant_id)
 
     try:
-        generator: RAGGenerator = app_state["generator"]
-        retriever = app_state["retriever"]
-        reranker: OptionalReranker = app_state["reranker"]
-        rewriter = app_state.get("rewriter")
+        registry = getattr(request.app.state, "registry", None)
+        if registry:
+            doc_count = await asyncio.to_thread(registry.get_doc_count, tenant_id)
+            if doc_count == 0:
+                return StreamingResponse(iter(["Your workspace has no documents yet. Please go to the 'Add Source(s)' tab and upload a document or URL first."]), media_type="text/event-stream")
 
-        try:
-            if detect(body.query) != "en":
-                raise HTTPException(
-                    status_code=400, detail="Only English queries are supported."
-                )
-        except LangDetectException:
-            pass  # Too short to detect, allow it
+        retrieval_result = await QueryService.run_retrieval(body, retriever, reranker, rewriter, pipeline_logger, tenant_id)
 
-        search_query = body.query
-        if body.history and rewriter:
-            search_query = await asyncio.to_thread(
-                rewriter.rewrite, body.query, body.history
-            )
-
-        if body.use_reranker:
-            dense_result = await asyncio.to_thread(
-                retriever.retrieve,
-                search_query,
-                top_k=body.top_k * 4,
-                tenant_id=body.tenant_id,
-            )
-            retrieval_result = await asyncio.to_thread(
-                reranker.rerank, search_query, dense_result.chunks, top_k=body.top_k
-            )
-        else:
-            retrieval_result = await asyncio.to_thread(
-                retriever.retrieve,
-                search_query,
-                top_k=body.top_k,
-                tenant_id=body.tenant_id,
-            )
-
-        def token_generator():
-            for chunk in generator.generate(
-                body.query,
-                top_k=body.top_k,
-                retrieval_result=retrieval_result,
-                chat_history=body.history,
-                stream=True,
+        gen_start = datetime.datetime.now(datetime.timezone.utc).timestamp()
+        async def token_generator():
+            async for chunk in generator.generate(
+                body.query, top_k=body.top_k, retrieval_result=retrieval_result, chat_history=body.history, stream=True,
             ):
                 yield chunk
+            if pipeline_logger:
+                pipeline_logger.log_event(
+                    "generation_complete", query_text=body.query, completion_tokens=0, prompt_tokens=0,
+                    duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - gen_start) * 1000
+                )
+                pipeline_logger.log_event("query_complete", query_text=body.query, duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000)
 
         return StreamingResponse(token_generator(), media_type="text/event-stream")
 
     except Exception as e:
         logger.error(f"Error during query/stream: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/logs")
+async def get_logs(request: Request, tenant_id: Optional[str] = Depends(get_current_tenant)):
+    if not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    registry = getattr(request.app.state, "registry", None)
+    if not registry:
+        return {"queries": [], "summary": {}}
+        
+    def _fetch_logs():
+        with registry._get_conn() as conn:
+            cursor = conn.execute("SELECT * FROM observability_logs WHERE tenant_id = ? ORDER BY log_id DESC LIMIT 100", (tenant_id,))
+            return [dict(row) for row in cursor.fetchall()]
+    
+    logs = await asyncio.to_thread(_fetch_logs)
+            
+    total_queries = len(logs)
+    total_cost = sum(log.get("total_cost_usd") or 0.0 for log in logs)
+    total_latency = sum(log.get("latency_ms") or 0.0 for log in logs)
+    
+    summary = {
+        "total_queries": total_queries,
+        "total_cost_usd": round(total_cost, 6),
+        "avg_cost_per_query_usd": round(total_cost / total_queries, 6) if total_queries > 0 else 0.0,
+        "avg_latency_ms": round(total_latency / total_queries, 2) if total_queries > 0 else 0.0
+    }
+
+    return {"queries": logs, "summary": summary}

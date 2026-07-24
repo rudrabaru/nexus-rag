@@ -13,81 +13,9 @@ from src.generating.generator import RAGGenerator
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.query_rewriter import QueryRewriter
 from src.registry.database import DocumentRegistry
+from src.api.factory import _init_components
 
 logger = logging.getLogger(__name__)
-
-# Global state
-app_state = {}
-
-from dataclasses import dataclass
-
-
-@dataclass
-class PipelineComponents:
-    retriever: object
-    reranker: object
-    generator: object
-    evaluator: object
-    provider: str
-    model_name: str
-    rewriter: object
-
-
-def _init_components() -> PipelineComponents:
-    """Shared factory function to initialize core pipeline components."""
-    distance_metric = "cosine"
-
-    collection_name = os.environ.get("CHROMA_COLLECTION", "unified_corpus")
-    db_manager = ChromaDBManager(
-        collection_name=collection_name, distance_metric=distance_metric
-    )
-    retriever = DenseRetriever(vector_store=db_manager)
-
-    bm25_path = Path("data/bm25_index.pkl")
-    if bm25_path.exists():
-        from src.retrieving.retriever import HybridRetriever
-
-        retriever = HybridRetriever(
-            dense_retriever=retriever, bm25_index_path=str(bm25_path)
-        )
-        logger.info("HybridRetriever loaded with BM25 + Dense.")
-
-    reranker = OptionalReranker()
-
-    provider = os.environ.get("LLM_PROVIDER", "gemini")
-    model_name = os.environ.get(
-        "LLM_MODEL_NAME",
-        "gemini-3.1-flash-lite" if provider == "gemini" else "llama-3.3-70b-versatile",
-    )
-
-    fallback_config = None
-    if provider == "gemini" and os.environ.get("GROQ_API_KEY"):
-        logger.info(
-            "GROQ_API_KEY detected. Configuring Groq as automatic fallback for rate limits."
-        )
-        fallback_config = {
-            "provider": "groq",
-            "model_name": "llama-3.3-70b-versatile",
-            "max_output_tokens": 4096,
-            "temperature": 0.1,
-        }
-
-    config = GenerationConfig(
-        provider=provider, model_name=model_name, fallback_config=fallback_config
-    )
-    generator = RAGGenerator(retriever=retriever, config=config)
-    evaluator = FaithfulnessEvaluator(config=config)
-    rewriter = QueryRewriter(config=config)
-
-    return PipelineComponents(
-        retriever=retriever,
-        reranker=reranker,
-        generator=generator,
-        evaluator=evaluator,
-        provider=provider,
-        model_name=model_name,
-        rewriter=rewriter,
-    )
 
 
 @asynccontextmanager
@@ -101,14 +29,31 @@ async def lifespan(app: FastAPI):
             loop = asyncio.get_event_loop()
             components = await loop.run_in_executor(None, _init_components)
 
-            app_state["retriever"] = components.retriever
-            app_state["reranker"] = components.reranker
-            app_state["generator"] = components.generator
-            app_state["evaluator"] = components.evaluator
-            app_state["rewriter"] = components.rewriter
+            app.state.retriever = components.retriever
+            app.state.reranker = components.reranker
+            app.state.generator = components.generator
+            app.state.evaluator = components.evaluator
+            app.state.rewriter = components.rewriter
+            app.state.embedding_generator = components.embedding_generator
             registry = DocumentRegistry()
-            app_state["registry"] = registry
-            app_state["ingestion_semaphore"] = asyncio.Semaphore(3)
+            app.state.registry = registry
+            
+            from src.registry.auth_store import AuthStore
+            from src.registry.metrics_store import MetricsStore
+            from src.observability.logger import PipelineLogger
+            app.state.auth_store = AuthStore(registry._get_conn)
+            app.state.metrics_store = MetricsStore(registry._get_conn)
+            app.state.pipeline_logger = PipelineLogger("nexus_rag", registry=registry)
+
+            # Configurable via INGESTION_CONCURRENCY env var.
+            # Production default: 3 (respects Jina 1000 RPM free tier).
+            # Local dev: set INGESTION_CONCURRENCY=10 in .env to avoid artificial throttling.
+            ingestion_concurrency = int(os.environ.get("INGESTION_CONCURRENCY", "3"))
+            app.state.ingestion_semaphore = asyncio.Semaphore(ingestion_concurrency)
+            app.state.embed_semaphore = asyncio.Semaphore(ingestion_concurrency)
+
+            if hasattr(app.state, 'embedding_generator') and app.state.embedding_generator:
+                app.state.embedding_generator.embed_semaphore = app.state.embed_semaphore
 
             # Reset stuck jobs on startup (Fix for C3 race condition)
             try:
@@ -117,14 +62,25 @@ async def lifespan(app: FastAPI):
                 logger.error(f"Failed to reset stuck jobs: {e}")
 
             try:
-                vector_store = getattr(retriever, "vector_store", None)
-                if not vector_store and hasattr(retriever, "dense_retriever"):
+                vector_store = getattr(components.retriever, "vector_store", None)
+                if not vector_store and hasattr(components.retriever, "dense_retriever"):
                     vector_store = getattr(
-                        retriever.dense_retriever, "vector_store", None
+                        components.retriever.dense_retriever, "vector_store", None
                     )
+
+                if vector_store:
+                    actual_metric = vector_store.collection.metadata.get("hnsw:space", "unknown")
+                    expected_metric = getattr(vector_store, "distance_metric", "cosine")
+                    if actual_metric != "unknown" and actual_metric != expected_metric:
+                        logger.critical(
+                            f"CHROMADB DISTANCE METRIC MISMATCH: collection='{vector_store.collection.name}' "
+                            f"has hnsw:space='{actual_metric}' but configured distance_metric='{expected_metric}'. "
+                            f"All similarity scores will be incorrect. Delete and recreate the collection."
+                        )
+
                 chroma_count = vector_store.collection.count() if vector_store else 0
 
-                registry_docs = registry.list_documents()
+                registry_docs = registry.list_documents(tenant_id=None)
                 registry_chunk_count = sum(
                     len(d.get("chunk_ids", [])) for d in registry_docs
                 )
@@ -134,36 +90,54 @@ async def lifespan(app: FastAPI):
                 )
                 if chroma_count != registry_chunk_count:
                     logger.warning(
-                        f"CRITICAL STATE DIVERGENCE: ChromaDB has {chroma_count} chunks but Registry has {registry_chunk_count} chunks."
+                        f"CRITICAL STATE DIVERGENCE: ChromaDB has {chroma_count} chunks but Registry has {registry_chunk_count} chunks. Initiating auto-healing."
                     )
+                    try:
+                        chroma_ids = set()
+                        if chroma_count > 0:
+                            BATCH_SIZE = 5000
+                            for offset in range(0, chroma_count, BATCH_SIZE):
+                                batch_data = vector_store.collection.get(include=[], limit=BATCH_SIZE, offset=offset)
+                                chroma_ids.update(batch_data.get("ids", []))
+                        
+                        deleted_docs = 0
+                        for doc in registry_docs:
+                            doc_chunk_ids = doc.get("chunk_ids", [])
+                            if not doc_chunk_ids:
+                                continue
+                            
+                            # If any chunk is missing in ChromaDB, the document didn't fully persist
+                            missing_chunks = [cid for cid in doc_chunk_ids if cid not in chroma_ids]
+                            if missing_chunks:
+                                doc_id = doc.get("doc_id")
+                                logger.info(f"Auto-healing: Deleting orphaned document {doc_id} ({len(missing_chunks)} missing chunks).")
+                                registry.delete_document(doc_id)
+                                deleted_docs += 1
+                                
+                        logger.info(f"Auto-healing complete. Deleted {deleted_docs} orphaned documents.")
+                    except Exception as e:
+                        logger.error(f"Failed to auto-heal state divergence: {e}")
 
-                if hasattr(retriever, "bm25") and retriever.bm25:
-                    bm25_count = len(retriever.bm25.corpus)
-                    logger.info(f"Startup check: BM25 corpus size={bm25_count}")
-
-                if Path("data/bm25_dirty.flag").exists():
-                    logger.info(
-                        "BM25 index is marked dirty at startup. Rebuilding in background..."
-                    )
-                    from src.ingestion.pipeline import IncrementalIngestionPipeline
-
-                    loop.run_in_executor(
-                        None, IncrementalIngestionPipeline()._rebuild_bm25
-                    )
             except Exception as e:
                 logger.error(f"Failed to perform startup consistency check: {e}")
 
             logger.info(
-                f"RAG Pipeline API ready. Provider: {provider}, Model: {model_name}"
+                f"RAG Pipeline API ready. Provider: {components.provider}, Model: {components.model_name}"
             )
-            app_state["ready"] = True
+            app.state.ready = True
         except Exception as e:
             logger.error(f"Failed to initialize RAG pipeline: {e}")
-            app_state["init_error"] = str(e)
+            app.state.init_error = str(e)
 
     # Fire and forget the background loading
     task = asyncio.create_task(_load_models_async())
+    app.state._startup_task = task
 
     yield
     # Shutdown
-    app_state.clear()
+    if hasattr(app.state, "_startup_task"):
+        app.state._startup_task.cancel()
+        try:
+            await app.state._startup_task
+        except asyncio.CancelledError:
+            pass

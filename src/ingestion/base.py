@@ -1,6 +1,5 @@
 import abc
-from typing import List
-from src.crawling.metadata import CrawledDocument
+from src.crawling.metadata import AdapterResult
 
 
 class IngestionAdapter(abc.ABC):
@@ -11,8 +10,9 @@ class IngestionAdapter(abc.ABC):
     """
 
     @abc.abstractmethod
-    async def ingest(self, source: str, **kwargs) -> List[CrawledDocument]:
+    async def ingest(self, source: str, **kwargs) -> AdapterResult:
         """
-        Reads from a source (URL or file path) and returns a list of CrawledDocuments.
+        Reads from a source (URL or file path) and returns an AdapterResult.
         """
         pass
+

@@ -2,7 +2,7 @@
 Pydantic schemas for chunk representation and metadata.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional, List
 from pydantic import BaseModel, Field
 
@@ -64,7 +64,7 @@ class ChunkMetadata(BaseModel):
     visibility: str = Field("public", description="Public or private access")
     tenant_id: Optional[str] = Field(None, description="Tenant ID for private docs")
 
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}

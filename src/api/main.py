@@ -1,26 +1,35 @@
 import sys
+
+
 import asyncio
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 import logging
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Depends, Query, HTTPException
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+import uuid
+
+env_path = Path(__file__).resolve().parent.parent.parent / '.env'
+load_dotenv(dotenv_path=env_path, override=True)
 
 # Add project root to path
-import os
 
 sys.path.append(
     os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 )
 
-from src.api.startup import lifespan, app_state
+from src.api.startup import lifespan
 from src.api.routes import query, ingest, documents
+from src.api.dependencies import get_auth_store
+from src.registry.auth_store import AuthStore
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import APIKeyHeader
-from fastapi import Security, HTTPException
 from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
+from src.api.routes.ingest import limiter as ingest_limiter
+from src.api.routes.query import limiter as query_limiter
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -37,53 +46,49 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Rate Limiting
-limiter = Limiter(key_func=get_remote_address)
-app.state.limiter = limiter
+# Rate Limiting — each router owns its Limiter; app state needs one for the handler
+app.state.limiter = ingest_limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# Authentication
-api_key_header = APIKeyHeader(name="RAG-API-KEY", auto_error=False)
-
-
-async def verify_api_key(api_key: str = Security(api_key_header)):
-    expected_api_key = os.environ.get("RAG_API_KEY")
-    if expected_api_key and api_key != expected_api_key:
-        raise HTTPException(status_code=403, detail="Could not validate API KEY")
-    return api_key
-
-
 # Routes
-app.include_router(query.router, dependencies=[Security(verify_api_key)])
-app.include_router(ingest.router, dependencies=[Security(verify_api_key)])
+app.include_router(query.router)
+app.include_router(ingest.router)
 app.include_router(
     documents.router,
     prefix="/documents",
     tags=["documents"],
-    dependencies=[Security(verify_api_key)],
 )
-
-
 @app.get("/health")
-def health_check():
+def health_check(request: Request):
     # Liveness probe: returns immediately if server is up
-    if "init_error" in app_state:
-        return {"status": "error", "message": app_state["init_error"]}
+    if hasattr(request.app.state, "init_error"):
+        return {"status": "error", "message": request.app.state.init_error}
     return {"status": "ok"}
 
 
 @app.get("/ready")
-def ready_check():
+def ready_check(request: Request):
     # Readiness probe: returns OK only when models are loaded
-    if "init_error" in app_state:
-        return {"status": "error", "message": app_state["init_error"]}
+    if hasattr(request.app.state, "init_error"):
+        return {"status": "error", "message": request.app.state.init_error}
 
-    generator = app_state.get("generator")
-    retriever = app_state.get("retriever")
-    registry = app_state.get("registry")
-    if generator and retriever and registry:
+    if getattr(request.app.state, "ready", False):
+        generator = request.app.state.generator
         return {"status": "ready", "provider": generator.config.provider}
     raise HTTPException(status_code=503, detail="Models still loading")
+
+
+@app.post("/register")
+def register_tenant(
+    secret: str = Query(None),
+    auth_store: AuthStore = Depends(get_auth_store)
+):
+    expected = os.environ.get("REGISTRATION_SECRET")
+    if expected and secret != expected:
+        raise HTTPException(status_code=403, detail="Invalid registration secret")
+    tenant_id = str(uuid.uuid4())
+    api_key = auth_store.create_api_key(tenant_id)
+    return {"api_key": api_key, "tenant_id": tenant_id}
 
 
 if __name__ == "__main__":

@@ -64,12 +64,22 @@ def merge_tiny_chunks(
 
         should_merge = False
 
+        is_headingless = not current.heading_path and not next_chunk.heading_path
+
         if not is_content_clash and is_related:
             # Always merge if current is just a heading, to give it body text
             # We enforce max_chunk_tokens unless current is JUST a tiny heading that MUST be merged.
             if current_is_heading_only:
                 should_merge = True
-            # Otherwise, merge if current is tiny, or if both are under min threshold, AS LONG AS it fits in max
+            elif is_headingless:
+                # To prevent cascading merges of headingless text, only merge if BOTH are below min_chunk_tokens or current is tiny
+                if current_is_tiny or (
+                    current.token_count < config.min_chunk_tokens
+                    and next_chunk.token_count < config.min_chunk_tokens
+                ):
+                    if current.token_count + next_chunk.token_count <= config.max_chunk_tokens:
+                        should_merge = True
+            # Otherwise, merge if current is tiny, or if AT LEAST ONE is under min threshold, AS LONG AS it fits in max
             elif current_is_tiny or (
                 current.token_count < config.min_chunk_tokens
                 or next_chunk.token_count < config.min_chunk_tokens

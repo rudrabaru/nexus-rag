@@ -4,7 +4,7 @@ Pydantic models for the generation phase.
 Separates data shapes from logic to keep all other modules lean and testable.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel, Field
 
@@ -23,13 +23,13 @@ class GenerationConfig(BaseModel):
         description="LLM provider: 'gemini' or 'groq'",
     )
     model_name: str = Field(
-        "gemini-3.1-flash-lite",
+        "gemini-2.0-flash-lite",
         description="Model identifier passed to the provider API",
     )
 
     # Token budgeting for context assembly
     max_context_tokens: int = Field(
-        16000,
+        5000,
         description=(
             "Maximum tokens to allocate to retrieved context. "
             "Controls how many chunks can be included in the prompt. "
@@ -60,8 +60,11 @@ class GenerationConfig(BaseModel):
     )
 
     min_similarity_score: float = Field(
-        0.25,
-        description="Minimum similarity score for chunks to be included in context",
+        0.0,
+        description=(
+            "Optional minimum similarity score for chunks to be included in context. "
+            "Set above 0 only when the score scale is known to be calibrated."
+        ),
     )
 
     class Config:
@@ -139,7 +142,7 @@ class GenerationResult(BaseModel):
         description="True if an acceptable document was included in the context window",
     )
 
-    generated_at: datetime = Field(default_factory=datetime.utcnow)
+    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat()}

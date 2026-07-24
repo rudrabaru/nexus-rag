@@ -22,6 +22,7 @@ from .tokenizer import TokenCounter, TokenBudget
 from .models import Section, Block
 from .parsers import parse_sections, extract_blocks
 from .merger import merge_tiny_chunks
+from .heuristics import get_overlap_blocks, build_chunk_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +44,7 @@ class DocumentChunker:
         self.stats = {
             "total_documents_processed": 0,
             "total_chunks_generated": 0,
+            "total_tokens_generated": 0,
             "oversized_chunks": 0,
             "tiny_chunks_merged": 0,
             "content_types": {"text": 0, "code": 0, "table": 0, "mixed": 0},
@@ -68,9 +70,23 @@ class DocumentChunker:
             chunks = self._split_content(content, url, title, doc_name)
             # Second pass: set total_chunks and update stats
             total = len(chunks)
+            EMBEDDING_HARD_LIMIT = 2000  # text-embedding-004 token limit (tokens ≈ words * 1.3)
             for c in chunks:
+                if c.token_count > EMBEDDING_HARD_LIMIT:
+                    logger.warning(
+                        f"Chunk {c.chunk_id} has {c.token_count} tokens, "
+                        f"which exceeds the embedding model limit of {EMBEDDING_HARD_LIMIT}. "
+                        f"Truncating to prevent embedding API failure."
+                    )
+                    # Truncate text to fit, preserving the heading context
+                    words = c.chunk_text.split()
+                    max_words = int(EMBEDDING_HARD_LIMIT / 1.3)
+                    c.chunk_text = " ".join(words[:max_words]) + " [TRUNCATED]"
+                    c.token_count = EMBEDDING_HARD_LIMIT
+
                 c.total_chunks = total
                 self.stats["total_chunks_generated"] += 1
+                self.stats["total_tokens_generated"] += c.token_count
                 if c.oversized_chunk:
                     self.stats["oversized_chunks"] += 1
                 if c.tiny_chunk_merged:
@@ -134,8 +150,8 @@ class DocumentChunker:
                         > self.config.max_chunk_tokens
                     )
                 ):
-                    chunk = self._create_chunk_from_blocks(
-                        current_chunk_blocks, chunk_index, url, title, doc_name, section
+                    chunk = build_chunk_metadata(
+                        current_chunk_blocks, chunk_index, url, title, doc_name, section, self.config
                     )
                     if chunk:
                         chunks.append(chunk)
@@ -148,24 +164,26 @@ class DocumentChunker:
                     and current_chunk_blocks
                 ):
                     if (
-                        current_tokens + block.token_count
+                        block.block_type in ["code", "table"]
+                        and current_tokens + block.token_count
                         <= self.config.max_chunk_tokens
                     ):
                         pass  # keep code with explanation
                     else:
-                        chunk = self._create_chunk_from_blocks(
+                        chunk = build_chunk_metadata(
                             current_chunk_blocks,
                             chunk_index,
                             url,
                             title,
                             doc_name,
                             section,
+                            self.config,
                         )
                         if chunk:
                             chunks.append(chunk)
                             chunk_index += 1
 
-                        overlap_blocks = self._get_overlap_blocks(current_chunk_blocks)
+                        overlap_blocks = get_overlap_blocks(current_chunk_blocks, self.config.overlap)
                         current_chunk_blocks = overlap_blocks
                         current_tokens = sum(b.token_count for b in overlap_blocks)
 
@@ -173,8 +191,8 @@ class DocumentChunker:
                 current_tokens += block.token_count
 
             if current_chunk_blocks:
-                chunk = self._create_chunk_from_blocks(
-                    current_chunk_blocks, chunk_index, url, title, doc_name, section
+                chunk = build_chunk_metadata(
+                    current_chunk_blocks, chunk_index, url, title, doc_name, section, self.config
                 )
                 if chunk:
                     chunks.append(chunk)
@@ -183,88 +201,3 @@ class DocumentChunker:
             char_offset += len(section.text) + 1
 
         return merge_tiny_chunks(chunks, self.config)
-
-    def _get_overlap_blocks(self, blocks: List[Block]) -> List[Block]:
-        overlap_tokens = 0
-        overlap_blocks = []
-        for block in reversed(blocks):
-            if block.block_type in ["code", "table"]:
-                break
-            if overlap_tokens + block.token_count > self.config.overlap:
-                break
-            overlap_blocks.insert(0, block)
-            overlap_tokens += block.token_count
-        return overlap_blocks
-
-    def _create_chunk_from_blocks(
-        self,
-        blocks: List[Block],
-        chunk_index: int,
-        url: str,
-        title: str,
-        doc_name: str,
-        section: Section,
-    ) -> Optional[ChunkMetadata]:
-
-        if not blocks:
-            return None
-
-        text = "\n\n".join(b.text for b in blocks).strip()
-        if not text:
-            return None
-
-        token_count = sum(b.token_count for b in blocks)
-
-        heading_match = re.match(r"^#+\s+(.+?)(?:\n|$)", text)
-        starts_with_heading = heading_match is not None
-        heading = heading_match.group(1) if heading_match else None
-
-        contains_code = any(b.block_type == "code" for b in blocks)
-        contains_table = any(b.block_type == "table" for b in blocks)
-
-        content_type = "mixed"
-        if all(b.block_type == "text" for b in blocks):
-            content_type = "text"
-        elif all(b.block_type == "code" for b in blocks):
-            content_type = "code"
-        elif all(b.block_type == "table" for b in blocks):
-            content_type = "table"
-
-        code_languages = []
-        if contains_code:
-            for b in blocks:
-                if b.block_type == "code":
-                    lang_match = re.search(r"```(\w+)", b.text)
-                    if lang_match:
-                        lang = lang_match.group(1)
-                        if lang not in code_languages:
-                            code_languages.append(lang)
-
-        chunk_id = f"{doc_name}_chunk_{chunk_index:03d}"
-
-        return ChunkMetadata(
-            chunk_id=chunk_id,
-            source_url=url,
-            source_document=doc_name,
-            title=title,
-            heading_path=section.heading_path,
-            section_title=section.title,
-            chunk_index=chunk_index,
-            total_chunks=0,
-            chunk_text=text,
-            token_count=token_count,
-            char_start=blocks[0].char_start,
-            char_end=blocks[-1].char_start + len(blocks[-1].text),
-            starts_with_heading=starts_with_heading,
-            heading=heading,
-            contains_code=contains_code,
-            code_languages=code_languages if code_languages else None,
-            contains_table=contains_table,
-            content_type=content_type,
-            document_version=self.config.source_version,
-            chunk_version=self.config.output_version,
-            table_chunk=(content_type == "table"),
-            oversized_chunk=(token_count > self.config.max_chunk_tokens),
-            tiny_chunk_merged=False,
-            created_at=datetime.utcnow(),
-        )

@@ -66,11 +66,37 @@ class RAGGenerator:
         context_window = self.context_builder.build(retrieval_result.chunks)
         context_latency = (time.time() - context_start) * 1000
 
+        included_count = len(context_window.included_chunks)
+        excluded_count = len(context_window.excluded_chunks)
         logger.info(
-            f"Context: {len(context_window.included_chunks)} chunks included "
+            f"Context: {included_count} chunks included "
             f"(~{context_window.total_context_tokens} tokens), "
-            f"{len(context_window.excluded_chunks)} dropped by budget"
+            f"{excluded_count} dropped by budget"
         )
+
+        if included_count == 0 and excluded_count > 0:
+            scores = [f"{c.similarity_score:.4f}" for c in context_window.excluded_chunks]
+            logger.warning(
+                f"EMPTY CONTEXT: All {excluded_count} retrieved chunks were excluded. "
+                f"min_similarity_score={self.config.min_similarity_score}. "
+                f"Excluded scores: [{', '.join(scores[:20])}]"
+            )
+            diagnostic = (
+                f"Retrieval returned no relevant context for this query "
+                f"(all {excluded_count} chunks scored below {self.config.min_similarity_score}). "
+                f"This may indicate a document quality, embedding, or retrieval configuration issue."
+            )
+            return GenerationResult(
+                query=query,
+                answer=diagnostic,
+                context_window=context_window,
+                retrieval_latency_ms=retrieval_latency,
+                context_build_latency_ms=context_latency,
+                generation_latency_ms=0,
+                total_latency_ms=(time.time() - total_start) * 1000,
+                prompt_tokens=0,
+                completion_tokens=0,
+            )
 
         prompt = build_prompt(
             query, context_window.context_text, self.config, chat_history=chat_history

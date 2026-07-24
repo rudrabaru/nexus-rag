@@ -15,18 +15,6 @@ class VisualProcessor:
     Zero-cost within Gemini free tier.
     """
 
-    VISION_PROMPT = """
-    Analyze this image extracted from a document. Produce a detailed text 
-    description covering:
-    1. Visual type (chart, diagram, flowchart, table, screenshot, photo)
-    2. Main subject or title if visible
-    3. For charts: axes labels, data series, key numerical values, trends
-    4. For flowcharts/diagrams: step-by-step flow including decision points
-    5. For tables: transcribe content in markdown pipe table format
-    6. All visible labels, legends, annotations, and numerical values
-    Be exhaustive. Do not omit numbers or labels.
-    """
-
     PAGE_PROMPT = """
     You are a precise document extraction engine. Given a page image from a document, extract ALL content into clean Markdown. Rules:
     - Text paragraphs: copy as-is.
@@ -40,39 +28,12 @@ class VisualProcessor:
     """
 
     def __init__(self):
+        import os
+        model_name = os.environ.get("LLM_MODEL_NAME", "gemini-2.0-flash")
         config = GenerationConfig(
-            provider="gemini", model_name="gemini-2.0-flash-lite", temperature=0.0
+            provider="gemini", model_name=model_name, temperature=0.0
         )
         self.llm = LLMClient(config)
-
-    def describe_image(
-        self, image_bytes: bytes, asset_type_hint: Optional[str] = None
-    ) -> str:
-        """
-        Sends image_bytes to Gemini Vision (multimodal content).
-        Returns text description.
-        """
-        try:
-            from google.genai import types
-
-            # Use PIL to load and verify image
-            img = Image.open(io.BytesIO(image_bytes))
-
-            # Convert to PIL Image for genai client
-            # The genai SDK accepts PIL Image objects directly in `contents`
-
-            response = self.llm._llm_client.models.generate_content(
-                model=self.llm.config.model_name,
-                contents=[self.VISION_PROMPT, img],
-                config=types.GenerateContentConfig(
-                    temperature=self.llm.config.temperature,
-                ),
-            )
-            return response.text
-
-        except Exception as e:
-            logger.error(f"Failed to extract visual description: {e}")
-            return f"[Failed to extract visual description: {e}]"
 
     def describe_page(self, image_bytes: bytes) -> str:
         """
@@ -83,17 +44,54 @@ class VisualProcessor:
             from google.genai import types
 
             img = Image.open(io.BytesIO(image_bytes))
-
-            response = self.llm._llm_client.models.generate_content(
-                model=self.llm.config.model_name,
-                contents=[self.PAGE_PROMPT, img],
-                config=types.GenerateContentConfig(
-                    temperature=0.0,
-                    max_output_tokens=4096,
-                ),
+            kb = len(image_bytes) // 1024
+            logger.info(
+                f"VISION | describe_page | model={self.llm.config.model_name} "
+                f"image={img.size[0]}x{img.size[1]}px {kb}KB"
             )
-            return response.text
+
+            import time
+            import re
+            
+            max_retries = 4
+            base_delay = 5.0
+            
+            for attempt in range(max_retries):
+                try:
+                    response = self.llm._llm_client.models.generate_content(
+                        model=self.llm.config.model_name,
+                        contents=[self.PAGE_PROMPT, img],
+                        config=types.GenerateContentConfig(
+                            temperature=0.0,
+                            max_output_tokens=4096,
+                        ),
+                    )
+                    result_chars = len(response.text) if response.text else 0
+                    logger.info(f"VISION | describe_page | OK → {result_chars} chars (attempt {attempt+1})")
+                    return response.text or ""
+                    
+                except Exception as e:
+                    err_msg = str(e)
+                    is_rate_limit = "429" in err_msg or "RESOURCE_EXHAUSTED" in err_msg
+                    
+                    if attempt < max_retries - 1 and (is_rate_limit or "503" in err_msg):
+                        # Try to parse the exact retry delay from the error message
+                        # e.g., "Please retry in 8.175s."
+                        match = re.search(r"Please retry in ([\d\.]+)s", err_msg)
+                        if match:
+                            delay = float(match.group(1)) + 1.0  # add 1s buffer
+                        else:
+                            delay = base_delay * (2 ** attempt)
+                            
+                        logger.warning(f"VISION | describe_page | API limit hit ({type(e).__name__}). Retrying in {delay:.1f}s... (attempt {attempt+1}/{max_retries})")
+                        time.sleep(delay)
+                    else:
+                        logger.error(f"VISION | describe_page | FAILED after {attempt+1} attempts. {type(e).__name__}: {e!r}")
+                        return ""
+                        
+            return ""
 
         except Exception as e:
-            logger.error(f"Failed to extract page content: {e}")
+            logger.error(f"VISION | describe_page | FATAL {type(e).__name__}: {e!r}")
             return ""
+

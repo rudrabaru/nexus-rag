@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List
 from pydantic import BaseModel, Field
 from src.chunking.metadata import ChunkMetadata
@@ -17,7 +17,7 @@ class EmbeddedChunk(ChunkMetadata):
         ..., description="The model used to generate this embedding"
     )
     embedded_at: datetime = Field(
-        default_factory=datetime.utcnow, description="When the embedding was generated"
+        default_factory=lambda: datetime.now(timezone.utc), description="When the embedding was generated"
     )
 
 

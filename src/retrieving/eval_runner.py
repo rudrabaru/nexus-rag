@@ -1,13 +1,15 @@
 import json
 import logging
 import random
+import os
 from pathlib import Path
 from collections import defaultdict
 
 from src.retrieving.vector_store import ChromaDBManager
 from src.retrieving.retriever import DenseRetriever, OptionalReranker, HybridRetriever
-from src.retrieving.evaluation import Evaluator, EvaluationQuery
-from datetime import datetime
+from src.retrieving.evaluation import Evaluator
+from src.retrieving.evaluation_models import EvaluationQuery
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -147,6 +149,7 @@ def run_evaluation_pipeline(
     output_dir_base: str,
     use_reranker: bool,
     use_hybrid: bool,
+    tenant_id: str = None,
 ):
     distance_metric = "cosine"
 
@@ -159,17 +162,19 @@ def run_evaluation_pipeline(
     dense_retriever = DenseRetriever(vector_store=db_manager)
 
     if use_hybrid:
-        bm25_path = Path("data/bm25_index.pkl")
+        from src.registry.database import DocumentRegistry
+        db_path = "/data/rag_registry.db" if os.environ.get("SPACE_ID") else "data/rag_registry.db"
+        registry = DocumentRegistry(db_path)
         retriever = HybridRetriever(
-            dense_retriever=dense_retriever, bm25_index_path=str(bm25_path)
+            dense_retriever=dense_retriever, registry=registry
         )
-        logger.info("Using Hybrid Search (BM25 + Dense) for evaluation.")
+        logger.info("Using Hybrid Search (Dense + SQLite FTS5) for evaluation.")
     else:
         retriever = dense_retriever
         logger.info("Using Dense Search only for evaluation.")
 
     reranker = OptionalReranker() if use_reranker else None
-    evaluator = Evaluator(retriever=retriever, reranker=reranker)
+    evaluator = Evaluator(retriever=retriever, reranker=reranker, tenant_id=tenant_id)
 
     dataset_path_obj = Path(dataset_path)
     if not dataset_path_obj.exists():
@@ -179,7 +184,7 @@ def run_evaluation_pipeline(
     queries = evaluator.load_queries_from_json(str(dataset_path_obj))
     logger.info(f"Loaded {len(queries)} queries from {dataset_path}.")
 
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     eval_dir = Path(output_dir_base) / f"eval_{timestamp}"
     eval_dir.mkdir(parents=True, exist_ok=True)
 

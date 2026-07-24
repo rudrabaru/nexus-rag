@@ -42,7 +42,6 @@ class FaithfulnessEvaluator:
     def __init__(self, config: GenerationConfig = None):
         self.config = config or GenerationConfig()
         from .llm_client import LLMClient
-
         self.llm_client = LLMClient(self.config)
 
     def evaluate(self, result: GenerationResult) -> GenerationResult:
@@ -56,8 +55,6 @@ class FaithfulnessEvaluator:
             answer=result.answer,
         )
 
-        # Override config temporarily to encourage JSON output if possible,
-        # though Gemini/Groq are usually good at following instructions.
         original_temp = self.config.temperature
         self.config.temperature = 0.0
 
@@ -66,7 +63,6 @@ class FaithfulnessEvaluator:
         self.config.temperature = original_temp
 
         try:
-            # Clean up potential markdown formatting from LLM response
             clean_text = answer_text.strip()
             if clean_text.startswith("```json"):
                 clean_text = clean_text[7:]
