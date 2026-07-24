@@ -1,5 +1,4 @@
 import logging
-from typing import Optional
 from PIL import Image
 import io
 
@@ -58,7 +57,7 @@ class VisualProcessor:
             
             for attempt in range(max_retries):
                 try:
-                    response = self.llm._llm_client.models.generate_content(
+                    response = self.llm._provider_instance.client.models.generate_content(
                         model=self.llm.config.model_name,
                         contents=[self.PAGE_PROMPT, img],
                         config=types.GenerateContentConfig(

@@ -2,40 +2,15 @@ import logging
 import datetime
 import asyncio
 from typing import Optional, Any
-from fastapi import BackgroundTasks
 
-from src.api.models.query_models import QueryRequest, QueryResponse, SourceDocument
+from src.api.models.query_models import QueryRequest, SourceDocument
 from src.retrieving.retriever import DenseRetriever, OptionalReranker
-from src.generating.generator import RAGGenerator
-from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.query_rewriter import QueryRewriter
 
 logger = logging.getLogger(__name__)
 
 class QueryService:
-    @staticmethod
-    def run_faithfulness_eval_async(evaluator, result, log_id, metrics_store, pipeline_logger):
-        try:
-            eval_start = datetime.datetime.now(datetime.timezone.utc).timestamp()
-            eval_result = evaluator.evaluate(result)
-            duration_ms = (datetime.datetime.now(datetime.timezone.utc).timestamp() - eval_start) * 1000
-            
-            if pipeline_logger:
-                pipeline_logger.log_event(
-                    "faithfulness_complete",
-                    query_text=result.query,
-                    score=eval_result.faithfulness_score,
-                    duration_ms=duration_ms
-                )
-                
-            if metrics_store and log_id is not None:
-                metrics_store.update_faithfulness(
-                    log_id, 
-                    eval_result.faithfulness_score, 
-                    eval_result.faithfulness_reasoning
-                )
-        except Exception as e:
-            logger.error(f"Error in background faithfulness evaluation: {e}")
+
 
     @staticmethod
     async def run_retrieval(

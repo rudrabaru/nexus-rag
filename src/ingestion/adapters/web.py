@@ -1,6 +1,5 @@
 import os
 import httpx
-from typing import List
 from src.crawling.metadata import CrawledDocument, AdapterResult
 from src.ingestion.base import IngestionAdapter
 import logging

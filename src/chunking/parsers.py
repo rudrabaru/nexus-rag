@@ -2,7 +2,6 @@ import re
 from typing import List
 from .models import Section, Block
 from .tokenizer import TokenCounter
-from .tokenizer import TokenCounter
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])\s+")
 
@@ -156,9 +155,9 @@ def extract_blocks(
 
         lines = para.split("\n")
         has_pipe_row = any(
-            l.strip().startswith("|") and l.strip().endswith("|") for l in lines
+            line.strip().startswith("|") and line.strip().endswith("|") for line in lines
         )
-        has_separator = any(re.match(r"^\|[-| :]+\|$", l.strip()) for l in lines)
+        has_separator = any(re.match(r"^\|[-| :]+\|$", line.strip()) for line in lines)
         is_table = has_pipe_row and has_separator
 
         block_type = "text"
@@ -169,8 +168,8 @@ def extract_blocks(
         # 5E.2 Table Reconstruction
         is_orphaned_table = False
         if not is_code and not is_table:
-            pipe_lines = [l for l in lines if l.strip().startswith("|") and l.strip().endswith("|")]
-            if len(pipe_lines) >= 2 and len(pipe_lines) >= len([l for l in lines if l.strip()]) * 0.8:
+            pipe_lines = [line for line in lines if line.strip().startswith("|") and line.strip().endswith("|")]
+            if len(pipe_lines) >= 2 and len(pipe_lines) >= len([line for line in lines if line.strip()]) * 0.8:
                 is_orphaned_table = True
 
         if is_orphaned_table and blocks and blocks[-1].block_type == "table":

@@ -1,5 +1,5 @@
 import re
-from typing import List, Dict, Any
+from typing import List
 
 def normalize_identifier(text: str) -> List[str]:
     # Split by any non-alphanumeric separator

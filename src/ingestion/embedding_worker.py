@@ -50,7 +50,7 @@ class EmbeddingWorker:
                 duration_ms=embed_duration_ms
             )
 
-        logger.info(f"Upserted {total_added} chunks to ChromaDB.")
+        logger.info(f"Upserted {total_added} chunks to Qdrant.")
 
         if registry and job_id:
             job_status = "partial_success" if all_failed_indices else "complete"

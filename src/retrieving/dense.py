@@ -4,7 +4,7 @@ import os
 import httpx
 from typing import Optional, Any
 
-from src.retrieving.vector_store import ChromaDBManager
+from src.retrieving.vector_store import QdrantManager
 from src.embedding.config import EmbeddingConfig
 from src.retrieving.models import RetrievedChunk, RetrievalResult
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class DenseRetriever:
     def __init__(
         self,
-        vector_store: ChromaDBManager,
+        vector_store: QdrantManager,
         embedding_config: Optional[EmbeddingConfig] = None,
     ):
         self.vector_store = vector_store
@@ -63,17 +63,7 @@ class DenseRetriever:
 
         search_start = time.time()
 
-        all_ids = []
-        all_dists = []
-        all_metas = []
-        all_docs = []
-
-        if tenant_id:
-            where_filter = {"tenant_id": tenant_id}
-        else:
-            where_filter = {"tenant_id": "__nonexistent__"}
-
-        collection_size = self.vector_store.collection.count()
+        collection_size = self.vector_store.get_collection_size()
         safe_top_k = min(top_k, collection_size)
 
         if safe_top_k == 0:
@@ -87,25 +77,13 @@ class DenseRetriever:
                 chunks=[],
             )
 
-        result = self.vector_store.collection.query(
-            query_embeddings=[query_embedding],
-            n_results=safe_top_k,
-            where=where_filter,
-            include=["documents", "metadatas", "distances"],
+        merged = self.vector_store.search(
+            query_embedding=query_embedding,
+            top_k=safe_top_k,
+            tenant_id=tenant_id
         )
-        if result["ids"] and len(result["ids"]) > 0:
-            all_ids = result["ids"][0]
-            all_dists = result["distances"][0]
-            all_metas = result["metadatas"][0]
-            all_docs = result["documents"][0]
 
         search_latency = (time.time() - search_start) * 1000
-
-        merged = [
-            {"id": all_ids[i], "dist": all_dists[i], "meta": all_metas[i], "doc": all_docs[i]}
-            for i in range(len(all_ids))
-        ]
-        merged = merged[:top_k]
 
         candidates = []
         for item in merged:
@@ -113,7 +91,7 @@ class DenseRetriever:
             if metric == "l2":
                 similarity = 1.0 / (1.0 + item["dist"])
             else:
-                similarity = 1.0 - item["dist"] if item["dist"] <= 1.0 else 0.0
+                similarity = item["dist"] # Qdrant cosine returns similarity directly
 
             chunk = RetrievedChunk(
                 chunk_id=item["id"],

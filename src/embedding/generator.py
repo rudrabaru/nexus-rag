@@ -1,5 +1,4 @@
 import logging
-import time
 import os
 import asyncio
 import httpx
@@ -49,7 +48,6 @@ class EmbeddingGenerator:
                 batch = texts[i:i + batch_size]
                 
                 max_retries = 3
-                success = False
                 for attempt in range(max_retries):
                     try:
                         if self.embed_semaphore:
@@ -71,7 +69,6 @@ class EmbeddingGenerator:
                                 
                         data = response.json()
                         all_embeddings.extend([item["embedding"] for item in data["data"]])
-                        success = True
                         break
                     except Exception as e:
                         if attempt == max_retries - 1:

@@ -15,7 +15,7 @@ def main():
     parser.add_argument(
         "--collection_name",
         type=str,
-        default="unified_corpus",
+        default="unified_corpus_v2",
         help="Name for the vector database collection.",
     )
     parser.add_argument(
@@ -33,6 +33,9 @@ def main():
     parser.add_argument(
         "--use_hybrid", action="store_true", help="Use Hybrid Search (BM25 + Dense)"
     )
+    parser.add_argument(
+        "--tenant_id", type=str, default="default_tenant", help="Tenant ID for the vector store"
+    )
     args = parser.parse_args()
 
     from src.retrieving.eval_runner import run_evaluation_pipeline
@@ -44,6 +47,7 @@ def main():
         output_dir_base=args.output_dir,
         use_reranker=args.use_reranker,
         use_hybrid=args.use_hybrid,
+        tenant_id=args.tenant_id,
     )
 
 

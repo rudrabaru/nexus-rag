@@ -59,7 +59,7 @@ class UniversalAdapter(IngestionAdapter):
                 _temp_file = local_path
             except Exception as e:
                 logger.error(f"Failed to download {source}: {e}")
-                return AdapterResult(documents=[], visual_chunks=[])
+                raise Exception(f"Download failed: {str(e)}")
 
         try:
             if local_path.lower().endswith(".txt"):
@@ -78,11 +78,14 @@ class UniversalAdapter(IngestionAdapter):
                     markdown_content = result.text_content or ""
                     logger.info(f"ADAPTER | MarkItDown done | chars={len(markdown_content)}")
                 except Exception as convert_err:
-                    logger.warning(
-                        f"ADAPTER | MarkItDown conversion FAILED for {source!r}: {convert_err!r}. "
-                        "Will attempt vision fallback if this is a PDF."
-                    )
-                    markdown_content = ""
+                    if source.lower().endswith(".pdf"):
+                        logger.warning(
+                            f"ADAPTER | MarkItDown conversion FAILED for {source!r}: {convert_err!r}. "
+                            "Will attempt vision fallback if this is a PDF."
+                        )
+                        markdown_content = ""
+                    else:
+                        raise ValueError(f"MarkItDown failed to parse document: {str(convert_err)}") from convert_err
             
             if source.lower().endswith(".docx"):
                 markdown_content = strip_tracked_change_artifacts(markdown_content)
@@ -90,11 +93,11 @@ class UniversalAdapter(IngestionAdapter):
                 logger.info(f"ADAPTER | DOCX post-processing done | chars={len(markdown_content)}")
                 
             if source.lower().endswith(".pdf"):
-                lines = [l for l in markdown_content.splitlines() if l.strip()]
-                if lines and (sum(len(l) for l in lines) / len(lines)) < 5:
+                lines = [line for line in markdown_content.splitlines() if line.strip()]
+                if not lines or (sum(len(line) for line in lines) / len(lines)) < 5:
                     logger.warning(
                         f"ADAPTER | Suspicious text for {source!r} "
-                        "(avg line length < 5). Retrying with PyMuPDF text extraction."
+                        "(empty or avg line length < 5). Retrying with PyMuPDF text extraction."
                     )
                     try:
                         import fitz
@@ -149,7 +152,6 @@ class UniversalAdapter(IngestionAdapter):
                             if asset_store:
                                 asset_store.save(doc_id, image_bytes, f"img_p{page_num + 1}_0.png")
                                 
-                        import asyncio
                         page_md = await asyncio.to_thread(processor.describe_page, image_bytes)
                         md_chars = len(page_md.strip())
                         logger.info(f"ADAPTER | VISION | Page {page_num+1}/{page_count}: describe_page returned {md_chars} chars")
@@ -186,7 +188,7 @@ class UniversalAdapter(IngestionAdapter):
             
         except Exception as e:
             logger.error(f"UniversalAdapter failed to read {source}: {e}")
-            return AdapterResult(documents=[], visual_chunks=[])
+            raise Exception(f"File processing failed: {str(e)}")
         finally:
             if _temp_file:
                 try:

@@ -50,6 +50,10 @@ class LLMClient:
                     if attempt < max_retries:
                         sleep_time = (2 ** attempt) + random.uniform(0, 1)
                         logger.warning(f"Rate limit hit ({e}). Retrying in {sleep_time:.2f}s (Attempt {attempt + 1}/{max_retries})...")
+                        # NOTE: This time.sleep() runs in a thread pool via asyncio.to_thread() in generator.py.
+                        # It will not hard-block the async event loop, but it will consume a worker thread slot 
+                        # for the duration of the sleep. On constrained environments (e.g. Render Free Tier),
+                        # this may reduce concurrent throughput during rate limits.
                         time.sleep(sleep_time)
                         continue
                     elif not is_fallback and self._fallback_client:

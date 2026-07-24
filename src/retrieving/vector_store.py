@@ -1,55 +1,74 @@
 import json
 import logging
 import os
+import uuid
 from typing import List, Dict, Any
-import chromadb
+from qdrant_client import QdrantClient
+from qdrant_client.http import models as rest
 from src.embedding.models import EmbeddedChunk
 
 logger = logging.getLogger(__name__)
 
 
-class ChromaDBManager:
+class QdrantManager:
     """
-    Manages interaction with ChromaDB for storing and retrieving embedded chunks.
+    Manages interaction with Qdrant Cloud for storing and retrieving embedded chunks.
     """
 
     def __init__(
         self,
-        persist_directory: str = None,
-        collection_name: str = "unified_corpus_v2",
+        collection_name: str = None,
         distance_metric: str = "cosine",
+        dimension: int = 1024,
     ):
-        if persist_directory is None:
-            default_chroma_path = "/data/.chroma_db" if os.environ.get("SPACE_ID") else ".chroma_db"
-            persist_directory = os.environ.get("CHROMA_DB_PATH", os.environ.get("CHROMA_PERSIST_DIR", default_chroma_path))
-        self.persist_directory = persist_directory
-        self.collection_name = collection_name
+        self.collection_name = collection_name or os.environ.get("QDRANT_COLLECTION_NAME", "nexus_rag_collection")
         self.distance_metric = distance_metric
+        self.dimension = dimension
 
-        chroma_host = os.getenv("CHROMA_HOST")
-        chroma_port = os.getenv("CHROMA_PORT", "8000")
+        qdrant_url = os.environ.get("QDRANT_URL")
+        qdrant_api_key = os.environ.get("QDRANT_API_KEY")
 
-        if chroma_host:
-            self.client = chromadb.HttpClient(host=chroma_host, port=chroma_port)
-            logger.info(f"Initialized ChromaDB HttpClient connecting to {chroma_host}:{chroma_port}")
-        else:
-            self.client = chromadb.PersistentClient(path=self.persist_directory)
-            logger.info(f"Initialized ChromaDB PersistentClient at {persist_directory}")
+        if not qdrant_url or not qdrant_api_key:
+            raise ValueError("QDRANT_URL and QDRANT_API_KEY must be set in environment variables.")
 
-        # Get or create collection
-        self.collection = self.client.get_or_create_collection(
-            name=self.collection_name, metadata={"hnsw:space": self.distance_metric}
-        )
-        logger.info(
-            f"Initialized collection '{collection_name}' (space: {self.distance_metric})"
-        )
+        self.client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key, timeout=120.0)
+        logger.info(f"Initialized Qdrant Cloud Client connected to {qdrant_url}")
 
-    def _prepare_metadata(self, chunk: EmbeddedChunk) -> Dict[str, Any]:
+        # Ensure collection exists with correct configuration
+        try:
+            if not self.client.collection_exists(self.collection_name):
+                # Map distance metric string to Qdrant enum
+                qdrant_distance = rest.Distance.COSINE
+                if self.distance_metric.lower() == "l2":
+                    qdrant_distance = rest.Distance.EUCLID
+                elif self.distance_metric.lower() == "ip":
+                    qdrant_distance = rest.Distance.DOT
+
+                self.client.create_collection(
+                    collection_name=self.collection_name,
+                    vectors_config=rest.VectorParams(
+                        size=self.dimension, 
+                        distance=qdrant_distance
+                    )
+                )
+                self.client.create_payload_index(
+                    collection_name=self.collection_name,
+                    field_name="tenant_id",
+                    field_schema=rest.PayloadSchemaType.KEYWORD,
+                )
+                logger.info(
+                    f"Created Qdrant collection '{self.collection_name}' with tenant_id index"
+                )
+            else:
+                logger.info(f"Using existing Qdrant collection '{self.collection_name}'")
+        except Exception as e:
+            logger.error(f"Error checking or creating Qdrant collection: {e}")
+
+    def _prepare_payload(self, chunk: EmbeddedChunk) -> Dict[str, Any]:
         """
-        Prepares metadata for ChromaDB by flattening lists and ensuring types are supported.
-        ChromaDB only supports str, int, float, bool.
+        Prepares metadata for Qdrant payload. Qdrant supports complex JSON structures.
         """
-        metadata = {
+        payload = {
             "chunk_id": chunk.chunk_id,
             "source_document": chunk.source_document,
             "source_url": getattr(chunk, "source_url", ""),
@@ -62,54 +81,111 @@ class ChromaDBManager:
             "document_version": chunk.document_version,
             "visibility": "private",
             "tenant_id": chunk.tenant_id or "unknown",
+            "document_text": chunk.chunk_text, # Store the actual text in the payload
         }
 
         # Store heading_path as a JSON array string for lossless round-trip parsing.
-        # Consumers must use json.loads() to reconstruct the list.
-        metadata["heading_path"] = json.dumps(chunk.heading_path)
+        payload["heading_path"] = json.dumps(chunk.heading_path)
 
-        return metadata
+        return payload
 
     def load_chunks(self, chunks: List[EmbeddedChunk]) -> int:
         """
-        Loads a list of EmbeddedChunks into the ChromaDB collection.
+        Loads a list of EmbeddedChunks into the Qdrant collection.
         Returns the number of successfully added chunks.
         """
         if not chunks:
             return 0
 
-        ids = []
-        embeddings = []
-        metadatas = []
-        documents = []
-
+        points = []
         for chunk in chunks:
-            ids.append(chunk.chunk_id)
-            embeddings.append(chunk.embedding)
-            metadatas.append(self._prepare_metadata(chunk))
-            documents.append(chunk.chunk_text)
-
-        max_batch_size = 5000
-        total_added = 0
+            # Qdrant IDs must be UUID or unsigned integer. We generate a deterministic UUID from the chunk_id string.
+            point_id = str(uuid.uuid5(uuid.NAMESPACE_OID, chunk.chunk_id))
+            points.append(
+                rest.PointStruct(
+                    id=point_id,
+                    vector=chunk.embedding,
+                    payload=self._prepare_payload(chunk)
+                )
+            )
 
         try:
-            for i in range(0, len(ids), max_batch_size):
-                self.collection.upsert(
-                    ids=ids[i : i + max_batch_size],
-                    embeddings=embeddings[i : i + max_batch_size],
-                    metadatas=metadatas[i : i + max_batch_size],
-                    documents=documents[i : i + max_batch_size],
+            batch_size = 100
+            for i in range(0, len(points), batch_size):
+                batch_points = points[i:i+batch_size]
+                self.client.upsert(
+                    collection_name=self.collection_name,
+                    points=batch_points
                 )
-                total_added += len(ids[i : i + max_batch_size])
-            if total_added < len(ids):
-                raise RuntimeError(
-                    f"ChromaDB upsert partial failure: added {total_added}/{len(ids)} chunks"
-                )
-            return total_added
+            return len(points)
         except Exception as e:
-            logger.error(f"Failed to load chunks into ChromaDB: {e}")
+            logger.error(f"Failed to load chunks into Qdrant: {e}")
             raise
 
     def get_collection_size(self) -> int:
         """Returns the number of items in the collection."""
-        return self.collection.count()
+        try:
+            return self.client.get_collection(self.collection_name).points_count
+        except Exception:
+            return 0
+
+    def search(self, query_embedding: List[float], top_k: int, tenant_id: str = None) -> List[Dict[str, Any]]:
+        """
+        Searches the Qdrant collection using strict tenant_id payload filtering.
+        Returns a list of dicts with 'id', 'score', 'meta', and 'doc'.
+        """
+        must_conditions = []
+        if tenant_id:
+            must_conditions.append(
+                rest.FieldCondition(
+                    key="tenant_id",
+                    match=rest.MatchValue(value=tenant_id)
+                )
+            )
+        else:
+            must_conditions.append(
+                rest.FieldCondition(
+                    key="tenant_id",
+                    match=rest.MatchValue(value="__nonexistent__")
+                )
+            )
+
+        qdrant_filter = rest.Filter(must=must_conditions)
+
+        results = self.client.query_points(
+            collection_name=self.collection_name,
+            query=query_embedding,
+            query_filter=qdrant_filter,
+            limit=top_k
+        )
+
+        output = []
+        for res in results.points:
+            output.append({
+                "id": str(res.id),
+                "dist": res.score, 
+                "meta": res.payload,
+                "doc": res.payload.get("document_text", "")
+            })
+        return output
+
+    def delete_chunks(self, chunk_ids: List[str]) -> bool:
+        """
+        Deletes chunks from the Qdrant collection by their original chunk_ids.
+        """
+        if not chunk_ids:
+            return True
+            
+        point_ids = [str(uuid.uuid5(uuid.NAMESPACE_OID, cid)) for cid in chunk_ids]
+        
+        try:
+            self.client.delete(
+                collection_name=self.collection_name,
+                points_selector=rest.PointIdsList(
+                    points=point_ids
+                )
+            )
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete chunks from Qdrant: {e}")
+            return False

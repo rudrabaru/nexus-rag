@@ -1,8 +1,7 @@
-import os
 import logging
 import time
 import re
-from typing import List, Optional, Dict, Any
+from typing import List, Dict, Any
 
 from src.crawling.metadata import CrawledDocument, VisualChunkDraft
 from src.processing.cleaner import DocumentCleaner
@@ -12,7 +11,7 @@ from src.processing.validator import ProcessingValidator
 from src.chunking.chunker import DocumentChunker
 from src.embedding.config import EmbeddingConfig
 from src.embedding.generator import EmbeddingGenerator
-from src.retrieving.vector_store import ChromaDBManager
+from src.retrieving.vector_store import QdrantManager
 from src.ingestion.embedding_worker import EmbeddingWorker
 
 logger = logging.getLogger(__name__)
@@ -36,10 +35,10 @@ class IncrementalIngestionPipeline:
     def __init__(self, embedding_generator=None, db_manager=None):
         if db_manager is None:
             try:
-                self.db_manager = ChromaDBManager(collection_name=os.environ.get("CHROMA_COLLECTION", "unified_corpus_v2"))
-                logger.info("Pipeline initialized new ChromaDBManager.")
+                self.db_manager = QdrantManager()
+                logger.info("Pipeline initialized new QdrantManager.")
             except Exception as e:
-                logger.critical(f"ChromaDB failed to initialize in pipeline: {e}")
+                logger.critical(f"QdrantManager failed to initialize in pipeline: {e}")
                 raise e
         else:
             self.db_manager = db_manager
@@ -62,7 +61,7 @@ class IncrementalIngestionPipeline:
         for doc in crawled_docs:
             lines = doc.markdown_content.splitlines()
             if lines:
-                log_lines = sum(1 for l in lines if _LOG_PATTERN.search(l))
+                log_lines = sum(1 for line in lines if _LOG_PATTERN.search(line))
                 if log_lines / len(lines) > 0.4:
                     logger.warning(f"Document {doc.url} appears to be a log file. Retrieval quality may be degraded.")
 

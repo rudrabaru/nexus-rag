@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from collections import defaultdict
 
-from src.retrieving.vector_store import ChromaDBManager
+from src.retrieving.vector_store import QdrantManager
 from src.retrieving.retriever import DenseRetriever, OptionalReranker, HybridRetriever
 from src.retrieving.evaluation import Evaluator
 from src.retrieving.evaluation_models import EvaluationQuery
@@ -153,11 +153,11 @@ def run_evaluation_pipeline(
 ):
     distance_metric = "cosine"
 
-    db_manager = ChromaDBManager(
-        collection_name=collection_name, distance_metric=distance_metric
+    db_manager = QdrantManager(
+        distance_metric=distance_metric
     )
 
-    logger.info(f"Connected to ChromaDB collection: {collection_name}")
+    logger.info("Connected to QdrantManager")
 
     dense_retriever = DenseRetriever(vector_store=db_manager)
 

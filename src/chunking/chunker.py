@@ -9,17 +9,12 @@ This module implements the core chunking algorithm:
 5. Generate chunk metadata.
 """
 
-import json
 import logging
-import re
 import hashlib
-from pathlib import Path
-from typing import List, Optional
-from datetime import datetime
+from typing import List
 
 from .metadata import ChunkMetadata, ChunkingConfig
 from .tokenizer import TokenCounter, TokenBudget
-from .models import Section, Block
 from .parsers import parse_sections, extract_blocks
 from .merger import merge_tiny_chunks
 from .heuristics import get_overlap_blocks, build_chunk_metadata

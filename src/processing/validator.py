@@ -1,5 +1,4 @@
 import re
-from typing import List, Dict
 from src.processing.models import ProcessedDocument
 
 

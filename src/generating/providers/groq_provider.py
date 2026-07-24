@@ -3,7 +3,6 @@ import logging
 import asyncio
 from typing import Tuple, AsyncGenerator
 from src.generating.providers.base import BaseProvider
-from src.generating.models import GenerationConfig
 
 logger = logging.getLogger(__name__)
 
