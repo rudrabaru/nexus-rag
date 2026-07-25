@@ -9,7 +9,6 @@ Core Development Philosophy:
 * Prioritize understanding over abstraction.
 * Prefer minimal working implementations first.
 * Build incrementally and observably.
-* Avoid unnecessary frameworks and premature optimization.
 * Keep architectures transparent and inspectable.
 
 Engineering Requirements:
@@ -66,8 +65,6 @@ Learning-Focused Behavior:
 
 Avoid:
 
-* premature enterprise architecture
-* unnecessary orchestration frameworks
 * complex agent systems
 * hidden abstractions
 * magic pipelines
@@ -652,164 +649,21 @@ Do not introduce advanced techniques unless there is evidence that the baseline 
 
 Favor understanding and observability over sophistication.
 
-# Pipeline Versioning
+# In-Memory Microservice Architecture
 
-Every pipeline stage must follow the same versioning model.
+The RAG system operates as a single, in-memory microservice powered by FastAPI.
+We do not use offline, disk-based pipeline stages (e.g. `raw_docs/vN`, `chunks/vN`).
 
-Examples:
+Data must flow directly from ingestion through to ChromaDB without persisting intermediate representations to disk, except where necessary for critical state (e.g. the BM25 index or SQLite job registry).
 
-* raw documents (raw_docs/vN)
-* processed documents (processed_docs/vN)
-* chunks (chunks/vN)
-* embeddings (embeddings/vN)
-* evaluation datasets (stored flat in `evaluation_datasets/`, not versioned — datasets are permanent inputs)
-* evaluation reports (stored under the relevant phase version, e.g. `retrieval/vN/evaluations/vN/`)
-* reranking outputs (reranking_outputs/vN)
+## Evaluation
 
-Use:
-
-phase_name/vN/
-
-instead of:
-
-phase_name_vN/
-
-or other naming conventions.
-
-Each version must:
-
-* preserve previous versions
-* remain reproducible
-* contain its own metrics
-* contain its own manifests
-* contain its own validation outputs
-
-Versioning rules apply to all existing and future pipeline stages.
-
-Do not introduce alternative versioning schemes.
-
-If already one run is done on any phase, then use v+1 for the next run and mention v1 for the first one if not mentioned initially.
-
-# Evaluation Versioning
-
-Evaluation runs should be versioned independently from retrieval implementations.
-
-Examples:
-
-retrieval/
-└── v1/
-└── evaluations/
-├── v1/
-├── v2/
-└── vN/
-
-A new evaluation version should be created when:
-
-* evaluation datasets change
-* evaluation logic changes
-* failure categorization changes
-* benchmark methodology changes
-
-Do not create a new retrieval version solely because an evaluation was rerun.
-
-Retrieval versions represent implementation changes.
-
-Evaluation versions represent benchmark runs.
-
-# Artifact Consistency
-
-Every artifact-producing phase should maintain a predictable structure.
-
-Each phase MUST adhere to the following output directory convention:
-
-```text
-[phase_name]/
-└── vN/
-    ├── [primary_outputs] (e.g., all_chunks.json, embeddings.json)
-    └── metrics/
-        ├── [phase_name]_manifest.json (or metrics summary)
-        ├── [phase_name]_validation_report.json
-        └── [any other metrics/evaluations/reports]
-```
-
-Do not invent new file structures or rename `metrics/` to something else. All phase metadata, validation reports, evaluation outputs, and manifests MUST reside inside the `metrics/` subdirectory for that version to maintain systemic consistency.
-
-Future phases should follow the same organizational principles rather than inventing new layouts.
-
-# End-to-End Evaluation Tracking
-
-The system must support evaluation at every major pipeline stage, not just retrieval.
-
-## Dataset vs Results Separation
-
-Evaluation datasets and evaluation results are two distinct concerns and MUST be stored separately:
-
-```text
-evaluation_datasets/                         ← ground truth only; never modified by pipeline runs
-    <corpus>_eval.json
-
-retrieval/<vN>/evaluations/<vN>/             ← retrieval-stage results per run
-    evaluation_metrics.json
-    evaluation_evidence_report.json
-    retrieval_review_validation.json
-    benchmark_integrity_report.json
-    benchmark_reliability_report.json
-    evaluation_summary.md
-
-generation/<vN>/metrics/                     ← generation-stage results
-    generation_metrics.json
-    faithfulness_scores.json
-    generation_summary.md
-
-chunks/<vN>/metrics/                         ← chunking-stage quality
-    chunking_manifest.json
-    chunking_validation_report.json
-
-embeddings/<vN>/metrics/                     ← embedding-stage quality
-    embedding_validation_report.json
-    embedding_manifest.json
-```
-
-Never mix datasets (inputs) with results (outputs). A dataset is permanent and reusable across runs. A result belongs to a specific pipeline version.
-
-## What Must Be Evaluated at Each Stage
-
-**Phase 1 — Crawling:** Total pages crawled/failed, content length distribution, unique URL count. Save to `raw_docs/vN/metrics/crawl_manifest.json`.
-
-**Phase 2 — Processing:** Document count before/after cleaning, average content reduction ratio. Save to `processed_docs/vN/metrics/processing_manifest.json`.
-
-**Phase 3 — Chunking:** Chunk count, token distribution, heading depth coverage. Save to `chunks/vN/metrics/chunking_manifest.json`.
-
-**Phase 4 — Embedding:** Embedding dimension, batch success/failure count, nearest-neighbor sanity check. Save to `embeddings/vN/metrics/embedding_validation_report.json`.
-
-**Phase 5/6 — Retrieval:** Recall@1, Recall@3, Recall@5, MRR, per-difficulty and per-category breakdowns, evidence report. Save to `retrieval/vN/evaluations/vN/`.
-
-**Phase 7 — Generation:** Faithfulness score (LLM-as-judge), answer latency, token usage. Save to `generation/vN/metrics/`.
-
-## Proving Improvement
-
-To prove a change improved the system:
-
-1. Run evaluation BEFORE the change and save results under the current version.
-2. Implement the change and increment the version.
-3. Run evaluation AFTER the change and save under the new version.
-4. Compare metrics files side-by-side.
-
-A change is proven only when a metric improves without regression in another metric. Never claim improvement without a before/after evaluation file comparison.
-
-## Evaluation Script Contracts
-
-Every `run_evaluation.py` invocation must:
-- Accept a `--dataset` path pointing to a file in `evaluation_datasets/`
-- Write all result files into the appropriate `<phase>/vN/evaluations/vN/` directory
-- Never modify or overwrite the source dataset file
-- Print a human-readable summary to console AND persist machine-readable JSON
+Evaluation should be executed directly against the active ChromaDB collection and the live BM25 index. Evaluation datasets are stored in `evaluation_datasets/`, and reports should be saved to `evaluations/` with clear timestamps or semantic versioning.
 
 ## Stress Testing
 
 To understand where the system degrades:
 - Use hard-tier queries with synonyms, paraphrasing, and indirect references (not exact keyword matches)
-- After each major change (new corpus, new chunker, new retriever), re-run all difficulty tiers and compare
 - Document which categories fail and why in `docs/phases/`
 
 # Special Notes
@@ -821,3 +675,14 @@ Update the phase-wise documentation in the docs folder after each significant ch
 Never remove content because of specific words. Remove content only because of measurable structural evidence.
 
 Whenever the user takes a different approach over any phase of the RAG pipeline, update the skills and documentation of that particular phase to reflect the new approach and its tradeoffs. Also update the README.md file as the project progresses based on the new features added or changes made.
+
+# Modular Architecture Requirements
+
+To ensure the codebase remains clean, maintainable, and acts like independent microservices:
+
+* **Single Responsibility**: Every file and module must have exactly one primary responsibility. Do not mix API routing, initialization lifecycle, request/response models, and business logic in the same file.
+* **Explicit Dependency Graph**: Higher-level modules (e.g. `src/api`) may depend on lower-level modules (e.g. `src/utils`), but never the reverse. Do not import scripts into the core source directory.
+* **Avoid Monoliths**: If a file grows large (e.g. >200 lines) or accumulates multiple disparate functions, it must be decomposed into logical submodules.
+* **No Implicit Duplication**: Do not duplicate complex setup logic (such as initializing embeddings, retrievers, or generators) across multiple endpoints or scripts. Use shared factory functions.
+* **Clean Imports**: Defer heavy standard-library or third-party imports ONLY if absolutely necessary for performance or optional dependencies. Otherwise, place all imports at the top of the file for visibility.
+* **Pre-Change Analysis**: Before modifying any existing code, you MUST analyze the file structure, imports, and execution flow to ensure your changes align with this modular architecture and do not introduce regressions or circular dependencies.

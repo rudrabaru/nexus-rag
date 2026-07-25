@@ -1,26 +1,41 @@
-# Phase 5: Retrieval & Database
+# Phase 5: Retrieval
 
 ## Overview
-Phase 5 loads the validated semantic vectors into a persistent Vector Database (ChromaDB) and exposes a fast, latency-optimized query interface. This allows user queries to mathematically match and retrieve the most relevant sections of the crawled corpus.
+The retrieval phase surfaces the most relevant chunks from the indexed knowledge base for a given query. The system employs a sophisticated three-stage architecture: Hybrid Search (combining Semantic and Keyword matching), Reciprocal Rank Fusion, and optional Cross-Encoder Reranking. All stages are measurable and independently observable.
 
-## Implementation Details
+## Core Implementation Logic
 
-### 1. Vector Store Management
-The `ChromaDBManager` abstracts the complexities of the database. It handles batch ingestion, metadata flattening (e.g., converting hierarchical list arrays to string paths), and persistent storage management. It relies on the generic `embedding_validation_report.json` to configure correct distance metrics.
+### Multi-Tenancy & Security Filtering
+Before any chunk is evaluated for relevance, a strict security filter is enforced directly at the vector database level.
+- If a chunk is marked "public", it is available to all queries.
+- If a chunk is marked "private", it is only returned if the querying user's Tenant ID matches the chunk's Tenant ID.
 
-### 2. Dense Retrieval Queries
-The `DenseRetriever` accepts natural language queries, embeds them on the fly using the identical Phase 4 Transformer model, and queries the ChromaDB index using Cosine Similarity or L2 distance. 
+This filter is applied at the database query level — not as an after-the-fact post-filter. This guarantees that performance and accuracy are not impacted by the total size of the corpus, and ensures absolute data isolation.
 
-### 3. Cross-Encoder Reranking
-To improve precision, the retrieval phase incorporates an optional Cross-Encoder reranking step (`OptionalReranker`). When enabled, the system retrieves an expanded candidate pool (e.g., `top_k * 4`) via dense retrieval, then reranks these candidates using a highly accurate cross-encoder model to return the final `top_k`. This achieves a strong balance between dense retrieval speed and cross-encoder accuracy.
+### Stage 1: Dense Retrieval (Semantic Search)
+1. The user's query is embedded via the external API, specifically tagged with a "query" task type to optimize for searching.
+2. The vector database is queried to find the top candidates based on pure mathematical similarity (cosine distance).
+3. These results capture the *meaning* and *concepts* of the query, even if the exact words don't match.
 
-### 3. Sublist Token Matching (Evaluation Tracking)
-For evaluation pipelines, retrieving documents uses highly accurate token-aware sublist mapping. This ensures benchmarking logic evaluates true hit-rates regardless of string-truncation variations.
+### Stage 2: Sparse Retrieval (Keyword Search)
+In parallel, the local full-text search database is queried with the raw string. This engine applies linguistic stemming and a BM25 scoring algorithm to find exact keyword matches. This is critical for queries involving specific acronyms, error codes, or proper nouns that semantic search might misinterpret.
 
-## Tradeoffs
-- **Metadata Limitations**: ChromaDB strictly limits metadata values to strings, ints, floats, and booleans. Nested structures (like the chunk's hierarchical path) must be flattened, slightly reducing complex metadata querying capabilities.
-- **Cold Start Latency**: Instantiating the embedding model and connecting to the Persistent ChromaDB instance incurs a brief cold-start overhead upon the first query.
+### Stage 3: Reciprocal Rank Fusion (RRF)
+The semantic and keyword results are completely different mathematically and cannot be simply added together. The system fuses them using **Reciprocal Rank Fusion (RRF)**.
 
-## Potential Failure Modes
-- Mismatched Transformer models between Phase 4 and Phase 5 will result in dimension errors or completely hallucinated similarity scores.
-- Querying a non-existent or un-populated database collection will crash the retrieval module.
+RRF looks at the *rank order* of the results rather than their raw scores. A document that appears high in both the semantic list and the keyword list will be boosted to the absolute top of the final fused list. This mathematical approach guarantees the best of both worlds without requiring brittle, manual score weighting.
+
+### Stage 4: Optional Cross-Encoder Reranking
+If configured, the top results from the fused list are sent to a specialized Cross-Encoder Reranking API. 
+Unlike standard embeddings that look at the query and the document in isolation, a cross-encoder reads the query and the document *together* at the same time, producing a highly calibrated relevance score that accounts for their joint context. 
+
+This stage replaces the RRF scores with the reranker's precise relevance scores. If the reranker is disabled, the system gracefully falls back to the RRF ranking.
+
+### Score Calibration
+Relevance scores are treated as **ranking signals, not absolute cutoffs**. The system defaults to maximizing recall by allowing all retrieved top candidates through, rather than applying an arbitrary minimum score cutoff that might accidentally filter out the correct answer.
+
+### Latency Observability
+The retrieval pipeline is highly instrumented, reporting discrete timing for each micro-stage (embedding the query, searching the databases, reranking). This allows operators to easily identify performance bottlenecks in production.
+
+## Design Philosophy & Tradeoffs
+- **Reranker Latency vs. Accuracy:** The cross-encoder reranker significantly boosts the accuracy of the top results but requires an additional API call, adding latency to the overall query time. For speed-critical applications, it can be disabled with a slight penalty to absolute precision.
