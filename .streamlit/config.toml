@@ -1,0 +1,6 @@
+[server]
+# Disable XSRF protection so that st.file_uploader works correctly
+# behind a reverse proxy / in Hugging Face Spaces (which proxies through nginx).
+# Without this, the file upload endpoint returns 403 Forbidden.
+enableXsrfProtection = false
+enableCORS = false

@@ -1,4 +1,3 @@
-import os
 import shutil
 import logging
 from typing import Optional
@@ -81,9 +80,9 @@ async def ingest_document(
                     if retriever:
                         vector_store = getattr(retriever, "vector_store", getattr(getattr(retriever, "dense_retriever", None), "vector_store", None))
                         if vector_store:
-                            await asyncio.to_thread(vector_store.collection.delete, ids=old_chunk_ids)
+                            await asyncio.to_thread(vector_store.delete_chunks, chunk_ids=old_chunk_ids)
                 except Exception as e:
-                    logger.warning(f"Failed to delete old chunks from Chroma: {e}")
+                    logger.warning(f"Failed to delete old chunks from Qdrant: {e}")
 
         registry.register_job(job_id, doc_id, canonical_url if canonical_url else source_path, format_type, tenant_id, content_hash)
 
@@ -126,7 +125,7 @@ async def get_job_status(
     if metadata and isinstance(metadata, str):
         try:
             metadata = json.loads(metadata)
-        except:
+        except Exception:
             metadata = None
 
     response = JobStatusResponse(

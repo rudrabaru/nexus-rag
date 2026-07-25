@@ -1,17 +1,8 @@
 import os
-import json
 import logging
-from pathlib import Path
-from typing import Optional
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
-from src.retrieving.vector_store import ChromaDBManager
-from src.retrieving.retriever import DenseRetriever, OptionalReranker
-from src.generating.models import GenerationConfig
-from src.generating.generator import RAGGenerator
-from src.generating.evaluator import FaithfulnessEvaluator
-from src.generating.query_rewriter import QueryRewriter
 from src.registry.database import DocumentRegistry
 from src.api.factory import _init_components
 
@@ -69,16 +60,9 @@ async def lifespan(app: FastAPI):
                     )
 
                 if vector_store:
-                    actual_metric = vector_store.collection.metadata.get("hnsw:space", "unknown")
-                    expected_metric = getattr(vector_store, "distance_metric", "cosine")
-                    if actual_metric != "unknown" and actual_metric != expected_metric:
-                        logger.critical(
-                            f"CHROMADB DISTANCE METRIC MISMATCH: collection='{vector_store.collection.name}' "
-                            f"has hnsw:space='{actual_metric}' but configured distance_metric='{expected_metric}'. "
-                            f"All similarity scores will be incorrect. Delete and recreate the collection."
-                        )
+                    pass # Metric check omitted for Qdrant (managed internally)
 
-                chroma_count = vector_store.collection.count() if vector_store else 0
+                qdrant_count = vector_store.get_collection_size() if vector_store else 0
 
                 registry_docs = registry.list_documents(tenant_id=None)
                 registry_chunk_count = sum(
@@ -86,37 +70,15 @@ async def lifespan(app: FastAPI):
                 )
 
                 logger.info(
-                    f"Startup check: ChromaDB chunks={chroma_count}, Registry chunks={registry_chunk_count}"
+                    f"Startup check: Qdrant chunks={qdrant_count}, Registry chunks={registry_chunk_count}"
                 )
-                if chroma_count != registry_chunk_count:
+                if qdrant_count != registry_chunk_count:
                     logger.warning(
-                        f"CRITICAL STATE DIVERGENCE: ChromaDB has {chroma_count} chunks but Registry has {registry_chunk_count} chunks. Initiating auto-healing."
+                        f"CRITICAL STATE DIVERGENCE: Qdrant has {qdrant_count} chunks but Registry has {registry_chunk_count} chunks. "
+                        f"In a stateless environment like Render, this is expected if the ephemeral SQLite DB is wiped but Qdrant persists."
                     )
-                    try:
-                        chroma_ids = set()
-                        if chroma_count > 0:
-                            BATCH_SIZE = 5000
-                            for offset in range(0, chroma_count, BATCH_SIZE):
-                                batch_data = vector_store.collection.get(include=[], limit=BATCH_SIZE, offset=offset)
-                                chroma_ids.update(batch_data.get("ids", []))
-                        
-                        deleted_docs = 0
-                        for doc in registry_docs:
-                            doc_chunk_ids = doc.get("chunk_ids", [])
-                            if not doc_chunk_ids:
-                                continue
-                            
-                            # If any chunk is missing in ChromaDB, the document didn't fully persist
-                            missing_chunks = [cid for cid in doc_chunk_ids if cid not in chroma_ids]
-                            if missing_chunks:
-                                doc_id = doc.get("doc_id")
-                                logger.info(f"Auto-healing: Deleting orphaned document {doc_id} ({len(missing_chunks)} missing chunks).")
-                                registry.delete_document(doc_id)
-                                deleted_docs += 1
-                                
-                        logger.info(f"Auto-healing complete. Deleted {deleted_docs} orphaned documents.")
-                    except Exception as e:
-                        logger.error(f"Failed to auto-heal state divergence: {e}")
+                    # Note: We skip the auto-healing deletion here to prevent the stateless backend 
+                    # from deleting persistent Qdrant vectors just because its local SQLite was wiped.
 
             except Exception as e:
                 logger.error(f"Failed to perform startup consistency check: {e}")

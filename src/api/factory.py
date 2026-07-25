@@ -1,10 +1,10 @@
 import os
 import logging
-from pathlib import Path
 from dataclasses import dataclass
+from typing import Optional, Union
 
-from src.retrieving.vector_store import ChromaDBManager
-from src.retrieving.retriever import DenseRetriever, OptionalReranker
+from src.retrieving.vector_store import QdrantManager
+from src.retrieving.retriever import DenseRetriever, OptionalReranker, HybridRetriever
 from src.generating.models import GenerationConfig
 from src.generating.generator import RAGGenerator
 from src.generating.evaluator import FaithfulnessEvaluator
@@ -13,9 +13,6 @@ from src.embedding.generator import EmbeddingGenerator
 from src.embedding.config import EmbeddingConfig
 
 logger = logging.getLogger(__name__)
-
-from typing import Optional, Union
-from src.retrieving.retriever import HybridRetriever
 
 @dataclass
 class PipelineComponents:
@@ -34,13 +31,12 @@ def _init_components() -> PipelineComponents:
     distance_metric = "cosine"
     
     try:
-        collection_name = os.environ.get("CHROMA_COLLECTION", "unified_corpus_v2")
-        db_manager = ChromaDBManager(
-            collection_name=collection_name, distance_metric=distance_metric
+        db_manager = QdrantManager(
+            distance_metric=distance_metric
         )
-        logger.info("ChromaDB initialized successfully as primary vector store.")
+        logger.info("QdrantManager initialized successfully as primary vector store.")
     except Exception as e:
-        logger.critical(f"ChromaDB failed to initialize: {e}")
+        logger.critical(f"Qdrant failed to initialize: {e}")
         raise e
         
     retriever = DenseRetriever(vector_store=db_manager)

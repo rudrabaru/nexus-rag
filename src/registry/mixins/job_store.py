@@ -23,7 +23,7 @@ class JobStoreMixin:
                 INSERT INTO documents (doc_id, source, format, status, visibility, tenant_id, ingested_at, updated_at, chunk_ids, asset_ids, stats, content_hash)
                 VALUES (?, ?, ?, 'pending', 'private', ?, ?, ?, '[]', '[]', '{}', ?)
                 ON CONFLICT(doc_id) DO UPDATE SET
-                status = 'pending',
+                status = CASE WHEN documents.status = 'complete' THEN 'complete' ELSE 'pending' END,
                 updated_at = excluded.updated_at
             """,
                 (doc_id, source, format, tenant_id, now, now, content_hash),

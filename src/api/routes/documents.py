@@ -7,7 +7,6 @@ import asyncio
 
 from typing import Optional
 from fastapi import Depends, Security
-from src.retrieving.vector_store import ChromaDBManager
 from src.ingestion.asset_store import LocalAssetStore
 from src.registry.database import DocumentRegistry
 from src.api.dependencies import get_registry, get_retriever, get_auth_store
@@ -25,6 +24,7 @@ class DocumentResponse(BaseModel):
     status: str
     created_at: str
     chunks: int
+    error: Optional[str] = None
     stats: dict = {}
 
 
@@ -72,6 +72,7 @@ async def list_documents(
             status=d["status"],
             created_at=d["ingested_at"],
             chunks=len(d["chunk_ids"]),
+            error=d.get("error"),
             stats=d.get("stats", {}) or {},
         )
         for d in docs
@@ -118,7 +119,7 @@ async def delete_document(
         if chunk_ids:
             db_manager = getattr(retriever, "vector_store", getattr(getattr(retriever, "dense_retriever", None), "vector_store", None))
             if db_manager:
-                await asyncio.to_thread(db_manager.collection.delete, ids=chunk_ids)
+                await asyncio.to_thread(db_manager.delete_chunks, chunk_ids=chunk_ids)
 
         # 2. Delete Assets
         asset_store = LocalAssetStore()

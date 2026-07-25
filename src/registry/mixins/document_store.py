@@ -104,7 +104,7 @@ class DocumentStoreMixin:
             return docs
 
     def delete_document(self, doc_id: str) -> List[str]:
-        """Deletes a document and returns its chunk_ids so the caller can remove them from ChromaDB."""
+        """Deletes a document and returns its chunk_ids so the caller can remove them from Qdrant."""
         doc = self.get_document(doc_id)
         if not doc:
             return []

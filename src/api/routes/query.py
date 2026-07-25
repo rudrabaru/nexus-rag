@@ -1,4 +1,3 @@
-import json
 import logging
 import datetime
 from typing import Optional, Any
@@ -8,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from src.api.auth import get_current_tenant, get_real_ip
 from slowapi import Limiter
 
-from src.api.models.query_models import QueryRequest, QueryResponse, SourceDocument
+from src.api.models.query_models import QueryRequest, QueryResponse
 from src.api.dependencies import get_generator, get_retriever, get_reranker, get_evaluator, get_rewriter, get_pipeline_logger
 from src.generating.generator import RAGGenerator
 from src.retrieving.retriever import DenseRetriever, OptionalReranker
@@ -91,10 +90,19 @@ async def query_rag(
                 logger.error(f"Failed to log query: {e}")
 
         if body.evaluate_faithfulness:
-            background_tasks.add_task(QueryService.run_faithfulness_eval_async, evaluator, result, log_id, metrics_store, pipeline_logger)
+            result = await asyncio.to_thread(evaluator.evaluate, result)
+            if log_id and metrics_store:
+                try:
+                    metrics_store.update_faithfulness(log_id, result.faithfulness_score, result.faithfulness_reasoning)
+                except Exception as e:
+                    logger.error(f"Failed to update faithfulness score: {e}")
+            if pipeline_logger:
+                pipeline_logger.log_event("faithfulness_complete", query_text=result.query, score=result.faithfulness_score)
 
         return QueryResponse(
-            answer=result.answer, sources=sources, faithfulness_score=None, faithfulness_reasoning=None,
+            answer=result.answer, sources=sources, 
+            faithfulness_score=result.faithfulness_score if body.evaluate_faithfulness else None, 
+            faithfulness_reasoning=result.faithfulness_reasoning if body.evaluate_faithfulness else None,
             latency_ms=result.total_latency_ms, latency_breakdown={"retrieval": result.retrieval_latency_ms, "generation": result.generation_latency_ms}
         )
     except Exception as e:

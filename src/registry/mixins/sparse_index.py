@@ -34,7 +34,7 @@ class SparseIndexMixin:
         def run_query(conn, q):
             results = []
             cursor = conn.execute(
-                f"SELECT chunk_id, source_document, chunk_text, bm25(fts_chunks) as score FROM fts_chunks WHERE fts_chunks MATCH ? AND tenant_id = ? ORDER BY score ASC LIMIT ?",
+                "SELECT chunk_id, source_document, chunk_text, bm25(fts_chunks) as score FROM fts_chunks WHERE fts_chunks MATCH ? AND tenant_id = ? ORDER BY score ASC LIMIT ?",
                 (q, tenant_id, limit)
             )
             for row in cursor.fetchall():

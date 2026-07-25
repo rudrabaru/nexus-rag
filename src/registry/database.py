@@ -3,7 +3,6 @@ import logging
 from pathlib import Path
 import threading
 from contextlib import contextmanager
-from typing import Optional
 
 from .mixins.document_store import DocumentStoreMixin
 from .mixins.job_store import JobStoreMixin
@@ -21,7 +20,7 @@ class DocumentRegistry(DocumentStoreMixin, JobStoreMixin, SparseIndexMixin):
     def __init__(self, db_path: str = None):
         import os
         if db_path is None:
-            default_path = "/data/.chroma_db/registry.db" if os.environ.get("SPACE_ID") else ".chroma_db/registry.db"
+            default_path = "/data/registry.db" if os.environ.get("SPACE_ID") else "data/registry.db"
             db_path = os.environ.get("REGISTRY_DB_PATH", default_path)
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -160,3 +159,75 @@ class DocumentRegistry(DocumentStoreMixin, JobStoreMixin, SparseIndexMixin):
                 (tokens, tenant_id)
             )
             conn.commit()
+
+    def rebuild_registry_from_qdrant(self, qdrant_manager):
+        """
+        Reconstructs the SQLite registry from Qdrant payloads.
+        Useful for Render Free Tier where SQLite is wiped on restart but Qdrant persists.
+        """
+        import datetime
+        from collections import defaultdict
+        
+        points = []
+        offset = None
+        while True:
+            response, offset = qdrant_manager.client.scroll(
+                collection_name=qdrant_manager.collection_name,
+                limit=100,
+                with_payload=True,
+                with_vectors=False,
+                offset=offset
+            )
+            points.extend(response)
+            if offset is None:
+                break
+                
+        if not points:
+            return 0
+            
+        doc_chunks = defaultdict(list)
+        doc_tenants = {}
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        
+        with self._get_conn() as conn:
+            # Clear existing FTS to avoid duplicates on partial wipe
+            conn.execute("DELETE FROM fts_chunks")
+            
+            for point in points:
+                payload = point.payload or {}
+                tenant_id = payload.get("tenant_id", "unknown")
+                chunk_id = payload.get("chunk_id")
+                source_document = payload.get("source_document")
+                chunk_text = payload.get("document_text", "")
+                
+                if not chunk_id or not source_document:
+                    continue
+                    
+                doc_chunks[source_document].append(chunk_id)
+                doc_tenants[source_document] = tenant_id
+                
+                try:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO fts_chunks (chunk_id, tenant_id, source_document, chunk_text) VALUES (?, ?, ?, ?)",
+                        (chunk_id, tenant_id, source_document, chunk_text)
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to insert chunk {chunk_id} into fts: {e}")
+                    
+            for source_document, chunk_ids in doc_chunks.items():
+                tenant_id = doc_tenants.get(source_document, "unknown")
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO documents (
+                        doc_id, source, format, status, visibility, 
+                        tenant_id, ingested_at, updated_at, chunk_ids
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        source_document, source_document, "reconstructed", "complete", "private",
+                        tenant_id, now, now, ",".join(chunk_ids)
+                    )
+                )
+            conn.commit()
+            
+        return len(points)

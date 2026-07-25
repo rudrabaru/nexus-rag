@@ -22,14 +22,13 @@ sys.path.append(
 )
 
 from src.api.startup import lifespan
-from src.api.routes import query, ingest, documents
+from src.api.routes import query, ingest, documents, admin
 from src.api.dependencies import get_auth_store
 from src.registry.auth_store import AuthStore
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from src.api.routes.ingest import limiter as ingest_limiter
-from src.api.routes.query import limiter as query_limiter
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -53,6 +52,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # Routes
 app.include_router(query.router)
 app.include_router(ingest.router)
+app.include_router(admin.router)
 app.include_router(
     documents.router,
     prefix="/documents",
