@@ -58,7 +58,7 @@ logs.txt
 evaluations/
 test_results_*.json
 uv.lock
-observability/
+/observability/
 
 # Testing
 .pytest_cache/
