@@ -1,6 +1,7 @@
 import logging
 import time
 import random
+import asyncio
 from src.generating.models import GenerationConfig
 from src.generating.providers.google_provider import GoogleProvider
 from src.generating.providers.groq_provider import GroqProvider
@@ -45,15 +46,11 @@ class LLMClient:
                         "429", "503", "ResourceExhausted", "RESOURCE_EXHAUSTED", "UNAVAILABLE", "Too Many Requests",
                     ]
                 )
-                
+
                 if is_rate_limit:
                     if attempt < max_retries:
                         sleep_time = (2 ** attempt) + random.uniform(0, 1)
                         logger.warning(f"Rate limit hit ({e}). Retrying in {sleep_time:.2f}s (Attempt {attempt + 1}/{max_retries})...")
-                        # NOTE: This time.sleep() runs in a thread pool via asyncio.to_thread() in generator.py.
-                        # It will not hard-block the async event loop, but it will consume a worker thread slot 
-                        # for the duration of the sleep. On constrained environments (e.g. Render Free Tier),
-                        # this may reduce concurrent throughput during rate limits.
                         time.sleep(sleep_time)
                         continue
                     elif not is_fallback and self._fallback_client:
@@ -61,13 +58,12 @@ class LLMClient:
                             f"Primary LLM failed after retries ({e}). Falling back to {self.config.fallback_config.get('provider')}..."
                         )
                         return self._fallback_client.call_llm(prompt, is_fallback=True, response_schema=response_schema)
-                
+
                 error_msg = f"[Generation failed: {type(e).__name__}: {e}]"
                 logger.error(error_msg)
                 return error_msg, error_msg, 0, 0
 
     async def call_llm_stream(self, prompt: str, is_fallback: bool = False, max_retries: int = 3):
-        import asyncio
         for attempt in range(max_retries + 1):
             yielded_any = False
             try:

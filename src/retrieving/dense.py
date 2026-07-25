@@ -34,30 +34,48 @@ class DenseRetriever:
         if not self.jina_api_key:
             raise ValueError("JINA_API_KEY not set for DenseRetriever.")
             
-        import asyncio
-        embedding_tokens = 0
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            max_retries = 3
-            for attempt in range(max_retries):
-                try:
-                    response = await client.post(
-                        "https://api.jina.ai/v1/embeddings",
-                        headers={"Authorization": f"Bearer {self.jina_api_key}"},
-                        json={
-                            "model": self.config.model_name,
-                            "input": [query],
-                            "task": "retrieval.query"
-                        }
-                    )
-                    response.raise_for_status()
-                    resp_json = response.json()
-                    query_embedding = resp_json["data"][0]["embedding"]
-                    embedding_tokens = resp_json.get("usage", {}).get("total_tokens", 0)
-                    break
-                except Exception as e:
-                    if attempt == max_retries - 1:
-                        raise e
-                    await asyncio.sleep(2 ** attempt)
+        import hashlib
+        cache_key = hashlib.md5(query.lower().strip().encode()).hexdigest()
+        
+        if not hasattr(self, "_embedding_cache"):
+            self._embedding_cache = {}
+            self._MAX_CACHE_SIZE = 500
+
+        if cache_key in self._embedding_cache:
+            query_embedding = self._embedding_cache[cache_key]
+            embedding_tokens = 0
+            logger.info("Using cached embedding for query.")
+        else:
+            import asyncio
+            embedding_tokens = 0
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                max_retries = 3
+                for attempt in range(max_retries):
+                    try:
+                        response = await client.post(
+                            "https://api.jina.ai/v1/embeddings",
+                            headers={"Authorization": f"Bearer {self.jina_api_key}"},
+                            json={
+                                "model": self.config.model_name,
+                                "input": [query],
+                                "task": "retrieval.query"
+                            }
+                        )
+                        response.raise_for_status()
+                        resp_json = response.json()
+                        query_embedding = resp_json["data"][0]["embedding"]
+                        embedding_tokens = resp_json.get("usage", {}).get("total_tokens", 0)
+                        
+                        # Add to cache with FIFO eviction
+                        if len(self._embedding_cache) >= self._MAX_CACHE_SIZE:
+                            self._embedding_cache.pop(next(iter(self._embedding_cache)))
+                        self._embedding_cache[cache_key] = query_embedding
+                        
+                        break
+                    except Exception as e:
+                        if attempt == max_retries - 1:
+                            raise e
+                        await asyncio.sleep(2 ** attempt)
             
         embed_latency = (time.time() - embed_start) * 1000
 

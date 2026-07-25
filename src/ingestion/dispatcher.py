@@ -47,7 +47,7 @@ class IngestionDispatcher:
                 result = await self.universal_adapter.ingest(source, **kwargs)
             else:
                 result = await self.web_adapter.ingest(source, **kwargs)
-        elif any(source_lower.endswith(ext) for ext in [".pdf", ".docx", ".rst", ".md", ".txt", ".csv", ".xlsx", ".pptx"]):
+        elif any(source_lower.endswith(ext) for ext in [".pdf", ".docx", ".md", ".txt"]):
             ext = source_lower.rsplit(".", 1)[-1]
             logger.info(f"DISPATCHER | File upload routed to UniversalAdapter | ext={ext!r} source={source!r}")
             result = await self.universal_adapter.ingest(source, **kwargs)

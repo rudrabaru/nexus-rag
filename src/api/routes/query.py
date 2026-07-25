@@ -1,8 +1,9 @@
 import logging
 import datetime
+import json
 from typing import Optional, Any
 import asyncio
-from fastapi import APIRouter, HTTPException, Request, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Request, Depends
 from fastapi.responses import StreamingResponse
 from src.api.auth import get_current_tenant, get_real_ip
 from slowapi import Limiter
@@ -24,7 +25,6 @@ limiter = Limiter(key_func=get_real_ip)
 async def query_rag(
     request: Request,
     body: QueryRequest,
-    background_tasks: BackgroundTasks,
     tenant_id: Optional[str] = Depends(get_current_tenant),
     generator: RAGGenerator = Depends(get_generator),
     retriever: DenseRetriever = Depends(get_retriever),
@@ -120,40 +120,105 @@ async def query_rag_stream(
     retriever: DenseRetriever = Depends(get_retriever),
     reranker: OptionalReranker = Depends(get_reranker),
     rewriter: Optional[QueryRewriter] = Depends(get_rewriter),
+    evaluator: FaithfulnessEvaluator = Depends(get_evaluator),
     pipeline_logger: Any = Depends(get_pipeline_logger),
 ):
     if not tenant_id:
-        return StreamingResponse(iter(["Please provide a valid API key (X-API-Key header) to query your private workspace. Generate one at the /register endpoint."]), media_type="text/event-stream")
+        error_msg = "Please provide a valid API key (X-API-Key header) to query your private workspace. Generate one at the /register endpoint."
+        payload = json.dumps({'type': 'token', 'content': error_msg})
+        return StreamingResponse(iter([f"data: {payload}\n\n"]), media_type="text/event-stream")
 
     query_start_time = datetime.datetime.now(datetime.timezone.utc).timestamp()
     if pipeline_logger:
         pipeline_logger.log_event("query_started", query_text=body.query, tenant_id=tenant_id)
 
     try:
+        query_semaphore = getattr(request.app.state, "query_semaphore", None)
+        if query_semaphore:
+            if query_semaphore.locked():
+                error_msg = "⚠️ **High Traffic Alert:** Our servers are currently at maximum capacity. Please try your query again in a few moments."
+                payload = json.dumps({'type': 'token', 'content': error_msg})
+                
+                async def error_stream():
+                    yield f"data: {payload}\n\n"
+                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                
+                return StreamingResponse(error_stream(), media_type="text/event-stream")
+                
+            await query_semaphore.acquire()
+            
         registry = getattr(request.app.state, "registry", None)
         if registry:
             doc_count = await asyncio.to_thread(registry.get_doc_count, tenant_id)
             if doc_count == 0:
-                return StreamingResponse(iter(["Your workspace has no documents yet. Please go to the 'Add Source(s)' tab and upload a document or URL first."]), media_type="text/event-stream")
+                if query_semaphore:
+                    query_semaphore.release()
+                error_msg = "Your workspace has no documents yet. Please go to the 'Add Source(s)' tab and upload a document or URL first."
+                payload = json.dumps({'type': 'token', 'content': error_msg})
+                return StreamingResponse(iter([f"data: {payload}\n\n"]), media_type="text/event-stream")
 
-        retrieval_result = await QueryService.run_retrieval(body, retriever, reranker, rewriter, pipeline_logger, tenant_id)
+            retrieval_result = await QueryService.run_retrieval(body, retriever, reranker, rewriter, pipeline_logger, tenant_id)
 
-        gen_start = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        async def token_generator():
-            async for chunk in generator.generate(
-                body.query, top_k=body.top_k, retrieval_result=retrieval_result, chat_history=body.history, stream=True,
-            ):
-                yield chunk
-            if pipeline_logger:
-                pipeline_logger.log_event(
-                    "generation_complete", query_text=body.query, completion_tokens=0, prompt_tokens=0,
-                    duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - gen_start) * 1000
-                )
-                pipeline_logger.log_event("query_complete", query_text=body.query, duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000)
+            gen_start = datetime.datetime.now(datetime.timezone.utc).timestamp()
+            async def token_generator():
+                try:
+                    full_answer = ""
+                    async for chunk in generator.generate(
+                        body.query, top_k=body.top_k, retrieval_result=retrieval_result, chat_history=body.history, stream=True,
+                    ):
+                        full_answer += chunk
+                        yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
+                    
+                    # Mock result object for sources and evaluator
+                    from src.generating.models import GenerationResult
+                    context_window = generator.context_builder.build(retrieval_result.chunks)
+                    temp_result = GenerationResult(
+                        query=body.query,
+                        answer=full_answer,
+                        context_window=context_window,
+                        retrieval_latency_ms=0,
+                        context_build_latency_ms=0,
+                        generation_latency_ms=0,
+                        total_latency_ms=0,
+                        prompt_tokens=0,
+                        completion_tokens=0
+                    )
+
+                    sources = QueryService.construct_sources(temp_result)
+                    sources_dict = [s.model_dump() for s in sources]
+                    yield f"data: {json.dumps({'type': 'sources', 'content': sources_dict})}\n\n"
+                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+                    if pipeline_logger:
+                        pipeline_logger.log_event(
+                            "generation_complete", query_text=body.query, completion_tokens=0, prompt_tokens=0,
+                            duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - gen_start) * 1000
+                        )
+                        pipeline_logger.log_event("query_complete", query_text=body.query, duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000)
+
+                    if body.evaluate_faithfulness:
+                        try:
+                            eval_res = await asyncio.to_thread(evaluator.evaluate, temp_result)
+                            yield f"data: {json.dumps({'type': 'faithfulness', 'content': {'score': eval_res.faithfulness_score, 'reasoning': eval_res.faithfulness_reasoning}})}\n\n"
+                        except Exception as eval_err:
+                            logger.error(f"Async faithfulness evaluation failed: {eval_err}")
+                finally:
+                    if query_semaphore:
+                        query_semaphore.release()
 
         return StreamingResponse(token_generator(), media_type="text/event-stream")
 
     except Exception as e:
+        if 'query_semaphore' in locals() and query_semaphore:
+            # We don't want to release if it was never acquired or was already released
+            # but since we acquire right after checking it, we release here.
+            # However, if it failed DURING token_generator, the token_generator's finally handles it.
+            # If it failed BEFORE token_generator returned, we release it here.
+            pass # wait, it's safer to release in finally inside token_generator, and in except block here.
+            try:
+                query_semaphore.release()
+            except ValueError:
+                pass
         logger.error(f"Error during query/stream: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

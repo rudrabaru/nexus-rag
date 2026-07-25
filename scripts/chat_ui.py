@@ -93,6 +93,7 @@ with st.sidebar:
     st.subheader("Query Parameters")
     top_k = st.slider("Sources (Top K)", min_value=1, max_value=10, value=5)
     use_reranker = st.toggle("Use Cross-Encoder Reranker", value=False)
+    stream_response = st.toggle("Stream LLM Response", value=True)
     
     st.markdown("---")
     if st.button("Clear Chat History", use_container_width=True):
@@ -102,7 +103,7 @@ with st.sidebar:
 tab_query, tab_dashboard, tab_docs = st.tabs(["💬 Query Assistant", "📊 Pipeline Dashboard", "📄 Document Management"])
 
 with tab_query:
-    render_chat_tab(API_BASE_URL, api_headers, top_k, use_reranker)
+    render_chat_tab(API_BASE_URL, api_headers, top_k, use_reranker, stream_response)
 
 with tab_dashboard:
     render_dashboard_tab(API_BASE_URL, api_headers)

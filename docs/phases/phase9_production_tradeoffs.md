@@ -30,3 +30,8 @@ This document captures the explicit architectural tradeoffs and design decisions
 ## 6. Rate Limiting Strategy
 **Decision:** Implement application-layer rate limiting that respects reverse-proxy headers (like `X-Forwarded-For`).
 **Rationale:** In a production cloud environment, the application is almost always deployed behind a load balancer or ingress controller. Without reading the forwarded IP headers, the rate limiter would mistakenly throttle all traffic as coming from the single load balancer IP.
+
+## 7. Render Free Tier & Ephemeral File System (The "15-Minute Wipe" Issue)
+**Decision:** Deploying the application on Render's Free Tier using a local SQLite database and remote Qdrant database, with an auto-rebuild script on startup.
+**Rationale:** This allows the entire infrastructure to be hosted for $0/month. The vector data is persisted safely in Qdrant. On startup, `startup.py` downloads the Qdrant payloads and dynamically rebuilds the SQLite FTS index and document registry.
+**Tradeoff:** Render's Free Tier spins down after 15 minutes of inactivity and completely wipes the local filesystem. While the documents and chunks are successfully rebuilt from Qdrant, the `api_keys` table (which maps the raw API key to the hashed `tenant_id`) is permanently lost. This results in users receiving `403 Forbidden` errors if they attempt to use their original API keys after the server restarts. This is a deliberate tradeoff for free hosting; production deployments must mount a Persistent Disk ($0.25/month) or migrate to a managed relational database to permanently store API keys.

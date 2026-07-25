@@ -48,9 +48,14 @@ async def prepare_ingestion(
         source_path = url
         format_type = "web"
     elif file:
-        MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-        temp_dir = tempfile.mkdtemp()
         safe_filename = os.path.basename(file.filename)
+        allowed_extensions = {".pdf", ".docx", ".txt", ".md"}
+        ext = os.path.splitext(safe_filename)[1].lower()
+        if ext not in allowed_extensions:
+            raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}. Allowed types are: {', '.join(allowed_extensions)}")
+
+        MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+        temp_dir = tempfile.mkdtemp()
         source_path = os.path.join(temp_dir, safe_filename)
         hasher = hashlib.sha256()
         
@@ -159,7 +164,7 @@ async def _process_ingestion(
         # ── STAGE 4: Pipeline (chunk → embed → store) ─────────────────────────
         db_manager = getattr(retriever, "vector_store", getattr(getattr(retriever, "dense_retriever", None), "vector_store", None))
         pipeline = IncrementalIngestionPipeline(embedding_generator=embedding_generator, db_manager=db_manager)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         logger.info(
             f"{tag} STAGE 4 | Starting pipeline: "

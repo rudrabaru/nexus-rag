@@ -1,6 +1,7 @@
 import streamlit as st
 import requests
 import pandas as pd
+import time
 
 def render_documents_tab(API_BASE_URL, api_headers):
     st.title("Document Management")
@@ -14,13 +15,18 @@ def render_documents_tab(API_BASE_URL, api_headers):
         ingest_files = st.file_uploader("Or upload files", type=["pdf", "docx", "md", "txt"], accept_multiple_files=True)
     
     if st.button("Process & Index", type="primary", use_container_width=True):
-        if not ingest_url and not ingest_files:
+        if ingest_files and len(ingest_files) > 5:
+            st.error("Upload limit exceeded: You can only upload a maximum of 5 files at a time.")
+        elif ingest_files and any(f.size > 20 * 1024 * 1024 for f in ingest_files):
+            st.error("File size limit exceeded: Maximum file size is 20MB per file.")
+        elif not ingest_url and not ingest_files:
             st.warning("Please provide a URL or upload a file.")
         else:
             with st.spinner("Queuing ingestion jobs..."):
                 try:
                     data = {"extract_visuals": extract_visuals}
                     success = True
+                    job_ids = []
                     if ingest_url:
                         url_data = data.copy()
                         url_data["url"] = ingest_url
@@ -28,6 +34,8 @@ def render_documents_tab(API_BASE_URL, api_headers):
                         if res.status_code != 200:
                             success = False
                             st.error(f"Ingest Error (URL): {res.json().get('detail', res.text)}")
+                        else:
+                            job_ids.append((ingest_url, res.json().get("job_id")))
                     if ingest_files:
                         for f in ingest_files:
                             files = {"file": (f.name, f.getvalue(), f.type)}
@@ -35,8 +43,29 @@ def render_documents_tab(API_BASE_URL, api_headers):
                             if res.status_code != 200:
                                 success = False
                                 st.error(f"Ingest Error ({f.name}): {res.json().get('detail', res.text)}")
+                            else:
+                                job_ids.append((f.name, res.json().get("job_id")))
                     if success:
                         st.success("Jobs queued successfully.")
+                        for src_name, jid in job_ids:
+                            if not jid: continue
+                            prog_ph = st.empty()
+                            while True:
+                                time.sleep(2)
+                                s_res = requests.get(f"{API_BASE_URL}/ingest/{jid}", headers=api_headers, timeout=10)
+                                if s_res.status_code == 200:
+                                    j_data = s_res.json()
+                                    pct = j_data.get("progress_pct", 0)
+                                    status = j_data.get("status", "processing")
+                                    prog_ph.progress(pct / 100, text=f"[{src_name}] {status.upper()} — {pct}%")
+                                    if status in ("complete", "failed", "partial_success"):
+                                        if status == "complete":
+                                            prog_ph.success(f"✅ [{src_name}] Indexed {j_data.get('chunk_count', '?')} chunks.")
+                                        elif status == "failed":
+                                            prog_ph.error(f"❌ [{src_name}] {j_data.get('error', 'Unknown error')}")
+                                        break
+                                else:
+                                    break
                 except Exception as e:
                     st.error(f"Ingestion error: {str(e)}")
                     

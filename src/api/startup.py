@@ -17,7 +17,7 @@ async def lifespan(app: FastAPI):
 
     async def _load_models_async():
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             components = await loop.run_in_executor(None, _init_components)
 
             app.state.retriever = components.retriever
@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
             ingestion_concurrency = int(os.environ.get("INGESTION_CONCURRENCY", "3"))
             app.state.ingestion_semaphore = asyncio.Semaphore(ingestion_concurrency)
             app.state.embed_semaphore = asyncio.Semaphore(ingestion_concurrency)
+            app.state.query_semaphore = asyncio.Semaphore(10)
 
             if hasattr(app.state, 'embedding_generator') and app.state.embedding_generator:
                 app.state.embedding_generator.embed_semaphore = app.state.embed_semaphore
@@ -77,9 +78,14 @@ async def lifespan(app: FastAPI):
                         f"CRITICAL STATE DIVERGENCE: Qdrant has {qdrant_count} chunks but Registry has {registry_chunk_count} chunks. "
                         f"In a stateless environment like Render, this is expected if the ephemeral SQLite DB is wiped but Qdrant persists."
                     )
-                    # Note: We skip the auto-healing deletion here to prevent the stateless backend 
-                    # from deleting persistent Qdrant vectors just because its local SQLite was wiped.
-
+                    
+                    if registry_chunk_count == 0 and qdrant_count > 0:
+                        logger.info("Auto-rebuilding local SQLite registry from Qdrant...")
+                        try:
+                            rebuilt_count = await loop.run_in_executor(None, registry.rebuild_registry_from_qdrant, vector_store)
+                            logger.info(f"Successfully auto-rebuilt {rebuilt_count} chunks into local SQLite registry.")
+                        except Exception as e:
+                            logger.error(f"Auto-rebuild failed: {e}")
             except Exception as e:
                 logger.error(f"Failed to perform startup consistency check: {e}")
 

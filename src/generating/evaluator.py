@@ -57,10 +57,10 @@ class FaithfulnessEvaluator:
 
         original_temp = self.config.temperature
         self.config.temperature = 0.0
-
-        answer_text, _, _, _ = self.llm_client.call_llm(prompt)
-
-        self.config.temperature = original_temp
+        try:
+            answer_text, _, _, _ = self.llm_client.call_llm(prompt)
+        finally:
+            self.config.temperature = original_temp
 
         try:
             clean_text = answer_text.strip()

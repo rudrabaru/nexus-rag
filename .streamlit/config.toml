@@ -4,3 +4,4 @@
 # Without this, the file upload endpoint returns 403 Forbidden.
 enableXsrfProtection = false
 enableCORS = false
+maxUploadSize = 20

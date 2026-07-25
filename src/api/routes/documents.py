@@ -1,12 +1,10 @@
 import os
 import logging
-from fastapi import APIRouter, Request, HTTPException
+from fastapi import APIRouter, Request, HTTPException, Depends, Security
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 import asyncio
 
-from typing import Optional
-from fastapi import Depends, Security
 from src.ingestion.asset_store import LocalAssetStore
 from src.registry.database import DocumentRegistry
 from src.api.dependencies import get_registry, get_retriever, get_auth_store
@@ -114,7 +112,6 @@ async def delete_document(
         raise HTTPException(status_code=403, detail="You do not own this document.")
 
     try:
-        # Fix Bug 3: Use explicit chunk IDs
         chunk_ids = doc.get("chunk_ids", [])
         if chunk_ids:
             db_manager = getattr(retriever, "vector_store", getattr(getattr(retriever, "dense_retriever", None), "vector_store", None))

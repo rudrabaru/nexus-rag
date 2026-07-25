@@ -79,7 +79,13 @@ def _init_components() -> PipelineComponents:
     )
     generator = RAGGenerator(retriever=retriever, config=config)
     evaluator = FaithfulnessEvaluator(config=config)
-    rewriter = QueryRewriter(config=config)
+    
+    rewriter_config = GenerationConfig(
+        provider="groq",
+        model_name="llama-3.3-70b-versatile",
+        temperature=0.1
+    )
+    rewriter = QueryRewriter(config=rewriter_config)
     
     embed_config = EmbeddingConfig()
     embedding_generator = EmbeddingGenerator(embed_config)

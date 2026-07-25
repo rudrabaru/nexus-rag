@@ -86,6 +86,12 @@ class RAGGenerator:
                 f"(all {excluded_count} chunks scored below {self.config.min_similarity_score}). "
                 f"This may indicate a document quality, embedding, or retrieval configuration issue."
             )
+            
+            if stream:
+                async def _diagnostic_stream():
+                    yield diagnostic
+                return _diagnostic_stream()
+                
             return GenerationResult(
                 query=query,
                 answer=diagnostic,
