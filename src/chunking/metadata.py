@@ -8,11 +8,6 @@ from pydantic import BaseModel, Field
 
 
 class ChunkMetadata(BaseModel):
-    """
-    Represents a single chunk of content with full metadata for source attribution
-    and debugging.
-    """
-
     chunk_id: str = Field(..., description="Unique chunk identifier")
     source_url: str = Field(..., description="URL of original document")
     source_document: str = Field(..., description="Source document filename")
@@ -77,6 +72,7 @@ class ChunkingConfig(BaseModel):
 
     chunk_size: int = Field(600, description="Target chunk size in tokens")
     overlap: int = Field(125, description="Overlap between chunks in tokens")
+    embedding_hard_limit: int = Field(2000, description="Maximum tokens allowed before hard truncation to prevent embedding API failures")
     preserve_markdown: bool = Field(True, description="Preserve markdown structure")
     min_chunk_tokens: int = Field(150, description="Minimum tokens per chunk")
     max_chunk_tokens: int = Field(800, description="Maximum tokens per chunk")
@@ -86,21 +82,3 @@ class ChunkingConfig(BaseModel):
     class Config:
         validate_assignment = True
 
-
-class ChunkingReport(BaseModel):
-    """
-    Summary statistics for chunking operation.
-    """
-
-    total_documents: int = Field(..., description="Documents processed")
-    total_chunks: int = Field(..., description="Chunks generated")
-    total_tokens: int = Field(..., description="Sum of all chunk tokens")
-    avg_tokens_per_chunk: float = Field(..., description="Average tokens per chunk")
-    min_tokens_per_chunk: int = Field(..., description="Minimum tokens in chunk")
-    max_tokens_per_chunk: int = Field(..., description="Maximum tokens in chunk")
-    coverage_percent: float = Field(..., description="Content coverage %")
-    processing_time_seconds: float = Field(..., description="Processing duration")
-    chunks_in_target_range: int = Field(0, description="Chunks in target token range")
-
-    class Config:
-        json_encoders = {float: lambda v: round(v, 2)}

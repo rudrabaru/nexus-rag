@@ -23,7 +23,7 @@ The system ingests heterogeneous data formats and transforms them into an intell
 - **Asynchronous Processing:** Features background job tracking and semaphore-based concurrency control to ensure stable ingestion without resource exhaustion.
 
 ### Semantic Normalization & Chunking
-- **Boilerplate Detection:** Uses statistical corpus frequency analysis to automatically detect and strip navigation menus, footers, and noise.
+- **Boilerplate Detection:** Uses statistical corpus frequency analysis to automatically detect and strip navigation menus, footers, and noise. For single-document ingestions, gracefully falls back to structural signals (link density, word count, edge position) when corpus statistics aren't available.
 - **Hierarchical Chunking:** Preserves semantic meaning by chunking documents based on their underlying structural hierarchy (headings, paragraphs) rather than arbitrary token counts. 
 - **Block Atomicity:** Enforces strict contiguous boundaries for code blocks, tables, and images, guaranteeing that complex structures are never split during processing.
 

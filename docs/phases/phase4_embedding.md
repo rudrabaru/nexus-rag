@@ -6,11 +6,11 @@ The embedding phase transforms textual chunks into mathematical representations,
 ## Core Implementation Logic
 
 ### Dense Embeddings
-The system delegates all dense vector generation to a highly optimized external embedding API.
+The system delegates all dense vector generation to a highly optimized external embedding API (specifically, Jina's `jina-embeddings-v3`).
 
-- **Asymmetric Encoding:** The system uses task-aware encoding. Chunks processed during ingestion are encoded with a "passage" task type, optimizing them to be retrieved. User queries are encoded with a "query" task type, optimizing them for searching. This asymmetric approach is critical for high-fidelity late-interaction models.
-- **Batching & Concurrency:** Chunks are grouped into large batches and sent in parallel to the external API to maximize throughput.
-- **Resiliency:** The system employs exponential backoff and retry logic to gracefully absorb transient network failures or API rate limits.
+- **Asymmetric Encoding:** The system uses task-aware encoding. Chunks processed during ingestion are encoded with the `retrieval.passage` task type, optimizing them to be retrieved. User queries are encoded with the `retrieval.query` task type, optimizing them for searching. This asymmetric approach is critical for high-fidelity late-interaction models.
+- **Batching & Concurrency:** Chunks are grouped into specific batches of 50 and sent in parallel to the Jina API to maximize throughput without exceeding payload limits.
+- **Resiliency:** The system employs exponential backoff and retry logic (up to 3 retries) to gracefully absorb transient network failures or API rate limits.
 - **Zero RAM Footprint:** No local embedding model is loaded into memory. All dense embedding computation is remote. This is a deliberate architectural tradeoff that frees significant RAM for the vector database, headless browser, and the web server, allowing the entire system to run comfortably on resource-constrained micro-instances.
 
 ### Sparse Indexing

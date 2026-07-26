@@ -41,13 +41,13 @@ class EmbeddingGenerator:
     async def embed_batch(self, texts: list[str], task_type: str = "retrieval.passage") -> tuple[list[list[float]], list[int]]:
         all_embeddings = []
         failed_indices = []
-        batch_size = 100
+        batch_size = self.config.batch_size
         
         async with httpx.AsyncClient(timeout=60.0) as client:
             for i in range(0, len(texts), batch_size):
                 batch = texts[i:i + batch_size]
                 
-                max_retries = 3
+                max_retries = self.config.max_retries
                 for attempt in range(max_retries):
                     try:
                         if self.embed_semaphore:

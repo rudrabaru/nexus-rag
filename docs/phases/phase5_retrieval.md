@@ -26,10 +26,10 @@ The semantic and keyword results are completely different mathematically and can
 RRF looks at the *rank order* of the results rather than their raw scores. A document that appears high in both the semantic list and the keyword list will be boosted to the absolute top of the final fused list. This mathematical approach guarantees the best of both worlds without requiring brittle, manual score weighting.
 
 ### Stage 4: Optional Cross-Encoder Reranking
-If configured, the top results from the fused list are sent to a specialized Cross-Encoder Reranking API. 
+If configured, the top results from the fused list are sent to a specialized Cross-Encoder Reranking API (e.g., Jina Reranker). 
 Unlike standard embeddings that look at the query and the document in isolation, a cross-encoder reads the query and the document *together* at the same time, producing a highly calibrated relevance score that accounts for their joint context. 
 
-This stage replaces the RRF scores with the reranker's precise relevance scores. If the reranker is disabled, the system gracefully falls back to the RRF ranking.
+This stage replaces the RRF scores with the reranker's precise relevance scores. If the reranker is disabled via environment configuration, the system gracefully falls back to the RRF ranking.
 
 ### Score Calibration
 Relevance scores are treated as **ranking signals, not absolute cutoffs**. The system defaults to maximizing recall by allowing all retrieved top candidates through, rather than applying an arbitrary minimum score cutoff that might accidentally filter out the correct answer.

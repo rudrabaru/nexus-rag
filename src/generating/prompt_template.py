@@ -1,20 +1,3 @@
-"""
-Prompt template for the RAG generation phase.
-
-Why a dedicated module:
-    Prompt engineering is an independent concern. Changes to how we instruct the LLM
-    (tone, citation style, fallback behavior) should not require touching retrieval,
-    context assembly, or the LLM API wrapper. This module owns exactly one thing:
-    constructing the text that gets sent to the model.
-
-Design principles:
-    - Corpus-agnostic: no domain-specific instructions.
-    - Grounding-first: explicitly tells the LLM to use ONLY the provided context.
-    - Uncertainty-aware: tells the LLM to say "I don't know" when context is insufficient,
-      rather than hallucinating.
-    - Citation-aware: tells the LLM to reference [Source: ...] headers in its answer.
-"""
-
 from .models import GenerationConfig
 
 # System-level instruction that frames the LLM's role and constraints.

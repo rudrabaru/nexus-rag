@@ -65,19 +65,19 @@ class DocumentChunker:
             chunks = self._split_content(content, url, title, doc_name)
             # Second pass: set total_chunks and update stats
             total = len(chunks)
-            EMBEDDING_HARD_LIMIT = 2000  # text-embedding-004 token limit (tokens ≈ words * 1.3)
+            tokens_to_words_ratio = 1.3  # heuristic for English text
             for c in chunks:
-                if c.token_count > EMBEDDING_HARD_LIMIT:
+                if c.token_count > self.config.embedding_hard_limit:
                     logger.warning(
                         f"Chunk {c.chunk_id} has {c.token_count} tokens, "
-                        f"which exceeds the embedding model limit of {EMBEDDING_HARD_LIMIT}. "
+                        f"which exceeds the embedding model limit of {self.config.embedding_hard_limit}. "
                         f"Truncating to prevent embedding API failure."
                     )
                     # Truncate text to fit, preserving the heading context
                     words = c.chunk_text.split()
-                    max_words = int(EMBEDDING_HARD_LIMIT / 1.3)
+                    max_words = int(self.config.embedding_hard_limit / tokens_to_words_ratio)
                     c.chunk_text = " ".join(words[:max_words]) + " [TRUNCATED]"
-                    c.token_count = EMBEDDING_HARD_LIMIT
+                    c.token_count = self.config.embedding_hard_limit
 
                 c.total_chunks = total
                 self.stats["total_chunks_generated"] += 1

@@ -1,25 +1,18 @@
 import sys
-
-
 import asyncio
+import logging
+import os
+import uuid
+from pathlib import Path
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-import logging
-from fastapi import FastAPI, Request, Depends, Query, HTTPException
-import os
-from pathlib import Path
+
 from dotenv import load_dotenv
-import uuid
+from fastapi import FastAPI, Request, Depends, Query, HTTPException
 
 env_path = Path(__file__).resolve().parent.parent.parent / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
-
-# Add project root to path
-
-sys.path.append(
-    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-)
 
 from src.api.startup import lifespan
 from src.api.routes import query, ingest, documents, admin

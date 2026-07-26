@@ -15,14 +15,14 @@ GEMINI_API_KEY=your_gemini_api_key_here
 # Optional: GROQ_API_KEY=your_groq_api_key_here
 ```
 
-## 3. Quick Run (Docker)
-The easiest way to run the entire system (API + UI + Vector DB) via our unified container:
+## 3. Quick Run (Docker API)
+You can run the API backend via Docker:
 ```bash
-docker build -t nexus-rag .
-docker run -p 7860:7860 nexus-rag
+docker build -t nexus-rag-api .
+docker run -p 8000:8000 nexus-rag-api
 ```
-- UI available at: [http://localhost:7860](http://localhost:7860)
-- API docs at: [http://localhost:7860/docs](http://localhost:7860/docs)
+- API available at: [http://localhost:8000](http://localhost:8000)
+- API docs at: [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ## 4. Local Development Run
 

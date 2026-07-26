@@ -9,14 +9,13 @@ This module implements the Phase 2 pipeline:
 - Inspect and validate chunk quality
 """
 
-from .metadata import ChunkMetadata, ChunkingConfig, ChunkingReport
+from .metadata import ChunkMetadata, ChunkingConfig
 from .tokenizer import TokenCounter, TokenBudget
 from .chunker import DocumentChunker
 
 __all__ = [
     "ChunkMetadata",
     "ChunkingConfig",
-    "ChunkingReport",
     "TokenCounter",
     "TokenBudget",
     "DocumentChunker",

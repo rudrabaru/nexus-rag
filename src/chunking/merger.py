@@ -14,7 +14,6 @@ def merge_tiny_chunks(
     current = chunks[0]
 
     for next_chunk in chunks[1:]:
-        # 1. Semantic Completeness Checks
         lines_current = [
             line for line in current.chunk_text.strip().split("\n") if line.strip()
         ]
@@ -25,17 +24,12 @@ def merge_tiny_chunks(
         )
         current_is_tiny = current.token_count < 40
 
-        # Note: We don't check next_chunk's incompleteness to force a merge into current.
-        # If next_chunk is incomplete (e.g. a heading), it will become `current` on the next iteration,
-        # and the text *after* it will be merged into it. Merging a heading into the end of an existing
-        # complete chunk is semantically wrong.
-
-        # 2. Content Type Checks
+        # Prevent merging two structured blocks of the same type
         is_content_clash = (
             current.content_type == "table" and next_chunk.content_type == "table"
         ) or (current.content_type == "code" and next_chunk.content_type == "code")
 
-        # 3. Hierarchy Checks
+        # Hierarchy checks
         # Sibling: same parent path
         is_sibling = False
         if (
@@ -72,7 +66,7 @@ def merge_tiny_chunks(
             if current_is_heading_only:
                 should_merge = True
             elif is_headingless:
-                # To prevent cascading merges of headingless text, only merge if BOTH are below min_chunk_tokens or current is tiny
+                # Only merge if both are small or one is tiny, to prevent cascading merges
                 if current_is_tiny or (
                     current.token_count < config.min_chunk_tokens
                     and next_chunk.token_count < config.min_chunk_tokens

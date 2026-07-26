@@ -1,20 +1,3 @@
-"""
-Context builder: assembles retrieved chunks into a token-budgeted context window.
-
-Why this is a separate module:
-    Constructing context is a distinct engineering concern from retrieval and generation.
-    Chunk selection, deduplication, ordering, and citation formatting all live here,
-    making them independently testable and tunable without touching either retrieval
-    or the LLM call.
-
-Design principles:
-    - Chunks are included in similarity-score order (highest first).
-    - Token budget is enforced by a simple word-count heuristic (words / 0.75 ≈ tokens).
-      This avoids a hard tokenizer dependency while remaining accurate enough for budgeting.
-    - Each included chunk gets a citation header so the LLM can reference the source.
-    - Code blocks are preserved verbatim — never truncated mid-block.
-"""
-
 import json
 import time
 import logging

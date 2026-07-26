@@ -210,11 +210,6 @@ async def query_rag_stream(
 
     except Exception as e:
         if 'query_semaphore' in locals() and query_semaphore:
-            # We don't want to release if it was never acquired or was already released
-            # but since we acquire right after checking it, we release here.
-            # However, if it failed DURING token_generator, the token_generator's finally handles it.
-            # If it failed BEFORE token_generator returned, we release it here.
-            pass # wait, it's safer to release in finally inside token_generator, and in except block here.
             try:
                 query_semaphore.release()
             except ValueError:

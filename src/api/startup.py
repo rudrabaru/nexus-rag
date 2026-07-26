@@ -60,9 +60,6 @@ async def lifespan(app: FastAPI):
                         components.retriever.dense_retriever, "vector_store", None
                     )
 
-                if vector_store:
-                    pass # Metric check omitted for Qdrant (managed internally)
-
                 qdrant_count = vector_store.get_collection_size() if vector_store else 0
 
                 registry_docs = registry.list_documents(tenant_id=None)

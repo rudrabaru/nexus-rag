@@ -7,14 +7,14 @@ This document captures the explicit architectural tradeoffs and design decisions
 **Rationale:** Loading modern LLMs and embedding models locally requires massive amounts of RAM and GPU resources. By delegating this compute to specialized external APIs, the core RAG microservice maintains a near-zero memory footprint for ML processing, allowing it to run on extremely resource-constrained infrastructure.
 **Tradeoff:** The system introduces a hard dependency on external network calls. Network partitions or API outages will degrade functionality. To mitigate this, the system implements robust exponential backoff and retry logic, and supports seamless fallback providers.
 
-## 2. In-Process Vector Database
-**Decision:** Embed the vector database directly into the application process using local persistent storage, rather than deploying a standalone vector database cluster (like Milvus or Qdrant).
-**Rationale:** An in-process database significantly simplifies the deployment topology and operational overhead. It provides sub-millisecond approximate nearest-neighbor search without the latency of an extra network hop.
-**Tradeoff:** Local disk I/O can become a bottleneck on highly constrained instances. Furthermore, if the application scales horizontally to multiple containers, they will not natively share the same vector index without an external shared volume or migrating to a managed cloud vector database.
+## 2. Managed Cloud Vector Database
+**Decision:** Utilize a managed cloud vector database (Qdrant Cloud) for embedding storage and similarity search rather than an in-process vector store.
+**Rationale:** A managed cloud database simplifies deployment topologies, especially on ephemeral or stateless compute environments (like Render Free Tier or Cloud Run). It ensures persistence across container restarts and removes local disk dependency for vector storage.
+**Tradeoff:** It introduces an external network hop on every query, adding network latency (typically 20–100ms) compared to an in-process database. Cost could also scale linearly with data volume depending on the provider.
 
 ## 3. In-Process Sparse Indexing
 **Decision:** Utilize the native full-text search capabilities of an embedded relational database (SQLite FTS5) for keyword searching.
-**Rationale:** This eliminates the need for external dependencies or dedicated search clusters (like Elasticsearch). Crucially, it supports continuous, incremental inserts as new documents are ingested, avoiding the expensive in-memory index rebuilds required by standard Python BM25 libraries.
+**Rationale:** This eliminates the need for a dedicated search cluster (like Elasticsearch) specifically for keyword indexing. Crucially, it supports continuous, incremental inserts as new documents are ingested, avoiding the expensive in-memory index rebuilds required by standard Python BM25 libraries.
 **Tradeoff:** The tuning parameters of the embedded search engine are less configurable than standalone implementations. While highly effective for general domain text, extremely specialized corpora might require customized term-frequency weighting that is harder to achieve in this setup.
 
 ## 4. Concurrency & Queue Management

@@ -12,6 +12,9 @@ from src.generating.query_rewriter import QueryRewriter
 from src.embedding.generator import EmbeddingGenerator
 from src.embedding.config import EmbeddingConfig
 
+DEFAULT_GEMINI_MODEL = "gemini-2.0-flash-lite"
+DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -57,10 +60,11 @@ def _init_components() -> PipelineComponents:
         logger.info("Reranker disabled via ENABLE_RERANKER env var.")
 
     provider = os.environ.get("LLM_PROVIDER", "gemini")
-    model_name = os.environ.get(
-        "LLM_MODEL_NAME",
-        "gemini-2.0-flash-lite" if provider == "gemini" else "llama-3.3-70b-versatile",
-    )
+    model_name = os.environ.get("LLM_MODEL_NAME")
+    if not model_name:
+        model_name = (
+            DEFAULT_GEMINI_MODEL if provider == "gemini" else DEFAULT_GROQ_MODEL
+        )
 
     fallback_config = None
     if provider == "gemini" and os.environ.get("GROQ_API_KEY"):

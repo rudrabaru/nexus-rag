@@ -54,7 +54,7 @@ def parse_sections(content: str) -> List[Section]:
 
     lines = content_safe.split("\n")
 
-    current_section = Section(title="Introduction", level=0, heading_path=[])
+    current_section = Section(title="", level=0, heading_path=[])
     current_text = []
 
     # Regex to capture markdown headings
@@ -75,8 +75,8 @@ def parse_sections(content: str) -> List[Section]:
                 current_section.text = inject_placeholders("\n".join(current_text))
                 sections.append(current_section)
                 current_text = []
-            elif current_section.title == "Introduction" and not sections:
-                # Empty introduction, just skip
+            elif current_section.title == "" and not sections and not current_text:
+                # Empty root section, just skip
                 pass
             else:
                 current_section.text = ""
