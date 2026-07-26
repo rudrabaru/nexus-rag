@@ -118,32 +118,53 @@ async def _process_ingestion(
             f"visual_chunks={len(adapter_result.visual_chunks) if adapter_result else 0}"
         )
 
-        # ── STAGE 1.5: Sitemap sequential fetch ───────────────────────────────
+        # ── STAGE 1.5: Sitemap bounded concurrent fetch ────────────────────────
         if adapter_result and adapter_result.documents and all(d.markdown_content == "" for d in adapter_result.documents) and len(adapter_result.documents) > 0:
             urls = [doc.url for doc in adapter_result.documents]
             total = len(urls)
-            logger.info(f"{tag} STAGE 1.5 | Sitemap sequential fetch | total_pages={total}")
+            logger.info(f"{tag} STAGE 1.5 | Sitemap bounded concurrent fetch | total_pages={total}")
             if registry:
                 registry.update_job_status(job_id, "processing", 5, metadata={"total_pages": total, "indexed_pages": 0, "failed_pages": 0})
             
             all_docs = []
             all_visual_chunks = []
             failed_pages = 0
-            for i, u in enumerate(urls, start=1):
-                try:
-                    page_res = await dispatcher.web_adapter.ingest(u, extract_visuals=extract_visuals)
-                    if page_res and page_res.documents:
-                        all_docs.extend(page_res.documents)
-                    if page_res and page_res.visual_chunks:
-                        all_visual_chunks.extend(page_res.visual_chunks)
-                except Exception as e:
-                    logger.warning(f"{tag} Sitemap skipped URL {u}: {e}")
-                    failed_pages += 1
-                
-                pct = 5 + int(90 * i / total)
-                if registry:
-                    registry.update_job_status(job_id, "processing", pct, metadata={"total_pages": total, "indexed_pages": i - failed_pages, "failed_pages": failed_pages})
+            processed = 0
+            failed_reasons = []
+            sem = asyncio.Semaphore(4)
+
+            async def fetch_url(u):
+                nonlocal processed, failed_pages
+                async with sem:
+                    try:
+                        res = await dispatcher.web_adapter.ingest(u, extract_visuals=extract_visuals)
+                        processed += 1
+                        if registry:
+                            pct = 5 + int(90 * processed / total)
+                            registry.update_job_status(job_id, "processing", pct, metadata={"total_pages": total, "indexed_pages": processed - failed_pages, "failed_pages": failed_pages})
+                        return res, None
+                    except Exception as e:
+                        logger.warning(f"{tag} Sitemap skipped URL {u}: {e}")
+                        failed_pages += 1
+                        processed += 1
+                        if registry:
+                            pct = 5 + int(90 * processed / total)
+                            registry.update_job_status(job_id, "processing", pct, metadata={"total_pages": total, "indexed_pages": processed - failed_pages, "failed_pages": failed_pages})
+                        return None, f"{u}: {str(e)[:60]}"
+
+            results = await asyncio.gather(*(fetch_url(u) for u in urls))
+            for res, err in results:
+                if res and res.documents:
+                    all_docs.extend(res.documents)
+                if res and res.visual_chunks:
+                    all_visual_chunks.extend(res.visual_chunks)
+                if err:
+                    failed_reasons.append(err)
             
+            if failed_reasons and registry:
+                err_summary = f"{failed_pages}/{total} pages failed scraping: " + "; ".join(failed_reasons[:2])
+                registry.update_job_status(job_id, "processing", 95, metadata={"error_reason": err_summary})
+
             adapter_result.documents = all_docs
             adapter_result.visual_chunks = all_visual_chunks
             doc_count = len(adapter_result.documents)

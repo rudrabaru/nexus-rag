@@ -19,8 +19,8 @@ The system ingests heterogeneous data formats and transforms them into an intell
 ### Intelligent Data Ingestion
 - **Multi-Format Extraction:** Seamlessly processes URLs, PDFs, DOCX, MD, CSV, and TXT files.
 - **Multimodal Vision:** Optional OCR and visual analysis intercepts images and scanned documents, converting visual data into searchable text.
-- **Dynamic Web Crawling:** Employs headless browser rendering to capture content from JavaScript-heavy Single Page Applications (SPAs).
-- **Asynchronous Processing:** Features background job tracking and semaphore-based concurrency control to ensure stable ingestion without resource exhaustion.
+- **Dynamic Web & Sitemap Crawling:** Employs headless browser rendering and intelligent Jina Reader integrations. Supports selective XML sitemap URL prefix filtering for targeted subsection indexing.
+- **Bounded Concurrency & Observability:** Features semaphore-based asynchronous concurrency control (`asyncio.Semaphore`) and surfaces granular root-cause error reasons (e.g., HTTP 429 rate limits, bot blocks) in UI and metadata for partial ingestion failures.
 
 ### Semantic Normalization & Chunking
 - **Boilerplate Detection:** Uses statistical corpus frequency analysis to automatically detect and strip navigation menus, footers, and noise. For single-document ingestions, gracefully falls back to structural signals (link density, word count, edge position) when corpus statistics aren't available.

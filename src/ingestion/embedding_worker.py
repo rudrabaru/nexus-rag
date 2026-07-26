@@ -55,11 +55,14 @@ class EmbeddingWorker:
         if registry and job_id:
             job_status = "partial_success" if all_failed_indices else "complete"
             metadata = None
+            err_reason = None
             if all_failed_indices:
+                err_reason = getattr(self.embedding_generator, "last_error", None) or f"{len(all_failed_indices)} chunks failed embedding (API rate limit or timeout)."
                 metadata = {
                     "failed_chunk_indices": all_failed_indices,
                     "embedded": len(all_chunks) - len(all_failed_indices),
-                    "total": len(all_chunks)
+                    "total": len(all_chunks),
+                    "error_reason": err_reason,
                 }
 
             registry.complete_job(
@@ -68,7 +71,8 @@ class EmbeddingWorker:
                 [],
                 {"total_added": total_added, "total_tokens": total_tokens},
                 status=job_status,
-                metadata=metadata
+                metadata=metadata,
+                error=err_reason,
             )
             registry.increment_tenant_embedding_tokens(tenant_id, total_tokens)
             

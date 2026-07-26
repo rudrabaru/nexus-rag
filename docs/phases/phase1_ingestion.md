@@ -17,8 +17,11 @@ A unified parsing system converts virtually any document format directly into cl
 2. **Multimodal Vision Extraction (Optional):** When requested, a vision-capable AI model intercepts images and scanned pages within the documents. It interprets the visual content and injects text descriptions directly into the Markdown, expanding retrieval capabilities to scanned PDFs and image-heavy presentations.
 3. **Structural Post-processing:** The engine automatically recovers structural hierarchy from documents that use typographic conventions instead of native heading styles. It also sanitizes artifacts like tracked changes.
 
-### Web Crawling Engine
-For dynamic HTML pages, the system employs a headless browser capable of rendering JavaScript. This ensures that content hidden behind dynamic loads or single-page applications is fully captured and converted to structured Markdown.
+### Web & Sitemap Crawling Engine
+For dynamic HTML pages and site hierarchies, the system employs scalable web ingestion adapters:
+- **Jina Reader Integration:** Dynamically converts web pages into structured Markdown, stripping unnecessary images and optimizing connection timeouts when visual extraction is disabled to minimize latency.
+- **Sitemap Ingestion & Selective Prefix Filtering:** Automatically parses XML sitemaps to discover site pages. To support targeted indexing without full-site deep crawling, the ingestion engine supports URL prefix filtering. When a prefix or subpath (e.g., `/payment-methods/google-pay/`) is specified, the sitemap parser isolates and ingests only the matching documentation subsections.
+- **Bounded Concurrent Crawling:** To maximize ingestion throughput while preventing server overload and API rate-limiting, sitemap URL fetching is executed with bounded asynchronous concurrency (`asyncio.Semaphore`).
 
 ### In-Memory Processing & Multi-Tenancy
 The entire ingestion process operates as an in-memory microservice. Temporary files created during uploads are stored in the OS temp directory and are deleted immediately after parsing. No raw source files are permanently stored on disk.
@@ -27,9 +30,15 @@ All documents are tagged at the ingestion layer with:
 - **Tenant ID**: Identifies the owning workspace to ensure strict data isolation.
 - **Visibility**: Defines the scope of the document (e.g., restricted strictly to the owning tenant).
 
+### Ingestion Observability & Error Propagation
+To ensure transparent operations, the ingestion pipeline maintains fine-grained observability over partial failures:
+- **Job Status Tracking:** Jobs transition through states such as `queued`, `processing`, `complete`, `partial_success`, and `failed`.
+- **Root Cause Surfacing:** When rate limits (e.g., HTTP 429), crawling blocks, or embedding timeouts occur on individual pages or batches, the system captures explicit, human-readable error reasons in metadata. These diagnostic messages are propagated directly to the UI, enabling users to inspect exact failure causes even when a job completes with partial success.
+
 ### Deduplication
 Before starting an extraction job, the system computes a cryptographic hash of the raw file content. If an identical hash already exists in the registry for the same tenant with a completed status, the ingestion is skipped. This prevents redundant reprocessing of identical documents.
 
 ## Design Philosophy & Tradeoffs
 - **Simplicity vs. Fidelity:** The unified extraction approach favors a fast, uniform conversion layer over highly specialized format parsers. While extremely complex academic layouts might lose some visual context, it significantly reduces pipeline maintenance overhead.
-- **Crawler Reliability:** JavaScript-heavy sites behind aggressive bot detection may fail to render fully. In these edge cases, the system relies on manual document fallback rather than building brittle, site-specific scrapers.
+- **Bounded Concurrency vs. Speed:** While unbounded parallel scraping could theoretically process sitemaps faster, enforcing a concurrency limit prevents remote server rate-limiting and ensures stable, predictable memory usage.
+- **Crawler Reliability:** JavaScript-heavy sites behind aggressive bot detection may fail to render fully. In these edge cases, explicit error propagation informs the user immediately, allowing manual fallback or selective re-ingestion.

@@ -24,6 +24,15 @@ class WebAdapter(IngestionAdapter):
         if not jina_api_key:
             raise ValueError("JINA_API_KEY environment variable is missing.")
 
+        headers = {
+            "Authorization": f"Bearer {jina_api_key}",
+            "Accept": "application/json",
+            "X-Return-Format": "markdown",
+            "X-Timeout": "20",
+        }
+        if not extract_visuals:
+            headers["X-Retain-Images"] = "none"
+
         import asyncio
         async with httpx.AsyncClient(timeout=30.0) as client:
             max_retries = 3
@@ -31,11 +40,7 @@ class WebAdapter(IngestionAdapter):
                 try:
                     response = await client.get(
                         f"https://r.jina.ai/{source}",
-                        headers={
-                            "Authorization": f"Bearer {jina_api_key}",
-                            "Accept": "application/json",
-                            "X-Return-Format": "markdown"
-                        }
+                        headers=headers
                     )
                     response.raise_for_status()
                     break

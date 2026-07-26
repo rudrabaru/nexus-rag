@@ -10,7 +10,7 @@ The system delegates all dense vector generation to a highly optimized external 
 
 - **Asymmetric Encoding:** The system uses task-aware encoding. Chunks processed during ingestion are encoded with the `retrieval.passage` task type, optimizing them to be retrieved. User queries are encoded with the `retrieval.query` task type, optimizing them for searching. This asymmetric approach is critical for high-fidelity late-interaction models.
 - **Batching & Concurrency:** Chunks are grouped into specific batches of 50 and sent in parallel to the Jina API to maximize throughput without exceeding payload limits.
-- **Resiliency:** The system employs exponential backoff and retry logic (up to 3 retries) to gracefully absorb transient network failures or API rate limits.
+- **Resiliency & Partial Success:** The system employs exponential backoff and retry logic (up to 3 retries) to absorb transient network failures or API rate limits. If rate limits (e.g., HTTP 429) persist after retries, the pipeline isolates the failed chunk batches without aborting the entire document. Successfully embedded chunks are committed to Qdrant, while the job status transitions to `partial_success` and records an explicit diagnostic `error_reason` in the document metadata.
 - **Zero RAM Footprint:** No local embedding model is loaded into memory. All dense embedding computation is remote. This is a deliberate architectural tradeoff that frees significant RAM for the vector database, headless browser, and the web server, allowing the entire system to run comfortably on resource-constrained micro-instances.
 
 ### Sparse Indexing
@@ -33,4 +33,4 @@ Before embedding, the system enforces a hard token limit on every chunk to ensur
 
 ## Design Philosophy & Tradeoffs
 - **Network Dependency:** All dense embedding generation requires outbound API calls. A network partition will cause ingestion to fail gracefully (with retries), but there is no local fallback embedding model.
-- **API Rate Limits:** Heavy, sustained ingestion loads may encounter third-party API rate limits. The exponential backoff strategy mitigates this, but massive batch uploads are intentionally paced to respect external provider limits.
+- **API Rate Limits vs. Partial Indexing:** Heavy, sustained ingestion loads may encounter third-party API rate limits. Rather than failing an entire document when an embedding batch is rate-limited, the system opts for partial indexing (`partial_success`). This preserves all successfully embedded chunks for immediate retrieval while surfacing diagnostic error reasons to the user for observability.

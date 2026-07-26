@@ -80,7 +80,11 @@ def render_documents_tab(API_BASE_URL, api_headers):
                                             else:
                                                 prog_ph.success(f"✅ [{src_name}] Indexed {j_data.get('chunk_count', '?')} chunks.")
                                         elif status == "partial_success":
-                                            prog_ph.warning(f"⚠️ [{src_name}] Partial success: Indexed {idx_p or 0}/{total_p or '?'} pages ({j_data.get('chunk_count', '?')} chunks). {fail_p or 0} failed.")
+                                            err_msg = j_data.get("error") or meta.get("error_reason") or "Some chunks or pages failed processing."
+                                            if total_p is not None:
+                                                prog_ph.warning(f"⚠️ [{src_name}] Partial success: Indexed {idx_p or 0}/{total_p} pages ({j_data.get('chunk_count', '?')} chunks). Reason: {err_msg}")
+                                            else:
+                                                prog_ph.warning(f"⚠️ [{src_name}] Partial success ({j_data.get('chunk_count', '?')} chunks indexed). Reason: {err_msg}")
                                         elif status == "failed":
                                             prog_ph.error(f"❌ [{src_name}] {j_data.get('error', 'Unknown error')}")
                                         break
@@ -113,10 +117,12 @@ def render_documents_tab(API_BASE_URL, api_headers):
                             st.markdown(f"Chunks: `{doc.get('chunks', 0)}`")
                         with c3:
                             status = doc.get('status', 'unknown')
-                            color = "green" if status == "complete" else "orange" if status == "processing" else "red"
+                            color = "green" if status == "complete" else "orange" if status == "processing" else "red" if status == "failed" else "blue"
                             st.markdown(f"Status: :{color}[{status.upper()}]")
                             if status == "failed" and doc.get("error"):
                                 st.error(f"Error: {doc.get('error')}")
+                            elif status == "partial_success" and doc.get("error"):
+                                st.warning(f"Warning: {doc.get('error')}")
                         with c4:
                             if st.button("Delete", key=f"del_{doc['id']}"):
                                 requests.delete(f"{API_BASE_URL}/documents/{doc['id']}", headers=api_headers)

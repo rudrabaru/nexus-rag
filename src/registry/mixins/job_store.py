@@ -94,13 +94,13 @@ class JobStoreMixin:
 
             self._save_metadata(conn, job_id, metadata)
 
-            if status == "failed":
+            if status in ("failed", "partial_success") and error:
                 conn.execute(
                     """
-                    UPDATE documents SET status = 'failed', error = ?, updated_at = ?
+                    UPDATE documents SET status = ?, error = ?, updated_at = ?
                     WHERE doc_id = (SELECT doc_id FROM jobs WHERE job_id = ?)
                 """,
-                    (error, datetime.now(timezone.utc).isoformat(), job_id),
+                    (status, error, datetime.now(timezone.utc).isoformat(), job_id),
                 )
 
             conn.commit()
@@ -137,19 +137,37 @@ class JobStoreMixin:
         stats: Dict[str, Any],
         status: str = "complete",
         metadata: Optional[Dict[str, Any]] = None,
+        error: Optional[str] = None,
     ):
         """Marks a job as complete (or partial_success) and updates the document with final metadata."""
         now = datetime.now(timezone.utc).isoformat()
+
         with self._get_conn() as conn:
+            self._save_metadata(conn, job_id, metadata)
+            
+            if error is None:
+                if metadata and isinstance(metadata, dict):
+                    error = metadata.get("error_reason") or metadata.get("error")
+                if error is None:
+                    cursor = conn.execute("SELECT metadata FROM jobs WHERE job_id = ?", (job_id,))
+                    row = cursor.fetchone()
+                    if row and row[0]:
+                        try:
+                            meta_dict = json.loads(row[0])
+                            if isinstance(meta_dict, dict):
+                                error = meta_dict.get("error_reason") or meta_dict.get("error")
+                        except Exception:
+                            pass
+            if error is None and status == "partial_success":
+                error = "Some chunks or pages failed processing (e.g., API rate limits or crawling errors)."
+
             conn.execute(
                 """
-                UPDATE jobs SET status = ?, progress_pct = 100, finished_at = ?
+                UPDATE jobs SET status = ?, progress_pct = 100, finished_at = ?, error = COALESCE(?, error)
                 WHERE job_id = ?
             """,
-                (status, now, job_id),
+                (status, now, error, job_id),
             )
-
-            self._save_metadata(conn, job_id, metadata)
 
             conn.execute(
                 """
@@ -158,7 +176,8 @@ class JobStoreMixin:
                     updated_at = ?,
                     chunk_ids = ?,
                     asset_ids = ?,
-                    stats = ?
+                    stats = ?,
+                    error = COALESCE(?, error)
                 WHERE doc_id = (SELECT doc_id FROM jobs WHERE job_id = ?)
             """,
                 (
@@ -167,6 +186,7 @@ class JobStoreMixin:
                     json.dumps(chunk_ids),
                     json.dumps(asset_ids),
                     json.dumps(stats),
+                    error,
                     job_id,
                 ),
             )

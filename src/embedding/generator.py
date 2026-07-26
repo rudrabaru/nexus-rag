@@ -34,6 +34,7 @@ class EmbeddingGenerator:
             "start_time": None,
             "end_time": None,
         }
+        self.last_error = None
         
         # Optional semaphore injected later if needed
         self.embed_semaphore = None
@@ -42,6 +43,7 @@ class EmbeddingGenerator:
         all_embeddings = []
         failed_indices = []
         batch_size = self.config.batch_size
+        self.last_error = None
         
         async with httpx.AsyncClient(timeout=60.0) as client:
             for i in range(0, len(texts), batch_size):
@@ -73,11 +75,17 @@ class EmbeddingGenerator:
                     except Exception as e:
                         if attempt == max_retries - 1:
                             logger.error(f"Batch {i//batch_size} failed after {max_retries} attempts: {e}")
+                            err_msg = str(e)
+                            status_code = getattr(getattr(e, "response", None), "status_code", "")
+                            if status_code == 429 or "429" in err_msg:
+                                self.last_error = f"Jina Embedding API rate limit exceeded (HTTP 429). Batch failed after {max_retries} retries."
+                            else:
+                                self.last_error = f"Embedding API error ({status_code or 'error'}): {err_msg[:100]}"
                             failed_indices.extend(range(i, i + len(batch)))
                             all_embeddings.extend([None] * len(batch))
                             break
-                        # exponential backoff 1s, 2s, 4s
-                        await asyncio.sleep(2 ** attempt)
+                        # exponential backoff 4s, 8s, 16s
+                        await asyncio.sleep(4 * (2 ** attempt))
                         
         return all_embeddings, failed_indices
 
