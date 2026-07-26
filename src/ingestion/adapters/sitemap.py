@@ -1,7 +1,7 @@
 import logging
 import xml.etree.ElementTree as ET
 from typing import List, Set
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse, parse_qs
 import httpx
 
 from src.crawling.metadata import CrawledDocument, AdapterResult
@@ -29,39 +29,40 @@ class SitemapAdapter(IngestionAdapter):
         return resp.content
 
     def _extract_urls_from_xml(self, xml_content: bytes) -> tuple[List[str], List[str]]:
-        """
-        Parses XML content and returns (page_urls, child_sitemap_urls).
-        Handles standard XML namespaces automatically by ignoring them or stripping them.
-        """
-        page_urls = []
-        child_sitemaps = []
+        page_urls: List[str] = []
+        child_sitemaps: List[str] = []
         try:
             root = ET.fromstring(xml_content)
-        except Exception as e:
-            logger.warning(f"Failed to parse XML sitemap: {e}")
-            return [], []
+        except ET.ParseError as e:
+            logger.error(f"XML parse error in sitemap: {e}")
+            return page_urls, child_sitemaps
 
-        # Iterate over all elements regardless of xmlns tag prefix
-        for elem in root.iter():
-            tag = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
-            if tag == "url":
-                loc = None
-                for child in elem:
-                    child_tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                    if child_tag == "loc" and child.text:
-                        loc = child.text.strip()
-                        break
-                if loc:
-                    page_urls.append(loc)
-            elif tag == "sitemap":
-                loc = None
-                for child in elem:
-                    child_tag = child.tag.split('}')[-1] if '}' in child.tag else child.tag
-                    if child_tag == "loc" and child.text:
-                        loc = child.text.strip()
-                        break
-                if loc:
-                    child_sitemaps.append(loc)
+        namespaces = {}
+        if root.tag.startswith("{"):
+            ns_uri = root.tag.split("}")[0].strip("{")
+            namespaces["ns"] = ns_uri
+
+        tag_prefix = "ns:" if namespaces else ""
+
+        if "sitemapindex" in root.tag.lower():
+            for sitemap_elem in root.findall(f".//{tag_prefix}sitemap", namespaces):
+                loc_elem = sitemap_elem.find(f"{tag_prefix}loc", namespaces)
+                if loc_elem is not None and loc_elem.text:
+                    child_sitemaps.append(loc_elem.text.strip())
+        else:
+            for url_elem in root.findall(f".//{tag_prefix}url", namespaces):
+                loc_elem = url_elem.find(f"{tag_prefix}loc", namespaces)
+                if loc_elem is not None and loc_elem.text:
+                    page_urls.append(loc_elem.text.strip())
+
+        if not page_urls and not child_sitemaps:
+            for elem in root.iter():
+                if elem.tag.endswith("loc") and elem.text:
+                    text_url = elem.text.strip()
+                    if text_url.lower().endswith(".xml") or "sitemap" in text_url.lower():
+                        child_sitemaps.append(text_url)
+                    else:
+                        page_urls.append(text_url)
 
         return page_urls, child_sitemaps
 
@@ -74,14 +75,23 @@ class SitemapAdapter(IngestionAdapter):
     async def ingest(self, source: str, extract_visuals: bool = False, **kwargs) -> AdapterResult:
         logger.info(f"SitemapAdapter processing sitemap: {source}")
         
+        filter_prefix = kwargs.get("filter_prefix") or kwargs.get("filter")
+        fetch_url = source
+        if "?" in source:
+            parsed = urlparse(source)
+            qs = parse_qs(parsed.query)
+            if "filter" in qs and qs["filter"]:
+                filter_prefix = qs["filter"][0]
+            fetch_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path}"
+
         seen_urls: Set[str] = set()
         clean_urls: List[str] = []
 
         async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0 (NexusRAG/1.0)"}) as client:
             try:
-                xml_content = await self._fetch_xml(client, source)
+                xml_content = await self._fetch_xml(client, fetch_url)
             except Exception as e:
-                logger.error(f"Failed to fetch sitemap {source}: {e}")
+                logger.error(f"Failed to fetch sitemap {fetch_url}: {e}")
                 raise ValueError(f"Failed to fetch sitemap URL: {e}")
 
             page_urls, child_sitemaps = self._extract_urls_from_xml(xml_content)
@@ -105,6 +115,11 @@ class SitemapAdapter(IngestionAdapter):
                                 clean_urls.append(u)
                     except Exception as child_err:
                         logger.warning(f"Failed to fetch child sitemap {child_url}: {child_err}")
+
+        if filter_prefix and str(filter_prefix).strip():
+            pref = str(filter_prefix).strip().lower()
+            clean_urls = [u for u in clean_urls if pref in u.lower()]
+            logger.info(f"SitemapAdapter filtered URLs by prefix '{filter_prefix}': {len(clean_urls)} URLs remain")
 
         if not clean_urls and not child_sitemaps:
             logger.warning(f"No <loc> URLs found in {source}. Might be an RSS feed or empty sitemap.")

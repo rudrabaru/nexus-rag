@@ -10,6 +10,7 @@ def render_documents_tab(API_BASE_URL, api_headers):
     col_input1, col_input2 = st.columns(2)
     with col_input1:
         ingest_url = st.text_input("URL or Sitemap to crawl")
+        sitemap_filter = st.text_input("Sitemap URL Prefix Filter (optional, e.g. /payment-methods/google-pay/)")
         extract_visuals = st.toggle("Extract Visuals (Images/Charts)", value=False)
     with col_input2:
         ingest_files = st.file_uploader("Or upload files", type=["pdf", "docx", "md", "txt"], accept_multiple_files=True)
@@ -29,13 +30,17 @@ def render_documents_tab(API_BASE_URL, api_headers):
                     job_ids = []
                     if ingest_url:
                         url_data = data.copy()
-                        url_data["url"] = ingest_url
+                        url_to_send = ingest_url.strip()
+                        if sitemap_filter and sitemap_filter.strip() and ("sitemap" in url_to_send.lower() or url_to_send.lower().endswith(".xml")):
+                            sep = "&" if "?" in url_to_send else "?"
+                            url_to_send = f"{url_to_send}{sep}filter={sitemap_filter.strip()}"
+                        url_data["url"] = url_to_send
                         res = requests.post(f"{API_BASE_URL}/ingest", data=url_data, headers=api_headers)
                         if res.status_code != 200:
                             success = False
                             st.error(f"Ingest Error (URL): {res.json().get('detail', res.text)}")
                         else:
-                            job_ids.append((ingest_url, res.json().get("job_id")))
+                            job_ids.append((url_to_send, res.json().get("job_id")))
                     if ingest_files:
                         for f in ingest_files:
                             files = {"file": (f.name, f.getvalue(), f.type)}
