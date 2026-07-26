@@ -69,7 +69,7 @@ class IncrementalIngestionPipeline:
             if registry and job_id:
                 registry.update_job_status(job_id, status, pct)
 
-        update_progress(10)
+        update_progress(55)
         start_time = time.time()
 
         cleaner = DocumentCleaner(total_documents=len(crawled_docs))
@@ -93,7 +93,7 @@ class IncrementalIngestionPipeline:
             ProcessingValidator.validate_document(doc.markdown_content, cleaned_blocks, pdoc)
             processed_docs.append(pdoc)
 
-        update_progress(30)
+        update_progress(65)
         chunker = DocumentChunker(config=ChunkingConfig(source_version="v_live", output_version="v_live"))
         chunk_input_docs = []
         for pdoc in processed_docs:
@@ -124,14 +124,14 @@ class IncrementalIngestionPipeline:
                 )
                 all_chunks.append(v_meta)
 
-        update_progress(50)
+        update_progress(75)
 
         generator = self.embedding_generator or EmbeddingGenerator(EmbeddingConfig())
         worker = EmbeddingWorker(generator, self.db_manager)
         
         result = worker.process_batches(all_chunks, tenant_id, registry, job_id, pipeline_logger)
         total_added = result["total_added"]
-        update_progress(90)
+        update_progress(95)
         update_progress(100, status=result["job_status"])
 
         duration = time.time() - start_time
