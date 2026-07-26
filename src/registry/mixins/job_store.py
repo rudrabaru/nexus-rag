@@ -5,6 +5,26 @@ from typing import List, Dict, Any, Optional
 class JobStoreMixin:
     """Mixin handling job-related registry operations."""
 
+    def _save_metadata(self, conn, job_id: str, new_meta: Optional[Dict[str, Any]]):
+        if new_meta is None:
+            return
+        cursor = conn.execute("SELECT metadata FROM jobs WHERE job_id = ?", (job_id,))
+        row = cursor.fetchone()
+        existing_meta = {}
+        if row and row[0]:
+            try:
+                existing = json.loads(row[0])
+                if isinstance(existing, dict):
+                    existing_meta = existing
+            except Exception:
+                pass
+        if isinstance(new_meta, dict):
+            existing_meta.update(new_meta)
+            final_str = json.dumps(existing_meta)
+        else:
+            final_str = json.dumps(new_meta)
+        conn.execute("UPDATE jobs SET metadata = ? WHERE job_id = ?", (final_str, job_id))
+
     def register_job(
         self,
         job_id: str,
@@ -13,6 +33,7 @@ class JobStoreMixin:
         format: str,
         tenant_id: str,
         content_hash: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ):
         """Registers a new job and creates/updates a pending document entry."""
         now = datetime.now(timezone.utc).isoformat()
@@ -32,10 +53,10 @@ class JobStoreMixin:
             # Create job
             conn.execute(
                 """
-                INSERT INTO jobs (job_id, doc_id, status, progress_pct, created_at)
-                VALUES (?, ?, 'queued', 0, ?)
+                INSERT INTO jobs (job_id, doc_id, status, progress_pct, created_at, metadata)
+                VALUES (?, ?, 'queued', 0, ?, ?)
             """,
-                (job_id, doc_id, now),
+                (job_id, doc_id, now, json.dumps(metadata) if metadata else None),
             )
 
             conn.commit()
@@ -46,6 +67,7 @@ class JobStoreMixin:
         status: str,
         progress_pct: int = 0,
         error: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ):
         """Updates the progress of a job."""
         now = (
@@ -69,6 +91,8 @@ class JobStoreMixin:
                 """,
                     (status, progress_pct, job_id),
                 )
+
+            self._save_metadata(conn, job_id, metadata)
 
             if status == "failed":
                 conn.execute(
@@ -119,11 +143,13 @@ class JobStoreMixin:
         with self._get_conn() as conn:
             conn.execute(
                 """
-                UPDATE jobs SET status = ?, progress_pct = 100, finished_at = ?, metadata = ?
+                UPDATE jobs SET status = ?, progress_pct = 100, finished_at = ?
                 WHERE job_id = ?
             """,
-                (status, now, json.dumps(metadata) if metadata else None, job_id),
+                (status, now, job_id),
             )
+
+            self._save_metadata(conn, job_id, metadata)
 
             conn.execute(
                 """

@@ -93,7 +93,7 @@ class SitemapAdapter(IngestionAdapter):
                     clean_urls.append(u)
 
             # Handle sitemapindex recursion (max 10 child sitemaps, 1 level deep)
-            if child_sitemaps and not clean_urls:
+            if child_sitemaps:
                 logger.info(f"Sitemap index detected with {len(child_sitemaps)} child sitemaps. Recursively fetching up to 10...")
                 for child_url in child_sitemaps[:10]:
                     try:
