@@ -196,10 +196,36 @@ async def query_rag_stream(
                         )
                         pipeline_logger.log_event("query_complete", query_text=body.query, duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000)
 
+                    metrics_store = getattr(request.app.state, "metrics_store", None)
+                    log_id = None
+                    if metrics_store:
+                        details = {
+                            "top_k_requested": body.top_k, "faithfulness_reasoning": None,
+                            "retrieved_context": [{"chunk_id": c.chunk_id, "source_url": c.source_url, "similarity_score": c.similarity_score} for c in temp_result.context_window.included_chunks],
+                        }
+                        try:
+                            log_id = metrics_store.log_query(
+                                tenant_id=tenant_id, query=body.query, 
+                                latency_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000,
+                                tokens_used=0, faithfulness_score=None,
+                                details=details, embedding_tokens=retrieval_result.embedding_tokens,
+                                generation_input_tokens=0, generation_output_tokens=0,
+                                rerank_tokens=retrieval_result.rerank_tokens, provider="gemini"
+                            )
+                        except Exception as e:
+                            logger.error(f"Failed to log streaming query: {e}")
+
                     if body.evaluate_faithfulness:
                         try:
                             eval_res = await asyncio.to_thread(evaluator.evaluate, temp_result)
                             yield f"data: {json.dumps({'type': 'faithfulness', 'content': {'score': eval_res.faithfulness_score, 'reasoning': eval_res.faithfulness_reasoning}})}\n\n"
+                            
+                            if log_id and metrics_store:
+                                try:
+                                    metrics_store.update_faithfulness(log_id, eval_res.faithfulness_score, eval_res.faithfulness_reasoning)
+                                except Exception as e:
+                                    logger.error(f"Failed to update faithfulness score: {e}")
+                                    
                         except Exception as eval_err:
                             logger.error(f"Async faithfulness evaluation failed: {eval_err}")
                 finally:

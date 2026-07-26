@@ -57,10 +57,25 @@ def render_documents_tab(API_BASE_URL, api_headers):
                                     j_data = s_res.json()
                                     pct = j_data.get("progress_pct", 0)
                                     status = j_data.get("status", "processing")
-                                    prog_ph.progress(pct / 100, text=f"[{src_name}] {status.upper()} — {pct}%")
+                                    meta = j_data.get("metadata") or {}
+                                    total_p = meta.get("total_pages")
+                                    idx_p = meta.get("indexed_pages")
+                                    fail_p = meta.get("failed_pages")
+
+                                    if total_p is not None:
+                                        msg = f"[{src_name}] {status.upper()} — {pct}% ({idx_p or 0}/{total_p} pages, {fail_p or 0} skipped)"
+                                    else:
+                                        msg = f"[{src_name}] {status.upper()} — {pct}%"
+
+                                    prog_ph.progress(pct / 100, text=msg)
                                     if status in ("complete", "failed", "partial_success"):
                                         if status == "complete":
-                                            prog_ph.success(f"✅ [{src_name}] Indexed {j_data.get('chunk_count', '?')} chunks.")
+                                            if total_p is not None:
+                                                prog_ph.success(f"✅ [{src_name}] Indexed {idx_p or 0} pages from sitemap ({j_data.get('chunk_count', '?')} chunks). {fail_p or 0} skipped.")
+                                            else:
+                                                prog_ph.success(f"✅ [{src_name}] Indexed {j_data.get('chunk_count', '?')} chunks.")
+                                        elif status == "partial_success":
+                                            prog_ph.warning(f"⚠️ [{src_name}] Partial success: Indexed {idx_p or 0}/{total_p or '?'} pages ({j_data.get('chunk_count', '?')} chunks). {fail_p or 0} failed.")
                                         elif status == "failed":
                                             prog_ph.error(f"❌ [{src_name}] {j_data.get('error', 'Unknown error')}")
                                         break

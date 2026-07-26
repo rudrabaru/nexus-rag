@@ -46,7 +46,10 @@ async def prepare_ingestion(
 
     if url:
         source_path = url
-        format_type = "web"
+        if url.lower().endswith(".xml") or "sitemap" in url.lower():
+            format_type = "sitemap"
+        else:
+            format_type = "web"
     elif file:
         safe_filename = os.path.basename(file.filename)
         allowed_extensions = {".pdf", ".docx", ".txt", ".md"}
@@ -115,8 +118,41 @@ async def _process_ingestion(
             f"visual_chunks={len(adapter_result.visual_chunks) if adapter_result else 0}"
         )
 
+        # ── STAGE 1.5: Sitemap sequential fetch ───────────────────────────────
+        if adapter_result and adapter_result.documents and all(d.markdown_content == "" for d in adapter_result.documents) and len(adapter_result.documents) > 0:
+            urls = [doc.url for doc in adapter_result.documents]
+            total = len(urls)
+            logger.info(f"{tag} STAGE 1.5 | Sitemap sequential fetch | total_pages={total}")
+            if registry:
+                registry.update_job_status(job_id, "processing", 5, metadata={"total_pages": total, "indexed_pages": 0, "failed_pages": 0})
+            
+            all_docs = []
+            all_visual_chunks = []
+            failed_pages = 0
+            for i, u in enumerate(urls, start=1):
+                try:
+                    page_res = await dispatcher.web_adapter.ingest(u, extract_visuals=extract_visuals)
+                    if page_res and page_res.documents:
+                        all_docs.extend(page_res.documents)
+                    if page_res and page_res.visual_chunks:
+                        all_visual_chunks.extend(page_res.visual_chunks)
+                except Exception as e:
+                    logger.warning(f"{tag} Sitemap skipped URL {u}: {e}")
+                    failed_pages += 1
+                
+                pct = 5 + int(90 * i / total)
+                if registry:
+                    registry.update_job_status(job_id, "processing", pct, metadata={"total_pages": total, "indexed_pages": i - failed_pages, "failed_pages": failed_pages})
+            
+            adapter_result.documents = all_docs
+            adapter_result.visual_chunks = all_visual_chunks
+            doc_count = len(adapter_result.documents)
+            total_chars = sum(len(d.markdown_content) for d in adapter_result.documents)
+            logger.info(f"{tag} STAGE 1.5 DONE | successfully fetched documents={doc_count} total_chars={total_chars} failed_pages={failed_pages}")
+
         # ── STAGE 2: URL canonicalisation ─────────────────────────────────────
-        if canonical_url and adapter_result and adapter_result.documents:
+        is_sitemap = source_path.lower().endswith(".xml") or "sitemap" in source_path.lower()
+        if canonical_url and adapter_result and adapter_result.documents and not is_sitemap:
             for doc in adapter_result.documents:
                 old_url = doc.url
                 doc.url = canonical_url

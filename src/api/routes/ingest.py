@@ -97,7 +97,9 @@ async def ingest_document(
         )
 
         response = {"job_id": job_id, "status": "queued"}
-        if file and total_size:
+        if format_type == "sitemap":
+            response["warning"] = "Sitemap detected. Pages will be crawled sequentially."
+        elif file and total_size:
             estimated_chunks = total_size / 2000
             if estimated_chunks > 500:
                 response["warning"] = f"Large document (~{int(estimated_chunks)} estimated chunks). Ingestion may take 8-10 minutes due to API rate limits. Partial results will be available progressively."

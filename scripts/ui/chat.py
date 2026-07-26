@@ -33,10 +33,13 @@ def render_chat_tab(API_BASE_URL, api_headers, top_k, use_reranker, stream_respo
                             
                             st.caption("Scores represent relative retrieval rank via RRF fusion, not raw semantic similarity.")
                             for idx, src in enumerate(message.get("sources", [])):
-                                st.markdown(f"**{idx+1}. [{src.get('section') or 'Link'}]({src['url']})**")
-                                st.caption(f"Score: {src['similarity_score']:.3f}")
+                                label = src.get("section") or "Source"
+                                sim = src.get("similarity_score", 0)
+                                st.markdown(f"**[{idx+1}] [{label}]({src.get('url', '#')})** &nbsp;&nbsp; `<Relevance: {sim:.3f}>`", unsafe_allow_html=True)
                                 if src.get("chunk_preview"):
-                                    st.markdown(f"> {src['chunk_preview']}")
+                                    preview = src["chunk_preview"].replace('\n', ' ').strip()
+                                    with st.container(border=True):
+                                        st.caption(f'"{preview[:400]}..."' if len(preview) > 400 else f'"{preview}"')
 
         if prompt := st.chat_input("E.g., What is Cloud Run?"):
             st.session_state.messages.append({"role": "user", "content": prompt})
@@ -95,10 +98,11 @@ def render_chat_tab(API_BASE_URL, api_headers, top_k, use_reranker, stream_respo
                                         for idx, src in enumerate(sources):
                                             label = src.get("section") or "Source"
                                             sim = src.get("similarity_score", 0)
-                                            st.markdown(f"**{idx+1}. [{label}]({src.get('url', '#')})**")
-                                            st.caption(f"Relevance: {sim:.3f}")
+                                            st.markdown(f"**[{idx+1}] [{label}]({src.get('url', '#')})** &nbsp;&nbsp; `<Relevance: {sim:.3f}>`", unsafe_allow_html=True)
                                             if src.get("chunk_preview"):
-                                                st.markdown(f"> {src['chunk_preview']}")
+                                                preview = src["chunk_preview"].replace('\n', ' ').strip()
+                                                with st.container(border=True):
+                                                    st.caption(f'"{preview[:400]}..."' if len(preview) > 400 else f'"{preview}"')
                                 
                                 st.session_state.messages.append({
                                     "role": "assistant",
@@ -142,11 +146,12 @@ def render_chat_tab(API_BASE_URL, api_headers, top_k, use_reranker, stream_respo
                                         st.caption("Scores represent relative retrieval rank via RRF fusion, not raw semantic similarity.")
                                         for idx, src in enumerate(sources):
                                             label = src.get("section") or "Source"
-                                            sim = src["similarity_score"]
-                                            st.markdown(f"**{idx+1}. [{label}]({src['url']})**")
-                                            st.caption(f"Relevance: {sim:.3f}")
+                                            sim = src.get("similarity_score", 0)
+                                            st.markdown(f"**[{idx+1}] [{label}]({src.get('url', '#')})** &nbsp;&nbsp; `<Relevance: {sim:.3f}>`", unsafe_allow_html=True)
                                             if src.get("chunk_preview"):
-                                                st.markdown(f"> {src['chunk_preview']}")
+                                                preview = src["chunk_preview"].replace('\n', ' ').strip()
+                                                with st.container(border=True):
+                                                    st.caption(f'"{preview[:400]}..."' if len(preview) > 400 else f'"{preview}"')
 
                                 st.session_state.messages.append({
                                     "role": "assistant",
