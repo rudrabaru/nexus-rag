@@ -246,7 +246,7 @@ async def _process_ingestion(
         if temp_dir:
             shutil.rmtree(temp_dir)
 
-        chunks_stored = result.get("chunks_stored", "?")
+        chunks_stored = result.get("chunks_added", result.get("chunks_stored", "?"))
         duration_ms = (time.time() - start_time) * 1000
         logger.info(
             f"{tag} STAGE 4 DONE | chunks_stored={chunks_stored} "
@@ -271,7 +271,7 @@ async def _process_ingestion(
         )
         if registry:
             registry.update_job_status(job_id, "failed", error=str(e))
-        if temp_dir:
-            shutil.rmtree(temp_dir)
     finally:
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
         semaphore.release()

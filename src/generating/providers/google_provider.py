@@ -44,6 +44,9 @@ class GoogleProvider(BaseProvider):
     async def call_stream(self, prompt: str) -> AsyncGenerator[str, None]:
         from google.genai import types
 
+        self.last_prompt_tokens = 0
+        self.last_completion_tokens = 0
+
         response = await asyncio.to_thread(
             self.client.models.generate_content_stream,
             model=self.config.model_name,
@@ -53,15 +56,20 @@ class GoogleProvider(BaseProvider):
                 max_output_tokens=self.config.max_output_tokens,
             ),
         )
-        
+
         def get_next(iterator):
             try:
                 return next(iterator)
             except StopIteration:
                 return None
-                
+
         while True:
             chunk = await asyncio.to_thread(get_next, response)
             if chunk is None:
                 break
-            yield chunk.text
+            usage = getattr(chunk, "usage_metadata", None)
+            if usage:
+                self.last_prompt_tokens = getattr(usage, "prompt_token_count", 0) or 0
+                self.last_completion_tokens = getattr(usage, "candidates_token_count", 0) or 0
+            if chunk.text:
+                yield chunk.text

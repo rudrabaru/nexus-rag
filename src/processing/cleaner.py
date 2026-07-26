@@ -11,14 +11,14 @@ class DocumentCleaner:
         return BlockParser.parse_blocks(markdown)
 
     def process_corpus_frequencies(self, all_documents_blocks: List[List[Block]]):
-        """Pass 1: Count document frequency for all block hashes."""
+        """Count document frequency for all block hashes."""
         for doc_blocks in all_documents_blocks:
             doc_hashes = set(b.content_hash for b in doc_blocks)
             for h in doc_hashes:
                 self.block_document_counts[h] = self.block_document_counts.get(h, 0) + 1
 
     def clean_document_blocks(self, blocks: List[Block]) -> List[Block]:
-        """Pass 2: Score and filter blocks for a single document."""
+        """Score and filter blocks for a single document."""
         cleaned = []
 
         for i, block in enumerate(blocks):

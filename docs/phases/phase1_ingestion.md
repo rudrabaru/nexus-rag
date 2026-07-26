@@ -7,7 +7,7 @@ The ingestion phase serves as the entry point for all raw data entering the Retr
 
 ### Format Routing
 An intelligent routing engine dynamically directs incoming sources to the appropriate processing pipeline:
-- **Web URLs**: The router first detects the actual content type. If the URL resolves to a binary document (like a PDF or Word file), it is downloaded and routed to the document extraction engine. Standard web pages are routed to a headless browser crawler.
+- **Web URLs**: The router first detects the actual content type. If the URL resolves to a binary document (like a PDF or Word file), it is downloaded and routed to the document extraction engine. Standard web pages are routed to the Jina Reader web ingestion engine.
 - **File Uploads**: Files are routed based on their format directly to the document extraction engine.
 
 ### Multi-Format Extraction Engine
@@ -21,7 +21,7 @@ A unified parsing system converts virtually any document format directly into cl
 For dynamic HTML pages and site hierarchies, the system employs scalable web ingestion adapters:
 - **Jina Reader Integration:** Dynamically converts web pages into structured Markdown, stripping unnecessary images and optimizing connection timeouts when visual extraction is disabled to minimize latency.
 - **Sitemap Ingestion & Selective Prefix Filtering:** Automatically parses XML sitemaps to discover site pages. To support targeted indexing without full-site deep crawling, the ingestion engine supports URL prefix filtering. When a prefix or subpath (e.g., `/payment-methods/google-pay/`) is specified, the sitemap parser isolates and ingests only the matching documentation subsections.
-- **Bounded Concurrent Crawling:** To maximize ingestion throughput while preventing server overload and API rate-limiting, sitemap URL fetching is executed with bounded asynchronous concurrency (`asyncio.Semaphore`).
+- **Bounded Concurrent Crawling:** To maximize ingestion throughput while preventing server overload and API rate-limiting, sitemap URL fetching is executed with bounded asynchronous concurrency.
 
 ### In-Memory Processing & Multi-Tenancy
 The entire ingestion process operates as an in-memory microservice. Temporary files created during uploads are stored in the OS temp directory and are deleted immediately after parsing. No raw source files are permanently stored on disk.

@@ -68,8 +68,6 @@ async def ingest_document(
                 dummy_job_id = str(uuid.uuid4())
                 registry.register_job(dummy_job_id, existing_doc["doc_id"], existing_doc["source"], existing_doc["format"], tenant_id, content_hash)
                 registry.update_job_status(dummy_job_id, "complete", 100)
-                semaphore.release()
-                semaphore_acquired = False
                 return {"job_id": dummy_job_id, "status": "complete"}
 
         old_doc = registry.get_document(doc_id)

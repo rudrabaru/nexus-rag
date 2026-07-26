@@ -327,8 +327,6 @@ establish a baseline and demonstrate that the simpler approach is insufficient.
 
 Favor evidence-driven improvements over complexity-driven improvements.
 
-# Evaluation Dataset Quality
-
 Evaluation datasets must measure retrieval usefulness rather than exact document matching.
 
 Avoid evaluation schemes that assume a query has only one valid source document.
@@ -453,33 +451,6 @@ When retrieval metrics appear unexpectedly low:
 Benchmark quality should be audited before retrieval architecture is modified.
 
 Treat evaluation quality and retrieval quality as separate concerns.
-
-# Retrieval Observability
-
-For every evaluation query:
-
-- Save query text
-- Save expected document
-- Save retrieved chunks
-- Save similarity scores
-- Save hit@1, hit@3, hit@5
-
-Generate:
-
-Persist evaluation artifacts,
-metrics,
-failure reports,
-and debugging outputs.
-
-All evaluation outputs must be reproducible and auditable.
-
-Store all outputs under:
-retrieval/vN
-
-where 'N' = 1,2,3,...
-
-Do not only print metrics to console.
-All retrieval evaluations must be reproducible and auditable.
 
 # Anti-Hardcoding Rule
 
@@ -652,13 +623,10 @@ Favor understanding and observability over sophistication.
 # In-Memory Microservice Architecture
 
 The RAG system operates as a single, in-memory microservice powered by FastAPI.
-We do not use offline, disk-based pipeline stages (e.g. `raw_docs/vN`, `chunks/vN`).
 
 Data must flow directly from ingestion through to Qdrant without persisting intermediate representations to disk, except where necessary for critical state (e.g. the BM25 index or SQLite job registry).
 
-## Evaluation
-
-Evaluation should be executed directly against the active Qdrant collection and the live BM25 index. Evaluation datasets are stored in `evaluation_datasets/`, and reports should be saved to `evaluations/` with clear timestamps or semantic versioning.
+Evaluation should be executed directly against the active Qdrant collection and the live BM25 index. 
 
 ## Stress Testing
 
@@ -681,7 +649,7 @@ Whenever the user takes a different approach over any phase of the RAG pipeline,
 To ensure the codebase remains clean, maintainable, and acts like independent microservices:
 
 * **Single Responsibility**: Every file and module must have exactly one primary responsibility. Do not mix API routing, initialization lifecycle, request/response models, and business logic in the same file.
-* **Explicit Dependency Graph**: Higher-level modules (e.g. `src/api`) may depend on lower-level modules (e.g. `src/utils`), but never the reverse. Do not import scripts into the core source directory.
+* **Explicit Dependency Graph**: Higher-level modules may depend on lower-level modules, but never the reverse. Do not import scripts into the core source directory.
 * **Avoid Monoliths**: If a file grows large (e.g. >200 lines) or accumulates multiple disparate functions, it must be decomposed into logical submodules.
 * **No Implicit Duplication**: Do not duplicate complex setup logic (such as initializing embeddings, retrievers, or generators) across multiple endpoints or scripts. Use shared factory functions.
 * **Clean Imports**: Defer heavy standard-library or third-party imports ONLY if absolutely necessary for performance or optional dependencies. Otherwise, place all imports at the top of the file for visibility.

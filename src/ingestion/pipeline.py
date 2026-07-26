@@ -131,8 +131,6 @@ class IncrementalIngestionPipeline:
         
         result = worker.process_batches(all_chunks, tenant_id, registry, job_id, pipeline_logger)
         total_added = result["total_added"]
-        update_progress(95)
-        update_progress(100, status=result["job_status"])
 
         duration = time.time() - start_time
 

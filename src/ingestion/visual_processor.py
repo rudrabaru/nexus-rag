@@ -11,7 +11,6 @@ logger = logging.getLogger(__name__)
 class VisualProcessor:
     """
     Sends extracted images to Gemini Vision and returns structured text descriptions.
-    Zero-cost within Gemini free tier.
     """
 
     PAGE_PROMPT = """

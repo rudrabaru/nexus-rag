@@ -4,8 +4,6 @@ from fastapi import APIRouter, Request, HTTPException, Depends, Security
 from pydantic import BaseModel
 from typing import List, Optional
 import asyncio
-
-from src.ingestion.asset_store import LocalAssetStore
 from src.registry.database import DocumentRegistry
 from src.api.dependencies import get_registry, get_retriever, get_auth_store
 from src.registry.auth_store import AuthStore
@@ -118,16 +116,12 @@ async def delete_document(
             if db_manager:
                 await asyncio.to_thread(db_manager.delete_chunks, chunk_ids=chunk_ids)
 
-        # 2. Delete Assets
-        asset_store = LocalAssetStore()
-        asset_store.delete_doc_assets(doc_id)
-
-        # 3. Delete from Registry
+        # Delete from Registry
         registry.delete_document(doc_id)
 
         return {
             "status": "success",
-            "message": f"Deleted document {doc_id} and all related chunks and assets.",
+            "message": f"Deleted document {doc_id} and all related chunks.",
         }
     except Exception as e:
         logger.error(f"Failed to delete document {doc_id}: {e}")

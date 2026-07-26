@@ -134,6 +134,7 @@ async def query_rag_stream(
 
     try:
         query_semaphore = getattr(request.app.state, "query_semaphore", None)
+        semaphore_acquired = False
         if query_semaphore:
             if query_semaphore.locked():
                 error_msg = "⚠️ **High Traffic Alert:** Our servers are currently at maximum capacity. Please try your query again in a few moments."
@@ -146,100 +147,103 @@ async def query_rag_stream(
                 return StreamingResponse(error_stream(), media_type="text/event-stream")
                 
             await query_semaphore.acquire()
+            semaphore_acquired = True
             
-        registry = getattr(request.app.state, "registry", None)
-        if registry:
-            doc_count = await asyncio.to_thread(registry.get_doc_count, tenant_id)
-            if doc_count == 0:
-                if query_semaphore:
-                    query_semaphore.release()
-                error_msg = "Your workspace has no documents yet. Please go to the 'Add Source(s)' tab and upload a document or URL first."
-                payload = json.dumps({'type': 'token', 'content': error_msg})
-                return StreamingResponse(iter([f"data: {payload}\n\n"]), media_type="text/event-stream")
+        try:
+            registry = getattr(request.app.state, "registry", None)
+            if registry:
+                doc_count = await asyncio.to_thread(registry.get_doc_count, tenant_id)
+                if doc_count == 0:
+                    error_msg = "Your workspace has no documents yet. Please go to the 'Add Source(s)' tab and upload a document or URL first."
+                    payload = json.dumps({'type': 'token', 'content': error_msg})
+                    return StreamingResponse(iter([f"data: {payload}\n\n"]), media_type="text/event-stream")
 
-            retrieval_result = await QueryService.run_retrieval(body, retriever, reranker, rewriter, pipeline_logger, tenant_id)
+                retrieval_result = await QueryService.run_retrieval(body, retriever, reranker, rewriter, pipeline_logger, tenant_id)
 
-            gen_start = datetime.datetime.now(datetime.timezone.utc).timestamp()
-            async def token_generator():
-                try:
-                    full_answer = ""
-                    async for chunk in generator.generate(
-                        body.query, top_k=body.top_k, retrieval_result=retrieval_result, chat_history=body.history, stream=True,
-                    ):
-                        full_answer += chunk
-                        yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
-                    
-                    # Mock result object for sources and evaluator
-                    from src.generating.models import GenerationResult
-                    context_window = generator.context_builder.build(retrieval_result.chunks)
-                    temp_result = GenerationResult(
-                        query=body.query,
-                        answer=full_answer,
-                        context_window=context_window,
-                        retrieval_latency_ms=0,
-                        context_build_latency_ms=0,
-                        generation_latency_ms=0,
-                        total_latency_ms=0,
-                        prompt_tokens=0,
-                        completion_tokens=0
-                    )
+                gen_start = datetime.datetime.now(datetime.timezone.utc).timestamp()
+                async def token_generator():
+                    try:
+                        full_answer = ""
+                        async for chunk in generator.generate(
+                            body.query, top_k=body.top_k, retrieval_result=retrieval_result, chat_history=body.history, stream=True,
+                        ):
+                            full_answer += chunk
+                            yield f"data: {json.dumps({'type': 'token', 'content': chunk})}\n\n"
 
-                    sources = QueryService.construct_sources(temp_result)
-                    sources_dict = [s.model_dump() for s in sources]
-                    yield f"data: {json.dumps({'type': 'sources', 'content': sources_dict})}\n\n"
-                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
+                        # Read actual token counts captured during streaming
+                        prompt_tokens = getattr(generator.llm_client, "last_prompt_tokens", 0)
+                        completion_tokens = getattr(generator.llm_client, "last_completion_tokens", 0)
 
-                    if pipeline_logger:
-                        pipeline_logger.log_event(
-                            "generation_complete", query_text=body.query, completion_tokens=0, prompt_tokens=0,
-                            duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - gen_start) * 1000
+                        from src.generating.models import GenerationResult
+                        context_window = generator.context_builder.build(retrieval_result.chunks)
+                        temp_result = GenerationResult(
+                            query=body.query,
+                            answer=full_answer,
+                            context_window=context_window,
+                            retrieval_latency_ms=0,
+                            context_build_latency_ms=0,
+                            generation_latency_ms=0,
+                            total_latency_ms=0,
+                            prompt_tokens=prompt_tokens,
+                            completion_tokens=completion_tokens
                         )
-                        pipeline_logger.log_event("query_complete", query_text=body.query, duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000)
 
-                    metrics_store = getattr(request.app.state, "metrics_store", None)
-                    log_id = None
-                    if metrics_store:
-                        details = {
-                            "top_k_requested": body.top_k, "faithfulness_reasoning": None,
-                            "retrieved_context": [{"chunk_id": c.chunk_id, "source_url": c.source_url, "similarity_score": c.similarity_score} for c in temp_result.context_window.included_chunks],
-                        }
-                        try:
-                            log_id = metrics_store.log_query(
-                                tenant_id=tenant_id, query=body.query, 
-                                latency_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000,
-                                tokens_used=0, faithfulness_score=None,
-                                details=details, embedding_tokens=retrieval_result.embedding_tokens,
-                                generation_input_tokens=0, generation_output_tokens=0,
-                                rerank_tokens=retrieval_result.rerank_tokens, provider="gemini"
+                        sources = QueryService.construct_sources(temp_result)
+                        sources_dict = [s.model_dump() for s in sources]
+                        yield f"data: {json.dumps({'type': 'sources', 'content': sources_dict})}\n\n"
+                        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+                        if pipeline_logger:
+                            pipeline_logger.log_event(
+                                "generation_complete", query_text=body.query,
+                                completion_tokens=completion_tokens, prompt_tokens=prompt_tokens,
+                                duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - gen_start) * 1000
                             )
-                        except Exception as e:
-                            logger.error(f"Failed to log streaming query: {e}")
+                            pipeline_logger.log_event("query_complete", query_text=body.query, duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000)
 
-                    if body.evaluate_faithfulness:
-                        try:
-                            eval_res = await asyncio.to_thread(evaluator.evaluate, temp_result)
-                            yield f"data: {json.dumps({'type': 'faithfulness', 'content': {'score': eval_res.faithfulness_score, 'reasoning': eval_res.faithfulness_reasoning}})}\n\n"
-                            
-                            if log_id and metrics_store:
-                                try:
-                                    metrics_store.update_faithfulness(log_id, eval_res.faithfulness_score, eval_res.faithfulness_reasoning)
-                                except Exception as e:
-                                    logger.error(f"Failed to update faithfulness score: {e}")
-                                    
-                        except Exception as eval_err:
-                            logger.error(f"Async faithfulness evaluation failed: {eval_err}")
-                finally:
-                    if query_semaphore:
-                        query_semaphore.release()
+                        metrics_store = getattr(request.app.state, "metrics_store", None)
+                        log_id = None
+                        if metrics_store:
+                            details = {
+                                "top_k_requested": body.top_k, "faithfulness_reasoning": None,
+                                "retrieved_context": [{"chunk_id": c.chunk_id, "source_url": c.source_url, "similarity_score": c.similarity_score} for c in temp_result.context_window.included_chunks],
+                            }
+                            try:
+                                log_id = metrics_store.log_query(
+                                    tenant_id=tenant_id, query=body.query,
+                                    latency_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000,
+                                    tokens_used=prompt_tokens + completion_tokens, faithfulness_score=None,
+                                    details=details, embedding_tokens=retrieval_result.embedding_tokens,
+                                    generation_input_tokens=prompt_tokens, generation_output_tokens=completion_tokens,
+                                    rerank_tokens=retrieval_result.rerank_tokens, provider="gemini"
+                                )
+                            except Exception as e:
+                                logger.error(f"Failed to log streaming query: {e}")
 
-        return StreamingResponse(token_generator(), media_type="text/event-stream")
+                        if body.evaluate_faithfulness:
+                            try:
+                                eval_res = await asyncio.to_thread(evaluator.evaluate, temp_result)
+                                yield f"data: {json.dumps({'type': 'faithfulness', 'content': {'score': eval_res.faithfulness_score, 'reasoning': eval_res.faithfulness_reasoning}})}\n\n"
+                                
+                                if log_id and metrics_store:
+                                    try:
+                                        metrics_store.update_faithfulness(log_id, eval_res.faithfulness_score, eval_res.faithfulness_reasoning)
+                                    except Exception as e:
+                                        logger.error(f"Failed to update faithfulness score: {e}")
+                                        
+                            except Exception as eval_err:
+                                logger.error(f"Async faithfulness evaluation failed: {eval_err}")
+                    finally:
+                        if query_semaphore:
+                            query_semaphore.release()
+
+            semaphore_acquired = False
+            return StreamingResponse(token_generator(), media_type="text/event-stream")
+        finally:
+            if semaphore_acquired and query_semaphore:
+                query_semaphore.release()
 
     except Exception as e:
-        if 'query_semaphore' in locals() and query_semaphore:
-            try:
-                query_semaphore.release()
-            except ValueError:
-                pass
         logger.error(f"Error during query/stream: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 

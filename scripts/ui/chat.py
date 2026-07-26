@@ -3,7 +3,7 @@ import requests
 import json
 
 def render_chat_tab(API_BASE_URL, api_headers, top_k, use_reranker, stream_response):
-    st.title("RAG Assistant")
+    st.title("Nexus RAG Assistant")
     if not st.session_state.api_key:
         st.warning("Please generate an API key in the sidebar.")
     else:

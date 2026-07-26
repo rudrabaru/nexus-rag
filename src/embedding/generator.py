@@ -35,8 +35,6 @@ class EmbeddingGenerator:
             "end_time": None,
         }
         self.last_error = None
-        
-        # Optional semaphore injected later if needed
         self.embed_semaphore = None
 
     async def embed_batch(self, texts: list[str], task_type: str = "retrieval.passage") -> tuple[list[list[float]], list[int]]:

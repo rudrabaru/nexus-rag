@@ -1,26 +1,16 @@
----
-title: Nexus RAG
-emoji: 🚀
-colorFrom: blue
-colorTo: indigo
-sdk: docker
-pinned: false
----
-
-# NexusRAG
+# Nexus RAG
 
 An advanced, highly performant Retrieval-Augmented Generation (RAG) system engineered as an in-memory microservice. Designed for extreme accuracy, strict hallucination prevention, and absolute corpus independence.
 
 ## Architecture Vision
 The system ingests heterogeneous data formats and transforms them into an intelligent, vector-searchable knowledge base. It adheres strictly to in-memory processing patterns—avoiding slow intermediate disk writes—while maintaining comprehensive pipeline observability and strict multi-tenant security isolation. Built for the cloud, it gracefully handles complex, stateful human conversations at scale.
 
-## Enterprise Features
+## Features
 
 ### Intelligent Data Ingestion
-- **Multi-Format Extraction:** Seamlessly processes URLs, PDFs, DOCX, MD, CSV, and TXT files.
+- **Multi-Format Extraction:** Seamlessly processes URLs, PDFs, DOCX, MD, and TXT files.
 - **Multimodal Vision:** Optional OCR and visual analysis intercepts images and scanned documents, converting visual data into searchable text.
-- **Dynamic Web & Sitemap Crawling:** Employs headless browser rendering and intelligent Jina Reader integrations. Supports selective XML sitemap URL prefix filtering for targeted subsection indexing.
-- **Bounded Concurrency & Observability:** Features semaphore-based asynchronous concurrency control (`asyncio.Semaphore`) and surfaces granular root-cause error reasons (e.g., HTTP 429 rate limits, bot blocks) in UI and metadata for partial ingestion failures.
+- **Dynamic Web & Sitemap Crawling:** Employs intelligent Jina Reader API integrations for lightweight, serverless web and sitemap scraping without heavy local headless browsers. Supports selective XML sitemap URL prefix filtering for targeted subsection indexing.
 
 ### Semantic Normalization & Chunking
 - **Boilerplate Detection:** Uses statistical corpus frequency analysis to automatically detect and strip navigation menus, footers, and noise. For single-document ingestions, gracefully falls back to structural signals (link density, word count, edge position) when corpus statistics aren't available.
@@ -61,5 +51,5 @@ Detailed architectural and implementation documentation for each phase of the pi
 
 NexusRAG is designed to be deployed as a containerized microservice. It is optimized to run efficiently even on resource-constrained cloud infrastructure by offloading heavy ML computation (embeddings and generation) to specialized external APIs, maintaining a near-zero memory footprint for AI models.
 
-**Storage Requirements:**
-The system is largely stateless with the exception of the local SQLite registry. For production deployments (e.g., GCP Cloud Run, Render, HuggingFace Spaces), Qdrant Cloud handles persistent vector storage, meaning you can safely restart your backend containers without losing your embedding data. Ensure `QDRANT_URL` and `QDRANT_API_KEY` are securely configured.
+**Storage & Auto-Rehydration:**
+The system is largely stateless with the exception of the local SQLite registry. For production deployments (currently, Nexus RAG is deployed on Render.io), Qdrant Cloud handles persistent vector and payload storage. Whenever a container restarts or spins up after being idle, the application boot script (`startup.py`) automatically connects to Qdrant Cloud and rehydrates (rebuilds) the local SQLite database and BM25 full-text search index in memory within seconds. This guarantees zero data loss and persistent multi-tenant isolation without needing paid persistent disks. Ensure `QDRANT_URL` and `QDRANT_API_KEY` are securely configured.

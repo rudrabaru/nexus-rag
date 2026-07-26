@@ -9,7 +9,7 @@ This document captures the explicit architectural tradeoffs and design decisions
 
 ## 2. Managed Cloud Vector Database
 **Decision:** Utilize a managed cloud vector database (Qdrant Cloud) for embedding storage and similarity search rather than an in-process vector store.
-**Rationale:** A managed cloud database simplifies deployment topologies, especially on ephemeral or stateless compute environments (like Render Free Tier or Cloud Run). It ensures persistence across container restarts and removes local disk dependency for vector storage.
+**Rationale:** A managed cloud database simplifies deployment topologies, especially on ephemeral or stateless compute environments (like Render Free Tier, where Nexus RAG is currently deployed). It ensures persistence across container restarts and removes local disk dependency for vector storage.
 **Tradeoff:** It introduces an external network hop on every query, adding network latency (typically 20–100ms) compared to an in-process database. Cost could also scale linearly with data volume depending on the provider.
 
 ## 3. In-Process Sparse Indexing
@@ -22,10 +22,10 @@ This document captures the explicit architectural tradeoffs and design decisions
 **Rationale:** Ingestion involves memory-intensive tasks like extracting text from massive PDFs and rendering heavy web pages. Allowing unbounded concurrent ingestions would quickly lead to out-of-memory (OOM) crashes on small servers.
 **Tradeoff:** Users uploading multiple large documents simultaneously must wait in a queue. This UX impact is mitigated by a background job tracking system: clients receive a Job ID immediately and can poll for status asynchronously without blocking the main application thread.
 
-## 5. Headless Browser Crawling
-**Decision:** Use a headless browser to render HTML pages during web ingestion, rather than simple HTTP GET requests.
-**Rationale:** Modern web pages heavily rely on JavaScript (Single Page Applications) to load content dynamically. Simple scrapers miss this content entirely.
-**Tradeoff:** Headless browsers have a massive RAM footprint. Rendering complex pages adds significant overhead to the ingestion pipeline. Furthermore, sites utilizing aggressive bot-protection services may actively block headless browser engines.
+## 5. Web Crawling via Jina Reader API vs. Local Headless Browser
+**Decision:** Utilize the external Jina Reader API for web document crawling and conversion to clean markdown, rather than running a local headless browser (e.g., Playwright or Puppeteer) or basic HTML scrapers (e.g., BeautifulSoup).
+**Rationale:** Modern web pages rely heavily on JavaScript (Single Page Applications) and complex DOM structures. Simple GET requests and HTML scrapers miss dynamically loaded content and generate noisy boilerplate (navbars, ads, footers). Running a local headless browser requires Chromium dependencies and consumes massive amounts of RAM (100–300MB+ per tab), which would immediately trigger out-of-memory (OOM) crashes on resource-constrained environments like Render's Free Tier (512MB total RAM limit). Delegating DOM rendering, JS execution, and markdown cleaning to Jina Reader maintains a near-zero local memory footprint.
+**Tradeoff:** Introduces an external network dependency and rate-limiting constraints from a third-party service. While Jina Reader handles anti-bot protection and JavaScript execution effectively, network latency or external service degradation can impact web ingestion latency. To mitigate this, the ingestion pipeline implements exponential backoff retries and structured error guards.
 
 ## 6. Rate Limiting Strategy
 **Decision:** Implement application-layer rate limiting that respects reverse-proxy headers (like `X-Forwarded-For`).

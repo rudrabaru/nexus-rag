@@ -11,8 +11,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Run model loading in a background thread so the server
-    # binds to the port immediately and /health starts passing.
+    # Startup: Run model loading in a background thread so the server binds to the port immediately and /health starts passing.
     import asyncio
 
     async def _load_models_async():
@@ -36,9 +35,6 @@ async def lifespan(app: FastAPI):
             app.state.metrics_store = MetricsStore(registry._get_conn)
             app.state.pipeline_logger = PipelineLogger("nexus_rag", registry=registry)
 
-            # Configurable via INGESTION_CONCURRENCY env var.
-            # Production default: 3 (respects Jina 1000 RPM free tier).
-            # Local dev: set INGESTION_CONCURRENCY=10 in .env to avoid artificial throttling.
             ingestion_concurrency = int(os.environ.get("INGESTION_CONCURRENCY", "3"))
             app.state.ingestion_semaphore = asyncio.Semaphore(ingestion_concurrency)
             app.state.embed_semaphore = asyncio.Semaphore(ingestion_concurrency)
@@ -47,7 +43,7 @@ async def lifespan(app: FastAPI):
             if hasattr(app.state, 'embedding_generator') and app.state.embedding_generator:
                 app.state.embedding_generator.embed_semaphore = app.state.embed_semaphore
 
-            # Reset stuck jobs on startup (Fix for C3 race condition)
+            # Reset stuck jobs on startup
             try:
                 registry.reset_stuck_jobs()
             except Exception as e:

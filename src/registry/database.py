@@ -63,11 +63,6 @@ class DocumentRegistry(DocumentStoreMixin, JobStoreMixin, SparseIndexMixin):
             except sqlite3.OperationalError:
                 pass
 
-            try:
-                conn.execute("ALTER TABLE jobs ADD COLUMN metadata TEXT")
-            except sqlite3.OperationalError:
-                pass
-
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS jobs (
                     job_id TEXT PRIMARY KEY,
@@ -82,7 +77,7 @@ class DocumentRegistry(DocumentStoreMixin, JobStoreMixin, SparseIndexMixin):
             """)
             
             try:
-                conn.execute("ALTER TABLE api_keys ADD COLUMN total_embedding_tokens INTEGER DEFAULT 0")
+                conn.execute("ALTER TABLE jobs ADD COLUMN metadata TEXT")
             except sqlite3.OperationalError:
                 pass
 
@@ -94,6 +89,11 @@ class DocumentRegistry(DocumentStoreMixin, JobStoreMixin, SparseIndexMixin):
                     total_embedding_tokens INTEGER DEFAULT 0
                 )
             """)
+
+            try:
+                conn.execute("ALTER TABLE api_keys ADD COLUMN total_embedding_tokens INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
 
             conn.execute("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS fts_chunks USING fts5(

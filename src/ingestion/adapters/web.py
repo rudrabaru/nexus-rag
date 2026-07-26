@@ -48,8 +48,12 @@ class WebAdapter(IngestionAdapter):
                     if attempt == max_retries - 1:
                         raise e
                     await asyncio.sleep(2 ** attempt)
-            content = response.json()["data"]["content"]
-            title = response.json()["data"].get("title", source)
+            resp_json = response.json()
+            if not isinstance(resp_json, dict) or "data" not in resp_json or not isinstance(resp_json["data"], dict) or "content" not in resp_json["data"]:
+                raise ValueError(f"Unexpected Jina Reader API response structure: {resp_json}")
+            data_block = resp_json["data"]
+            content = data_block.get("content", "")
+            title = data_block.get("title", source)
 
         word_count = len(content.split())
         if word_count < 30:

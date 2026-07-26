@@ -63,7 +63,6 @@ class DocumentChunker:
 
         try:
             chunks = self._split_content(content, url, title, doc_name)
-            # Second pass: set total_chunks and update stats
             total = len(chunks)
             tokens_to_words_ratio = 1.3  # heuristic for English text
             for c in chunks:
@@ -117,8 +116,7 @@ class DocumentChunker:
         return all_chunks
 
     def _extract_doc_name(self, url: str) -> str:
-        # Use an MD5 hash of the full URL to guarantee global uniqueness
-        # and prevent collisions across generic documentation sites.
+        # Use an MD5 hash of the full URL to guarantee global uniqueness and prevent collisions across generic documentation sites.
         return hashlib.md5(url.encode("utf-8")).hexdigest()
 
     def _split_content(
@@ -163,7 +161,7 @@ class DocumentChunker:
                         and current_tokens + block.token_count
                         <= self.config.max_chunk_tokens
                     ):
-                        pass  # keep code with explanation
+                        pass
                     else:
                         chunk = build_chunk_metadata(
                             current_chunk_blocks,

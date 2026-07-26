@@ -124,34 +124,14 @@ class UniversalAdapter(IngestionAdapter):
                     pdf = fitz.open(local_path)
                     page_count = len(pdf)
                     logger.info(f"ADAPTER | VISION | PDF has {page_count} pages")
-                    
-                    doc_id = kwargs.get("doc_id")
-                    asset_store = None
-                    if doc_id:
-                        from src.ingestion.asset_store import LocalAssetStore
-                        asset_store = LocalAssetStore()
-                        logger.info(f"ADAPTER | VISION | LocalAssetStore ready for doc_id={doc_id!r}")
-                        
                     page_texts = []
                     for page_num, page in enumerate(pdf):
-                        image_bytes = None
+                        mat = fitz.Matrix(150 / 72, 150 / 72)
+                        pix = page.get_pixmap(matrix=mat)
+                        image_bytes = pix.tobytes("png")
+                        img_kb = len(image_bytes) // 1024
+                        logger.info(f"ADAPTER | VISION | Page {page_num+1}/{page_count}: rendered {img_kb} KB PNG in-memory")
                         
-                        if asset_store:
-                            expected_img_path = asset_store.base_dir / doc_id / f"img_p{page_num + 1}_0.png"
-                            if expected_img_path.exists():
-                                logger.info(f"ADAPTER | VISION | Page {page_num+1}/{page_count}: using cached image")
-                                with open(expected_img_path, "rb") as f:
-                                    image_bytes = f.read()
-                                    
-                        if not image_bytes:
-                            mat = fitz.Matrix(150 / 72, 150 / 72)
-                            pix = page.get_pixmap(matrix=mat)
-                            image_bytes = pix.tobytes("png")
-                            img_kb = len(image_bytes) // 1024
-                            logger.info(f"ADAPTER | VISION | Page {page_num+1}/{page_count}: rendered {img_kb} KB PNG")
-                            if asset_store:
-                                asset_store.save(doc_id, image_bytes, f"img_p{page_num + 1}_0.png")
-                                
                         page_md = await asyncio.to_thread(processor.describe_page, image_bytes)
                         md_chars = len(page_md.strip())
                         logger.info(f"ADAPTER | VISION | Page {page_num+1}/{page_count}: describe_page returned {md_chars} chars")

@@ -1,6 +1,7 @@
 import json
 import time
 import logging
+import hashlib
 from typing import List
 
 from src.retrieving.retriever import RetrievedChunk
@@ -68,9 +69,9 @@ class ContextBuilder:
                 )
                 continue
 
-            fingerprint = chunk.text[:100].strip()
+            fingerprint = hashlib.sha256(chunk.text.strip().encode("utf-8")).hexdigest()
             if fingerprint in seen_fingerprints:
-                logger.debug(f"Excluded chunk {chunk.chunk_id} (duplicate prefix)")
+                logger.debug(f"Excluded chunk {chunk.chunk_id} (duplicate content)")
                 continue
 
             if total_tokens + chunk.token_estimate > self.config.max_context_tokens:

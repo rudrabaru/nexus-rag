@@ -150,7 +150,6 @@ def extract_blocks(
         if not para.strip():
             continue
 
-        # Classify
         is_code = para.strip().startswith("```")
 
         lines = para.split("\n")
@@ -165,7 +164,7 @@ def extract_blocks(
             block_type = "code"
         elif is_table:
             block_type = "table"
-        # 5E.2 Table Reconstruction
+        # Table Reconstruction
         is_orphaned_table = False
         if not is_code and not is_table:
             pipe_lines = [line for line in lines if line.strip().startswith("|") and line.strip().endswith("|")]
@@ -179,7 +178,7 @@ def extract_blocks(
             this_cols = pipe_lines[0].count("|")
             
             if prev_cols == this_cols:
-                # Merge it!
+                # Merge it
                 blocks[-1].text += "\n" + para
                 blocks[-1].token_count = token_counter.count_tokens(blocks[-1].text)
                 current_char += len(para) + 2

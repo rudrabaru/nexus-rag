@@ -118,7 +118,7 @@ class JobStoreMixin:
                 (now,),
             )
 
-            # Update jobs
+            # Then, Update jobs
             conn.execute(
                 """
                 UPDATE jobs SET status = 'failed', error = 'Server restarted during ingestion', finished_at = ?

@@ -64,12 +64,17 @@ class LLMClient:
                 return error_msg, error_msg, 0, 0
 
     async def call_llm_stream(self, prompt: str, is_fallback: bool = False, max_retries: int = 3):
+        self.last_prompt_tokens = 0
+        self.last_completion_tokens = 0
+
         for attempt in range(max_retries + 1):
             yielded_any = False
             try:
                 async for chunk in self._provider_instance.call_stream(prompt):
                     yield chunk
                     yielded_any = True
+                self.last_prompt_tokens = getattr(self._provider_instance, "last_prompt_tokens", 0)
+                self.last_completion_tokens = getattr(self._provider_instance, "last_completion_tokens", 0)
                 return
             except Exception as e:
                 error_str = str(e)
@@ -92,6 +97,8 @@ class LLMClient:
                         )
                         async for c in self._fallback_client.call_llm_stream(prompt, is_fallback=True):
                             yield c
+                        self.last_prompt_tokens = getattr(self._fallback_client, "last_prompt_tokens", 0)
+                        self.last_completion_tokens = getattr(self._fallback_client, "last_completion_tokens", 0)
                         return
                 
                 error_msg = f"[Generation failed: {type(e).__name__}: {e}]"
