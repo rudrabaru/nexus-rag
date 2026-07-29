@@ -1,5 +1,6 @@
 import os
 import logging
+import secrets
 from fastapi import APIRouter, Request, HTTPException, Depends, Security
 from pydantic import BaseModel
 from typing import List, Optional
@@ -92,7 +93,7 @@ async def delete_document(
     3. Document Registry
     """
     expected_admin_key = os.environ.get("RAG_API_KEY")
-    is_admin = admin_key and expected_admin_key and admin_key == expected_admin_key
+    is_admin = admin_key and expected_admin_key and secrets.compare_digest(admin_key, expected_admin_key)
     
     tenant_id = None
     if not is_admin:

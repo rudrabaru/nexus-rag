@@ -81,7 +81,7 @@ def _init_components() -> PipelineComponents:
     config = GenerationConfig(
         provider=provider, model_name=model_name, fallback_config=fallback_config
     )
-    generator = RAGGenerator(retriever=retriever, config=config)
+    generator = RAGGenerator(config=config)
     evaluator = FaithfulnessEvaluator(config=config)
     
     rewriter_config = GenerationConfig(

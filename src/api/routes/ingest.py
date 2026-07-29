@@ -36,6 +36,7 @@ async def ingest_document(
     file: UploadFile = File(None),
     tenant_id: Optional[str] = Depends(get_current_tenant),
     extract_visuals: bool = Form(False),
+    resume: bool = Form(False),
     registry: DocumentRegistry = Depends(get_registry),
     semaphore: asyncio.Semaphore = Depends(get_ingestion_semaphore),
     retriever: Any = Depends(get_retriever),
@@ -71,7 +72,7 @@ async def ingest_document(
                 return {"job_id": dummy_job_id, "status": "complete"}
 
         old_doc = registry.get_document(doc_id)
-        if old_doc:
+        if old_doc and not resume:
             old_chunk_ids = registry.delete_document(doc_id)
             if old_chunk_ids:
                 try:
@@ -91,7 +92,7 @@ async def ingest_document(
             _process_ingestion,
             job_id, doc_id, source_path, tenant_id, extract_visuals, temp_dir,
             registry, semaphore, retriever, canonical_url, content_hash,
-            getattr(request.app.state, "embedding_generator", None), pipeline_logger
+            getattr(request.app.state, "embedding_generator", None), pipeline_logger, resume
         )
 
         response = {"job_id": job_id, "status": "queued"}

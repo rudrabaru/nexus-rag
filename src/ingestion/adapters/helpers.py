@@ -41,34 +41,32 @@ def strip_tracked_change_artifacts(markdown: str) -> str:
     # Strip zero-width and soft-hyphen characters
     markdown = re.sub(r"[\u200b\u200c\u200d\ufeff\u00ad]", "", markdown)
 
-    # Strip adjacent duplicate phrases (3+ word sequences repeated within 50 chars)
+    # Strip adjacent duplicate phrases (3+ to 11 words sequence repeated within 50 chars)
     # This targets patterns like: "the process the process" or "is running is running"
-    markdown = re.sub(r"\b(\w+(?:\s+\w+){2,})\s+\1\b", r"\1", markdown)
+    markdown = re.sub(r"\b(\w+(?:\s+\w+){2,10})\s+\1\b", r"\1", markdown)
 
     return markdown
 
-def download_file(url: str) -> str:
-    """Downloads a file from a URL to a temporary local path."""
-    _temp_file = tempfile.NamedTemporaryFile(delete=False)
-    headers = {"User-Agent": "Mozilla/5.0"}
-    req = urllib.request.Request(url, headers=headers)
+async def download_file_async(url: str) -> str:
+    """Downloads a file from a URL to a temporary local path asynchronously."""
+    import httpx
     
+    _temp_file = tempfile.NamedTemporaryFile(delete=False)
     max_size = 50 * 1024 * 1024 # 50 MB limit
     downloaded_size = 0
-    chunk_size = 65536 # 64 KB chunks
 
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            while True:
-                chunk = resp.read(chunk_size)
-                if not chunk:
-                    break
-                downloaded_size += len(chunk)
-                if downloaded_size > max_size:
-                    raise ValueError(f"File exceeds 50MB limit: {url}")
-                _temp_file.write(chunk)
-                
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+            async with client.stream("GET", url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
+                resp.raise_for_status()
+                async for chunk in resp.aiter_bytes(chunk_size=65536):
+                    downloaded_size += len(chunk)
+                    if downloaded_size > max_size:
+                        raise ValueError(f"File exceeds 50MB limit: {url}")
+                    _temp_file.write(chunk)
+                    
         _temp_file.flush()
+        _temp_file.close()
         return _temp_file.name
     except Exception as e:
         _temp_file.close()

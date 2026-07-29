@@ -14,18 +14,18 @@ class HybridRetriever:
         self.registry = registry
 
     async def retrieve(
-        self, query: str, top_k: int = 5, tenant_id: Optional[str] = None, pipeline_logger: Any = None
+        self, query: str, top_k: int = 5, tenant_id: Optional[str] = None, pipeline_logger: Any = None, allow_global: bool = False
     ) -> RetrievalResult:
         start_time = time.time()
 
         dense_result = await self.dense_retriever.retrieve(
-            query, top_k=top_k, tenant_id=tenant_id
+            query, top_k=top_k, tenant_id=tenant_id, allow_global=allow_global
         )
         dense_chunks = dense_result.chunks
 
         sparse_start = time.time()
         
-        fts_results, fallback_used = self.registry.search_fts5(query, tenant_id, limit=top_k)
+        fts_results, fallback_used = self.registry.search_fts5(query, tenant_id, limit=top_k, allow_global=allow_global)
         if fallback_used and pipeline_logger:
             pipeline_logger.log_event("fts_fallback_triggered", query=query, tenant_id=tenant_id)
             

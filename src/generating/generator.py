@@ -10,7 +10,6 @@ import logging
 import time
 from typing import List
 
-from src.retrieving.retriever import DenseRetriever
 from .context_builder import ContextBuilder
 from .models import GenerationConfig, GenerationResult
 from .prompt_template import build_prompt
@@ -28,8 +27,7 @@ class RAGGenerator:
     Each step is timed and recorded in the GenerationResult for full observability.
     """
 
-    def __init__(self, retriever: DenseRetriever, config: GenerationConfig = None):
-        self.retriever = retriever
+    def __init__(self, config: GenerationConfig = None):
         self.config = config or GenerationConfig()
         self.context_builder = ContextBuilder(self.config)
         self.llm_client = LLMClient(self.config)
@@ -45,12 +43,10 @@ class RAGGenerator:
         """Run the full RAG pipeline for a single query. Returns GenerationResult, or a token generator if stream=True."""
         total_start = time.time()
 
-        retrieve_start = time.time()
         if retrieval_result is None:
-            retrieval_result = self.retriever.retrieve(query, top_k=top_k)
-        retrieval_latency = (time.time() - retrieve_start) * 1000
-        if retrieval_result.latency_ms > 0 and retrieval_latency < 1.0:
-            retrieval_latency = retrieval_result.latency_ms
+            raise ValueError("retrieval_result must be provided")
+            
+        retrieval_latency = retrieval_result.latency_ms
 
         query_log_str = query[:60] + "..." if len(query) > 60 else query
         logger.info(

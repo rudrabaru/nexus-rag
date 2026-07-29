@@ -25,7 +25,7 @@ class DenseRetriever:
         self.jina_api_key = os.environ.get("JINA_API_KEY")
 
     async def retrieve(
-        self, query: str, top_k: int = 5, tenant_id: Optional[str] = None, pipeline_logger: Optional[Any] = None
+        self, query: str, top_k: int = 5, tenant_id: Optional[str] = None, pipeline_logger: Optional[Any] = None, allow_global: bool = False
     ) -> RetrievalResult:
         start_time = time.time()
 
@@ -98,7 +98,8 @@ class DenseRetriever:
         merged = self.vector_store.search(
             query_embedding=query_embedding,
             top_k=safe_top_k,
-            tenant_id=tenant_id
+            tenant_id=tenant_id,
+            allow_global=allow_global
         )
 
         search_latency = (time.time() - search_start) * 1000

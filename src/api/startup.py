@@ -11,6 +11,11 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not os.environ.get("RAG_API_KEY"):
+        raise RuntimeError("RAG_API_KEY environment variable is missing. Startup aborted.")
+    if not os.environ.get("REGISTRATION_SECRET"):
+        raise RuntimeError("REGISTRATION_SECRET environment variable is missing. Startup aborted.")
+
     # Startup: Run model loading in a background thread so the server binds to the port immediately and /health starts passing.
     import asyncio
 

@@ -36,8 +36,8 @@ class OptionalReranker:
         
         import asyncio
         rerank_tokens = 0
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            max_retries = 3
+        async with httpx.AsyncClient(timeout=45.0) as client:
+            max_retries = 5
             for attempt in range(max_retries):
                 try:
                     response = await client.post(
@@ -57,7 +57,13 @@ class OptionalReranker:
                     break
                 except Exception as e:
                     if attempt == max_retries - 1:
-                        raise e
+                        logger.error(f"Reranker API failed after {max_retries} attempts: {e}. Gracefully degrading to un-reranked chunks.")
+                        return RetrievalResult(
+                            query=query, 
+                            top_k=top_k, 
+                            latency_ms=(time.time() - start_time) * 1000, 
+                            chunks=candidates[:top_k]
+                        )
                     await asyncio.sleep(2 ** attempt)
             
         reranked_chunks = []

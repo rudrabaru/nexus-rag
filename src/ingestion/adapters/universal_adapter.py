@@ -7,7 +7,7 @@ from markitdown import MarkItDown
 import os
 import asyncio
 
-from src.ingestion.adapters.helpers import promote_fake_headings, strip_tracked_change_artifacts, download_file
+from src.ingestion.adapters.helpers import promote_fake_headings, strip_tracked_change_artifacts, download_file_async
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +55,23 @@ class UniversalAdapter(IngestionAdapter):
 
         if source.startswith("http://") or source.startswith("https://"):
             try:
-                local_path = download_file(source)
+                import socket
+                import ipaddress
+                from urllib.parse import urlparse
+                
+                parsed = urlparse(source)
+                hostname = parsed.hostname
+                
+                if not hostname:
+                    raise ValueError("Invalid URL format.")
+                    
+                ip = socket.gethostbyname(hostname)
+                parsed_ip = ipaddress.ip_address(ip)
+                
+                if parsed_ip.is_private or parsed_ip.is_loopback or parsed_ip.is_link_local:
+                    raise ValueError(f"SSRF blocked: Host resolves to internal IP {ip}")
+                    
+                local_path = await download_file_async(source)
                 _temp_file = local_path
             except Exception as e:
                 logger.error(f"Failed to download {source}: {e}")

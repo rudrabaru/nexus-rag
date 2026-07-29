@@ -91,12 +91,6 @@ class EmbeddingGenerator:
         """
         Takes a list of ChunkMetadata and returns a list of EmbeddedChunk with vectors and failed indices.
         """
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop and loop.is_running():
-            raise RuntimeError("generate_embeddings must be run in a separate thread if an event loop is already running, or use generate_embeddings_async.")
         return asyncio.run(self.generate_embeddings_async(chunks))
         
     async def generate_embeddings_async(self, chunks: List[ChunkMetadata]) -> tuple[List[EmbeddedChunk], list[int]]:

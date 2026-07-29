@@ -136,7 +136,7 @@ async def query_rag_stream(
         query_semaphore = getattr(request.app.state, "query_semaphore", None)
         semaphore_acquired = False
         if query_semaphore:
-            if query_semaphore.locked():
+            if query_semaphore._value <= 0:
                 error_msg = "⚠️ **High Traffic Alert:** Our servers are currently at maximum capacity. Please try your query again in a few moments."
                 payload = json.dumps({'type': 'token', 'content': error_msg})
                 
