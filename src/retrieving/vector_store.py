@@ -129,24 +129,24 @@ class QdrantManager:
         except Exception:
             return 0
 
-    def search(self, query_embedding: List[float], top_k: int, tenant_id: str = None) -> List[Dict[str, Any]]:
+    def search(self, query_embedding: List[float], top_k: int, tenant_id: str = None, allow_global: bool = False) -> List[Dict[str, Any]]:
         """
         Searches the Qdrant collection using strict tenant_id payload filtering.
         Returns a list of dicts with 'id', 'score', 'meta', and 'doc'.
         """
+        if not allow_global and (not tenant_id or tenant_id in ("ALL", "*")):
+            # Production security boundary: if tenant_id is missing or ALL/wildcard without allow_global=True, block search
+            return []
+
         must_conditions = []
-        if tenant_id:
+        if allow_global and (not tenant_id or tenant_id in ("ALL", "*")):
+            # Trusted evaluation pathway: allow global search across all tenants
+            pass
+        elif tenant_id and tenant_id not in ("ALL", "*"):
             must_conditions.append(
                 rest.FieldCondition(
                     key="tenant_id",
                     match=rest.MatchValue(value=tenant_id)
-                )
-            )
-        else:
-            must_conditions.append(
-                rest.FieldCondition(
-                    key="tenant_id",
-                    match=rest.MatchValue(value="__nonexistent__")
                 )
             )
 
@@ -189,3 +189,35 @@ class QdrantManager:
         except Exception as e:
             logger.error(f"Failed to delete chunks from Qdrant: {e}")
             return False
+
+    def get_existing_urls(self, tenant_id: str, doc_id: str) -> set:
+        """
+        Retrieves all unique source_urls for a specific document.
+        Useful for resuming interrupted sitemap ingestions.
+        """
+        existing_urls = set()
+        must_conditions = [
+            rest.FieldCondition(key="tenant_id", match=rest.MatchValue(value=tenant_id)),
+            rest.FieldCondition(key="source_document", match=rest.MatchValue(value=doc_id))
+        ]
+        
+        offset = None
+        try:
+            while True:
+                results, offset = self.client.scroll(
+                    collection_name=self.collection_name,
+                    scroll_filter=rest.Filter(must=must_conditions),
+                    with_payload=["source_url"],
+                    limit=100,
+                    offset=offset
+                )
+                for res in results:
+                    if res.payload and "source_url" in res.payload:
+                        existing_urls.add(res.payload["source_url"])
+                
+                if not offset:
+                    break
+        except Exception as e:
+            logger.error(f"Failed to get existing urls for {doc_id}: {e}")
+            
+        return existing_urls

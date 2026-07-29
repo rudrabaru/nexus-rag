@@ -95,6 +95,7 @@ async def _process_ingestion(
     content_hash: Optional[str] = None,
     embedding_generator: Any = None,
     pipeline_logger: Any = None,
+    resume: bool = False,
 ):
     start_time = time.time()
     tag = f"[job={job_id[:8]} doc={doc_id[:8]}]"
@@ -136,8 +137,30 @@ async def _process_ingestion(
             failed_reasons = []
             sem = asyncio.Semaphore(4)
 
+            existing_urls = set()
+            if resume and retriever:
+                try:
+                    vector_store = getattr(retriever, "vector_store", getattr(getattr(retriever, "dense_retriever", None), "vector_store", None))
+                    if vector_store and hasattr(vector_store, "get_existing_urls"):
+                        # Get existing URLs sequentially to avoid breaking the current event loop context
+                        # Since qdrant client scroll is sync under the hood, we can wrap it or run to thread.
+                        # Wait, get_existing_urls is synchronous.
+                        existing_urls = await asyncio.to_thread(vector_store.get_existing_urls, tenant_id, doc_id)
+                        if existing_urls:
+                            logger.info(f"{tag} Resuming ingestion: Found {len(existing_urls)} previously indexed pages.")
+                except Exception as e:
+                    logger.warning(f"{tag} Failed to fetch existing URLs for resume: {e}")
+
             async def fetch_url(u):
                 nonlocal processed, failed_pages
+                if u in existing_urls:
+                    processed += 1
+                    logger.info(f"{tag} Skipping previously indexed URL: {u}")
+                    if registry:
+                        pct = 5 + int(45 * processed / total)
+                        registry.update_job_status(job_id, "processing", pct, metadata={"total_pages": total, "indexed_pages": processed - failed_pages, "failed_pages": failed_pages})
+                    return None, None
+
                 async with sem:
                     try:
                         res = await dispatcher.web_adapter.ingest(u, extract_visuals=extract_visuals)

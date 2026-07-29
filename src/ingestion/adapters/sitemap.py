@@ -15,6 +15,8 @@ IGNORED_EXTENSIONS = {
     ".mp3", ".mp4", ".avi", ".mov", ".woff", ".woff2", ".ttf", ".eot"
 }
 
+MAX_SITEMAP_PAGES = 500
+
 class SitemapAdapter(IngestionAdapter):
     """
     Adapter for parsing XML sitemaps and extracting clean canonical URLs.
@@ -24,6 +26,23 @@ class SitemapAdapter(IngestionAdapter):
 
     async def _fetch_xml(self, client: httpx.AsyncClient, url: str) -> bytes:
         logger.info(f"SitemapAdapter fetching XML: {url}")
+        
+        import socket
+        import ipaddress
+        from urllib.parse import urlparse
+        
+        try:
+            parsed = urlparse(url)
+            hostname = parsed.hostname
+            if hostname:
+                ip = socket.gethostbyname(hostname)
+                ip_obj = ipaddress.ip_address(ip)
+                if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
+                    raise ValueError(f"URL resolves to private/internal IP: {ip}")
+        except Exception as e:
+            logger.error(f"SSRF validation failed for sitemap {url}: {e}")
+            raise ValueError(f"Invalid or restricted URL: {e}")
+
         resp = await client.get(url, follow_redirects=True, timeout=15.0)
         resp.raise_for_status()
         return resp.content
@@ -98,18 +117,26 @@ class SitemapAdapter(IngestionAdapter):
 
             # Process top-level URLs
             for u in page_urls:
+                if len(clean_urls) >= MAX_SITEMAP_PAGES:
+                    logger.warning(f"Sitemap reached maximum capacity of {MAX_SITEMAP_PAGES} pages.")
+                    break
                 if u not in seen_urls and self._is_valid_page_url(u):
                     seen_urls.add(u)
                     clean_urls.append(u)
 
             # Handle sitemapindex recursion (max 10 child sitemaps, 1 level deep)
-            if child_sitemaps:
+            if child_sitemaps and len(clean_urls) < MAX_SITEMAP_PAGES:
                 logger.info(f"Sitemap index detected with {len(child_sitemaps)} child sitemaps. Recursively fetching up to 10...")
                 for child_url in child_sitemaps[:10]:
+                    if len(clean_urls) >= MAX_SITEMAP_PAGES:
+                        break
                     try:
                         child_xml = await self._fetch_xml(client, child_url)
                         child_pages, _ = self._extract_urls_from_xml(child_xml)
                         for u in child_pages:
+                            if len(clean_urls) >= MAX_SITEMAP_PAGES:
+                                logger.warning(f"Sitemap reached maximum capacity of {MAX_SITEMAP_PAGES} pages during recursion.")
+                                break
                             if u not in seen_urls and self._is_valid_page_url(u):
                                 seen_urls.add(u)
                                 clean_urls.append(u)
