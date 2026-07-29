@@ -1,4 +1,4 @@
-# GCP RAG System - Quickstart
+#Nexus RAG System - Quickstart
 
 This is a production-grade, no-framework RAG (Retrieval-Augmented Generation) system built entirely from scratch with FastAPI, Qdrant Cloud, and Streamlit.
 

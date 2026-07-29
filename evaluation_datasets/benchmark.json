@@ -1,0 +1,561 @@
+[
+  {
+    "query": "What are the changes to PEP 594 regarding dead batteries in the Python standard library?",
+    "expected_topic": "Python 3.13 Standard Library Deprecations",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "3.13.html"
+    ],
+    "acceptable_headings": [
+      "PEP 594: Remove"
+    ],
+    "difficulty": "Easy",
+    "category": "technical_docs"
+  },
+  {
+    "query": "How is the Global Interpreter Lock (GIL) removed or disabled in Python 3.13 experimental free-threaded build?",
+    "expected_topic": "Python 3.13 Free-Threaded GIL Removal",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "3.13.html"
+    ],
+    "acceptable_headings": [
+      "PEP 703"
+    ],
+    "difficulty": "Medium",
+    "category": "technical_docs"
+  },
+  {
+    "query": "What improvements were made to the interactive interpreter and error tracebacks in Python 3.13?",
+    "expected_topic": "Python 3.13 Interactive Interpreter",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "3.13.html"
+    ],
+    "acceptable_headings": [
+      "Interactive Interpreter"
+    ],
+    "difficulty": "Easy",
+    "category": "technical_docs"
+  },
+  {
+    "query": "What is the experimental JIT compiler introduced in Python 3.13 and how does copy-and-patch compilation work?",
+    "expected_topic": "Python 3.13 Experimental JIT",
+    "expected_content_type": "technical_spec",
+    "acceptable_documents": [
+      "3.13.html"
+    ],
+    "acceptable_headings": [
+      "PEP 744"
+    ],
+    "difficulty": "Hard",
+    "category": "technical_docs"
+  },
+  {
+    "query": "Which C API functions are deprecated or scheduled for pending removal in Python 3.15 according to Python 3.13 release notes?",
+    "expected_topic": "Python 3.13 C API Deprecations",
+    "expected_content_type": "code_api",
+    "acceptable_documents": [
+      "3.13.html"
+    ],
+    "acceptable_headings": [
+      "Pending removal in Python 3.15"
+    ],
+    "difficulty": "Medium",
+    "category": "technical_docs"
+  },
+  {
+    "query": "What was the thermal protection system of the Space Shuttle made of and how did it protect the orbiter during atmospheric re-entry?",
+    "expected_topic": "Space Shuttle Thermal Protection System",
+    "expected_content_type": "technical_spec",
+    "acceptable_documents": [
+      "Space_Shuttle"
+    ],
+    "acceptable_headings": [
+      "Thermal protection system",
+      "Orbiter"
+    ],
+    "difficulty": "Medium",
+    "category": "technical_docs"
+  },
+  {
+    "query": "What were the root causes and findings of the Challenger and Columbia Space Shuttle disaster investigations?",
+    "expected_topic": "Space Shuttle Disasters",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "Space_Shuttle"
+    ],
+    "acceptable_headings": [
+      "Challenger disaster",
+      "Columbia disaster",
+      "Accidents"
+    ],
+    "difficulty": "Medium",
+    "category": "technical_docs"
+  },
+  {
+    "query": "How did the Space Shuttle Main Engines (RS-25) operate during ascent and staging?",
+    "expected_topic": "Space Shuttle Main Engines",
+    "expected_content_type": "technical_spec",
+    "acceptable_documents": [
+      "Space_Shuttle"
+    ],
+    "acceptable_headings": [
+      "Space Shuttle Main Engine",
+      "Ascent"
+    ],
+    "difficulty": "Hard",
+    "category": "technical_docs"
+  },
+  {
+    "query": "How do you use the pipeline API in Hugging Face Transformers for sentiment analysis or text classification?",
+    "expected_topic": "Transformers Pipeline API Usage",
+    "expected_content_type": "code_api",
+    "acceptable_documents": [
+      "Transformers_README.md"
+    ],
+    "acceptable_headings": [
+      "pipeline",
+      "Quick tour",
+      "Usage"
+    ],
+    "difficulty": "Easy",
+    "category": "technical_docs"
+  },
+  {
+    "query": "How do you load a pretrained BERT or GPT model and tokenizer using AutoModel and AutoTokenizer in Transformers?",
+    "expected_topic": "Transformers AutoModel and AutoTokenizer",
+    "expected_content_type": "code_api",
+    "acceptable_documents": [
+      "Transformers_README.md"
+    ],
+    "acceptable_headings": [
+      "AutoModel",
+      "AutoTokenizer",
+      "Quick tour"
+    ],
+    "difficulty": "Medium",
+    "category": "technical_docs"
+  },
+  {
+    "query": "Why is HTTP considered a stateless protocol and how do cookies provide session management across requests?",
+    "expected_topic": "HTTP Statelessness and Cookies",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "HTTP/Overview"
+    ],
+    "acceptable_headings": [
+      "HTTP is stateless, but not sessionless",
+      "stateless"
+    ],
+    "difficulty": "Medium",
+    "category": "networking"
+  },
+  {
+    "query": "What are the structural components of an HTTP request message and HTTP response message?",
+    "expected_topic": "HTTP Message Structure",
+    "expected_content_type": "technical_spec",
+    "acceptable_documents": [
+      "HTTP/Overview"
+    ],
+    "acceptable_headings": [
+      "HTTP Messages",
+      "Requests",
+      "Responses"
+    ],
+    "difficulty": "Easy",
+    "category": "networking"
+  },
+  {
+    "query": "What are the core differences between HTTP/1.1, HTTP/2 multiplexing, and HTTP/3 protocol features?",
+    "expected_topic": "HTTP Evolution and Multiplexing",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "HTTP/Overview"
+    ],
+    "acceptable_headings": [
+      "HTTP/2",
+      "HTTP/3",
+      "evolution"
+    ],
+    "difficulty": "Hard",
+    "category": "networking"
+  },
+  {
+    "query": "What is the client-server architecture in HTTP and what role do user agents and proxies play in request routing?",
+    "expected_topic": "HTTP Client Server Architecture",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "HTTP/Overview"
+    ],
+    "acceptable_headings": [
+      "Client-server architecture",
+      "Proxies",
+      "User-agent"
+    ],
+    "difficulty": "Easy",
+    "category": "networking"
+  },
+  {
+    "query": "What are the differences between HA VPN, Cloud Interconnect, and VPC Peering for connecting on-premises networks to Google Cloud?",
+    "expected_topic": "GCP Hybrid Connectivity Options",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "3.1_Interconnecting_Networks.pdf"
+    ],
+    "acceptable_headings": [
+      "HA VPN",
+      "Cloud Interconnect",
+      "VPC"
+    ],
+    "difficulty": "Medium",
+    "category": "networking"
+  },
+  {
+    "query": "How does BGP routing exchange routes across VPN tunnels in Google Cloud HA VPN topology?",
+    "expected_topic": "GCP BGP Routing in HA VPN",
+    "expected_content_type": "technical_spec",
+    "acceptable_documents": [
+      "3.1_Interconnecting_Networks.pdf"
+    ],
+    "acceptable_headings": [
+      "BGP",
+      "HA VPN to peer VPN gateway topology",
+      "VPN Tunnel"
+    ],
+    "difficulty": "Hard",
+    "category": "networking"
+  },
+  {
+    "query": "When should you choose an external HTTP(S) Application Load Balancer versus an internal or TCP/UDP Load Balancer in Google Cloud?",
+    "expected_topic": "GCP Load Balancer Selection Criteria",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "3.2_Load_Balancing_and_Autoscaling.pdf"
+    ],
+    "acceptable_headings": [
+      "Summary of Google Cloud load balancers",
+      "Application Load Balancer",
+      "Target Proxy"
+    ],
+    "difficulty": "Medium",
+    "category": "networking"
+  },
+  {
+    "query": "How do you configure content-based load balancing using URL maps and backend services in Google Cloud?",
+    "expected_topic": "GCP Content Based Load Balancing",
+    "expected_content_type": "procedural",
+    "acceptable_documents": [
+      "3.2_Load_Balancing_and_Autoscaling.pdf"
+    ],
+    "acceptable_headings": [
+      "Content-based load balancing",
+      "URL Map",
+      "Backend Configuration"
+    ],
+    "difficulty": "Medium",
+    "category": "networking"
+  },
+  {
+    "query": "How do managed instance group autoscaling policies use CPU utilization metrics to dynamically scale VM instances?",
+    "expected_topic": "GCP MIG Autoscaling Policies",
+    "expected_content_type": "procedural",
+    "acceptable_documents": [
+      "3.2_Load_Balancing_and_Autoscaling.pdf"
+    ],
+    "acceptable_headings": [
+      "VM graph helps set CPU utilization",
+      "Instance Group",
+      "Autoscaling"
+    ],
+    "difficulty": "Hard",
+    "category": "cloud_infra"
+  },
+  {
+    "query": "Why is Infrastructure as Code (IaC) useful for creating identical dev, test, and production environments in CI/CD pipelines?",
+    "expected_topic": "Infrastructure as Code Benefits",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "3.3_Infrastructure_Automation.pdf"
+    ],
+    "acceptable_headings": [
+      "Infrastructure as code (IaC)",
+      "provisioning"
+    ],
+    "difficulty": "Easy",
+    "category": "cloud_infra"
+  },
+  {
+    "query": "What is the Terraform block syntax for defining a google_compute_firewall resource with allowed TCP ports in GCP?",
+    "expected_topic": "Terraform GCP Firewall Syntax",
+    "expected_content_type": "code_api",
+    "acceptable_documents": [
+      "3.3_Infrastructure_Automation.pdf"
+    ],
+    "acceptable_headings": [
+      "vpc_firewall_create",
+      "google_compute_firewall",
+      "Block body"
+    ],
+    "difficulty": "Medium",
+    "category": "cloud_infra"
+  },
+  {
+    "query": "How do you set up alerting policies and log sinks in Google Cloud Monitoring and Cloud Logging?",
+    "expected_topic": "GCP Cloud Monitoring Alerting",
+    "expected_content_type": "procedural",
+    "acceptable_documents": [
+      "4.Resource Monitoring.md"
+    ],
+    "acceptable_headings": [
+      "Monitoring",
+      "Alerting",
+      "Logging"
+    ],
+    "difficulty": "Medium",
+    "category": "cloud_infra"
+  },
+  {
+    "query": "What are the managed storage and database service offerings in Google Cloud such as Cloud SQL, Spanner, and BigQuery?",
+    "expected_topic": "GCP Managed Database Services",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "3.4_Managed_Services.pdf"
+    ],
+    "acceptable_headings": [
+      "Managed Services",
+      "Cloud SQL",
+      "Spanner",
+      "BigQuery"
+    ],
+    "difficulty": "Easy",
+    "category": "cloud_infra"
+  },
+  {
+    "query": "How do you integrate Google Pay using the Web Component in Adyen checkout?",
+    "expected_topic": "Adyen Google Pay Web Component Integration",
+    "expected_content_type": "procedural",
+    "acceptable_documents": [
+      "google-pay/web-component"
+    ],
+    "acceptable_headings": [
+      "Web Component",
+      "Configuration",
+      "googlePay"
+    ],
+    "difficulty": "Medium",
+    "category": "api_docs"
+  },
+  {
+    "query": "How do you implement Express Checkout with Google Pay Web Component to shorten the payment flow?",
+    "expected_topic": "Adyen Google Pay Express Checkout",
+    "expected_content_type": "procedural",
+    "acceptable_documents": [
+      "google-pay/web-component/express-checkout"
+    ],
+    "acceptable_headings": [
+      "Express Checkout",
+      "isExpress",
+      "paymentData"
+    ],
+    "difficulty": "Hard",
+    "category": "api_docs"
+  },
+  {
+    "query": "What is the token decryption process and private key handling for Google Pay API-only integrations with Adyen?",
+    "expected_topic": "Adyen Google Pay API-Only Token Decryption",
+    "expected_content_type": "security",
+    "acceptable_documents": [
+      "api-only/google-pay-token-decryption"
+    ],
+    "acceptable_headings": [
+      "token decryption",
+      "private key",
+      "paymentToken"
+    ],
+    "difficulty": "Hard",
+    "category": "security"
+  },
+  {
+    "query": "How do you configure Google Pay in an Adyen Flutter component integration for Android and iOS?",
+    "expected_topic": "Adyen Google Pay Flutter Component",
+    "expected_content_type": "procedural",
+    "acceptable_documents": [
+      "google-pay/flutter-component"
+    ],
+    "acceptable_headings": [
+      "Flutter Component",
+      "GooglePayConfiguration",
+      "environment"
+    ],
+    "difficulty": "Medium",
+    "category": "api_docs"
+  },
+  {
+    "query": "How do you integrate Google Pay in React Native using the Adyen Drop-in UI?",
+    "expected_topic": "Adyen Google Pay React Native Drop-in",
+    "expected_content_type": "procedural",
+    "acceptable_documents": [
+      "google-pay/react-native-drop-in"
+    ],
+    "acceptable_headings": [
+      "React Native Drop-in",
+      "AdyenDropIn",
+      "googlePay"
+    ],
+    "difficulty": "Medium",
+    "category": "api_docs"
+  },
+  {
+    "query": "How do you integrate Adyen Online Banking India using the Web Component or Drop-in?",
+    "expected_topic": "Adyen Online Banking India Web Component",
+    "expected_content_type": "procedural",
+    "acceptable_documents": [
+      "online-banking-india/web-component",
+      "online-banking-india/web-drop-in",
+      "online-banking-india/web"
+    ],
+    "acceptable_headings": [
+      "Online Banking India",
+      "billdesk",
+      "onlineBanking_IN"
+    ],
+    "difficulty": "Medium",
+    "category": "api_docs"
+  },
+  {
+    "query": "What are the API-only request parameters required for initiating an Online Banking India payment with Adyen?",
+    "expected_topic": "Adyen Online Banking India API-Only Parameters",
+    "expected_content_type": "code_api",
+    "acceptable_documents": [
+      "online-banking-india/api-only"
+    ],
+    "acceptable_headings": [
+      "API-only",
+      "paymentMethod",
+      "onlineBanking_IN"
+    ],
+    "difficulty": "Hard",
+    "category": "api_docs"
+  },
+  {
+    "query": "How does Satoshi Nakamoto define a coin as a chain of digital signatures and how are transactions verified in Bitcoin?",
+    "expected_topic": "Bitcoin Chain of Digital Signatures",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "bitcoin.pdf"
+    ],
+    "acceptable_headings": [
+      "Transactions",
+      "electronic coin",
+      "digital signature"
+    ],
+    "difficulty": "Medium",
+    "category": "cryptocurrency"
+  },
+  {
+    "query": "How does the proof-of-work mechanism use a timestamp server and hashcash CPU effort to prevent double-spending in Bitcoin?",
+    "expected_topic": "Bitcoin Proof of Work Mechanism",
+    "expected_content_type": "technical_spec",
+    "acceptable_documents": [
+      "bitcoin.pdf"
+    ],
+    "acceptable_headings": [
+      "Proof-of-Work",
+      "Timestamp Server",
+      "nonce"
+    ],
+    "difficulty": "Hard",
+    "category": "cryptocurrency"
+  },
+  {
+    "query": "How do Merkle trees enable Simplified Payment Verification (SPV) without running a full network node in Bitcoin?",
+    "expected_topic": "Bitcoin Merkle Trees and SPV",
+    "expected_content_type": "technical_spec",
+    "acceptable_documents": [
+      "bitcoin.pdf"
+    ],
+    "acceptable_headings": [
+      "Reclaiming Disk Space",
+      "Simplified Payment Verification",
+      "Merkle Tree"
+    ],
+    "difficulty": "Hard",
+    "category": "cryptocurrency"
+  },
+  {
+    "query": "What are the core concepts of workflow automation in n8n regarding trigger nodes, regular nodes, and data connections?",
+    "expected_topic": "n8n Workflow Core Concepts",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "basics of n8n tutorial notes.docx"
+    ],
+    "acceptable_headings": [
+      "nodes",
+      "triggers",
+      "workflow"
+    ],
+    "difficulty": "Easy",
+    "category": "workflow"
+  },
+  {
+    "query": "How do webhooks function as incoming data triggers in n8n workflows?",
+    "expected_topic": "n8n Webhook Triggers",
+    "expected_content_type": "procedural",
+    "acceptable_documents": [
+      "basics of n8n tutorial notes.docx"
+    ],
+    "acceptable_headings": [
+      "webhook",
+      "trigger",
+      "HTTP Request"
+    ],
+    "difficulty": "Medium",
+    "category": "workflow"
+  },
+  {
+    "query": "What are the primary financial statements included in the FY24 Q1 Consolidated Financial Statements report?",
+    "expected_topic": "FY24 Q1 Financial Statements Overview",
+    "expected_content_type": "table_spec",
+    "acceptable_documents": [
+      "FY24_Q1_Consolidated_Financial_Statements.pdf"
+    ],
+    "acceptable_headings": [
+      "Consolidated Financial Statements",
+      "Balance Sheet",
+      "Income Statement"
+    ],
+    "difficulty": "Easy",
+    "category": "financial"
+  },
+  {
+    "query": "Who is Mr. Darcy and what is his initial interaction and dance refusal with Elizabeth Bennet at the Netherfield ball in Pride and Prejudice?",
+    "expected_topic": "Mr Darcy and Elizabeth Bennet Initial Meeting",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "Prejudice_pg1342.txt"
+    ],
+    "acceptable_headings": [
+      "Chapter",
+      "Darcy",
+      "Elizabeth",
+      "Netherfield"
+    ],
+    "difficulty": "Medium",
+    "category": "literature"
+  },
+  {
+    "query": "What is the famous opening sentence of Pride and Prejudice regarding a single man in possession of a good fortune?",
+    "expected_topic": "Pride and Prejudice Opening Line",
+    "expected_content_type": "concept",
+    "acceptable_documents": [
+      "Prejudice_pg1342.txt"
+    ],
+    "acceptable_headings": [
+      "Chapter 1",
+      "truth universally acknowledged"
+    ],
+    "difficulty": "Easy",
+    "category": "literature"
+  }
+]

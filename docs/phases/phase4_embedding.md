@@ -6,11 +6,11 @@ The embedding phase transforms textual chunks into mathematical representations,
 ## Core Implementation Logic
 
 ### Dense Embeddings
-The system delegates all dense vector generation to a highly optimized external embedding API (specifically, Jina's `jina-embeddings-v3`).
+The system delegates all dense vector generation to a highly optimized external multilingual embedding service.
 
-- **Asymmetric Encoding:** The system uses task-aware encoding. Chunks processed during ingestion are encoded with the `retrieval.passage` task type, optimizing them to be retrieved. User queries are encoded with the `retrieval.query` task type, optimizing them for searching. This asymmetric approach is critical for high-fidelity late-interaction models.
-- **Batching & Concurrency:** Chunks are grouped into specific batches of 50 and sent in parallel to the Jina API to maximize throughput without exceeding payload limits.
-- **Resiliency & Partial Success:** The system employs exponential backoff and retry logic (up to 3 retries) to absorb transient network failures or API rate limits. If rate limits (e.g., HTTP 429) persist after retries, the pipeline isolates the failed chunk batches without aborting the entire document. Successfully embedded chunks are committed to Qdrant, while the job status transitions to `partial_success` and records an explicit diagnostic `error_reason` in the document metadata.
+- **Asymmetric Encoding:** The system uses task-aware encoding. Chunks processed during ingestion are encoded with a passage-specific task profile, optimizing them to be retrieved. User queries are encoded with a query-specific task profile, optimizing them for searching. This asymmetric approach is critical for high-fidelity late-interaction models.
+- **Batching & Concurrency:** Chunks are grouped into specific batches of 50 and sent in parallel to the external embedding service to maximize throughput without exceeding payload limits.
+- **Resiliency & Partial Success:** The system employs exponential backoff and retry logic (up to 3 retries) to absorb transient network failures or API rate limits. If rate limits persist after retries, the pipeline isolates the failed chunk batches without aborting the entire document. Successfully embedded chunks are committed to cloud vector storage, while the job status transitions to partial success and records an explicit diagnostic error reason in the document metadata.
 - **Zero RAM Footprint:** No local embedding model is loaded into memory. All dense embedding computation is remote. This is a deliberate architectural tradeoff that frees significant RAM for the web server and document processing pipeline, allowing the entire system to run comfortably on resource-constrained micro-instances.
 
 ### Sparse Indexing
@@ -19,7 +19,7 @@ Sparse keyword search is implemented via an embedded, high-performance full-text
 - During ingestion, every chunk's text is inserted into a local virtual table alongside its metadata.
 - The index applies stemming algorithms natively (e.g., matching "running" with "run") to handle morphological variations.
 - Results are scored using industry-standard BM25 algorithms built directly into the database engine.
-- **Incremental Updates:** Unlike traditional Python-based BM25 libraries that require a full in-memory rebuild of the index after every document is added, this embedded database approach supports continuous, incremental inserts. This makes it highly resilient and suited for a long-running microservice.
+- **Incremental Updates:** Unlike traditional in-memory keyword search libraries that require a full rebuild of the index after every document is added, this embedded relational database approach supports continuous, incremental inserts. This makes it highly resilient and suited for a long-running microservice.
 
 ### Metadata Injection
 Every generated embedding is permanently tagged and stored in the vector database with rich metadata:
@@ -33,4 +33,4 @@ Before embedding, the system enforces a hard token limit on every chunk to ensur
 
 ## Design Philosophy & Tradeoffs
 - **Network Dependency:** All dense embedding generation requires outbound API calls. A network partition will cause ingestion to fail gracefully (with retries), but there is no local fallback embedding model.
-- **API Rate Limits vs. Partial Indexing:** Heavy, sustained ingestion loads may encounter third-party API rate limits. Rather than failing an entire document when an embedding batch is rate-limited, the system opts for partial indexing (`partial_success`). This preserves all successfully embedded chunks for immediate retrieval while surfacing diagnostic error reasons to the user for observability.
+- **API Rate Limits vs. Partial Indexing:** Heavy, sustained ingestion loads may encounter third-party API rate limits. Rather than failing an entire document when an embedding batch is rate-limited, the system opts for partial indexing. This preserves all successfully embedded chunks for immediate retrieval while surfacing diagnostic error reasons to the user for observability.

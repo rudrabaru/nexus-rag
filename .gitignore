@@ -56,6 +56,8 @@ MANIFEST
 logs/
 logs.txt
 evaluations/
+retrieval/
+scratch/
 test_results_*.json
 uv.lock
 /observability/

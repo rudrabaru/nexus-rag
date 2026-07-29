@@ -24,20 +24,34 @@ class Evaluator:
     ) -> EvaluationReport:
         results = []
         latencies = []
+        reranker_failures = []
         hits_at_1 = 0
         hits_at_3 = 0
         hits_at_5 = 0
         rr_sum = 0.0
 
+        import asyncio
+
         for q in queries:
+            pre_rank = -1
+            pre_exact_rank = -1
+            dense_result = None
+            pre_order = []
             if self.reranker:
-                dense_result = self.retriever.retrieve(q.query, top_k=top_k * 4, tenant_id=self.tenant_id)
-                result = self.reranker.rerank(q.query, dense_result.chunks, top_k=top_k)
+                dense_result = asyncio.run(self.retriever.retrieve(q.query, top_k=top_k * 4, tenant_id=self.tenant_id, allow_global=True))
+                pre_order = [
+                    {"chunk_id": c.chunk_id, "source": c.source_document, "score": c.similarity_score}
+                    for c in dense_result.chunks[:top_k]
+                ]
+                for idx, c in enumerate(dense_result.chunks):
+                    _, _, pre_rank, pre_exact_rank, _ = evaluate_chunk(c, q, idx, pre_rank, pre_exact_rank)
+
+                result = asyncio.run(self.reranker.rerank(q.query, dense_result.chunks, top_k=top_k))
                 result.embedding_latency_ms = dense_result.embedding_latency_ms
                 result.search_latency_ms = dense_result.search_latency_ms
                 result.latency_ms += dense_result.latency_ms
             else:
-                result = self.retriever.retrieve(q.query, top_k=top_k, tenant_id=self.tenant_id)
+                result = asyncio.run(self.retriever.retrieve(q.query, top_k=top_k, tenant_id=self.tenant_id, allow_global=True))
             latencies.append(result.latency_ms)
 
             chunk_infos = []
@@ -65,6 +79,34 @@ class Evaluator:
                     hits_at_5 += 1
                 rr_sum += 1.0 / rank
 
+            if self.reranker and pre_rank != -1:
+                # If it was ranked before reranking, and after reranking it is worse (or unranked -1)
+                if rank == -1 or rank > pre_rank:
+                    post_order = [
+                        {"chunk_id": c.chunk_id, "source": c.source_document, "score": c.similarity_score}
+                        for c in result.chunks
+                    ]
+                    promoted = []
+                    limit_idx = (rank - 1) if rank != -1 else len(result.chunks)
+                    for c in result.chunks[:limit_idx]:
+                        promoted.append({
+                            "chunk_id": c.chunk_id,
+                            "source": c.source_document,
+                            "reranker_score": c.similarity_score,
+                            "heading_path": c.metadata.get("heading_path", "")
+                        })
+                    reranker_failures.append({
+                        "query": q.query,
+                        "expected_target": q.acceptable_documents,
+                        "pre_reranking_rank": pre_rank,
+                        "post_reranking_rank": rank,
+                        "rank_delta": (rank - pre_rank) if rank != -1 else "Unranked (fell off top_k)",
+                        "pre_reranking_candidate_order": pre_order,
+                        "post_reranking_candidate_order": post_order,
+                        "chunks_promoted_above_expected": promoted,
+                        "available_source_heading_metadata": [c.metadata for c in result.chunks[:3]]
+                    })
+
             results.append(
                 EvaluationResult(
                     query=q.query,
@@ -87,6 +129,10 @@ class Evaluator:
             )
 
         total = len(queries)
+        sorted_l = sorted(latencies) if latencies else [0.0]
+        p50 = sorted_l[int(len(sorted_l) * 0.50)] if sorted_l else 0.0
+        p95 = sorted_l[int(len(sorted_l) * 0.95)] if sorted_l else 0.0
+
         return EvaluationReport(
             total_queries=total,
             recall_at_1=hits_at_1 / total if total > 0 else 0,
@@ -94,6 +140,9 @@ class Evaluator:
             recall_at_5=hits_at_5 / total if total > 0 else 0,
             mrr=rr_sum / total if total > 0 else 0,
             avg_latency_ms=statistics.mean(latencies) if latencies else 0,
+            p50_latency_ms=p50,
+            p95_latency_ms=p95,
+            reranker_failures=reranker_failures,
             results=results,
         )
 

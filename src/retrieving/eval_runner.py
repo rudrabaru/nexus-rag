@@ -149,6 +149,7 @@ def run_evaluation_pipeline(
     output_dir_base: str,
     use_reranker: bool,
     use_hybrid: bool,
+    use_sparse: bool = False,
     tenant_id: str = None,
 ):
     distance_metric = "cosine"
@@ -161,10 +162,13 @@ def run_evaluation_pipeline(
 
     dense_retriever = DenseRetriever(vector_store=db_manager)
 
-    if use_hybrid:
+    if use_sparse:
+        from src.retrieving.sparse import SparseRetriever
+        retriever = SparseRetriever()
+        logger.info("Using Sparse Search (SQLite FTS5) only for evaluation.")
+    elif use_hybrid:
         from src.registry.database import DocumentRegistry
-        db_path = "/data/rag_registry.db" if os.environ.get("SPACE_ID") else "data/rag_registry.db"
-        registry = DocumentRegistry(db_path)
+        registry = DocumentRegistry()
         retriever = HybridRetriever(
             dense_retriever=dense_retriever, registry=registry
         )
@@ -193,12 +197,36 @@ def run_evaluation_pipeline(
 
     report = evaluator.evaluate(queries, top_k=top_k)
 
+    import hashlib
+    with open(dataset_path_obj, "rb") as f:
+        dataset_hash = hashlib.md5(f.read()).hexdigest()
+
+    try:
+        index_count = db_manager.get_collection_size()
+    except Exception:
+        index_count = "Unknown"
+
+    report.reproducibility_fingerprint = {
+        "dataset_path": str(dataset_path),
+        "dataset_md5": dataset_hash,
+        "index_count": index_count,
+        "timestamp": timestamp,
+        "configuration": {
+            "top_k": top_k,
+            "use_hybrid": use_hybrid,
+            "use_sparse": use_sparse,
+            "use_reranker": use_reranker,
+            "tenant_id": tenant_id or "ALL",
+        },
+    }
+
     difficulty_metrics = compute_group_metrics(report.results, lambda r: r.difficulty)
     category_metrics = compute_group_metrics(report.results, lambda r: r.category)
 
     eval_output = {
         "dataset_used": dataset_path,
         "collection_used": collection_name,
+        "reproducibility_fingerprint": report.reproducibility_fingerprint,
         "total_queries": report.total_queries,
         "overall_metrics": {
             "recall_at_1": report.recall_at_1,
@@ -206,6 +234,8 @@ def run_evaluation_pipeline(
             "recall_at_5": report.recall_at_5,
             "mrr": report.mrr,
             "avg_latency_ms": report.avg_latency_ms,
+            "p50_latency_ms": report.p50_latency_ms,
+            "p95_latency_ms": report.p95_latency_ms,
         },
         "metrics_by_difficulty": difficulty_metrics,
         "metrics_by_category": category_metrics,
@@ -218,9 +248,17 @@ def run_evaluation_pipeline(
         f.write(f"- **Recall@1**: {report.recall_at_1:.2f}\n")
         f.write(f"- **Recall@5**: {report.recall_at_5:.2f}\n")
         f.write(f"- **MRR**: {report.mrr:.2f}\n")
+        f.write(f"- **Avg Latency**: {report.avg_latency_ms:.2f} ms\n")
+        f.write(f"- **p50 Latency**: {report.p50_latency_ms:.2f} ms\n")
+        f.write(f"- **p95 Latency**: {report.p95_latency_ms:.2f} ms\n")
 
     generate_evidence_report(report, eval_dir)
     generate_review_set(report, eval_dir)
+
+    if report.reranker_failures:
+        with open(eval_dir / "reranker_failure_analysis.json", "w", encoding="utf-8") as f:
+            json.dump(report.reranker_failures, f, indent=2)
+        logger.info(f"Logged {len(report.reranker_failures)} reranker failure records.")
 
     reliability_report = {
         "evaluation_fairness": "High",
@@ -236,3 +274,34 @@ def run_evaluation_pipeline(
 
     logger.info(f"Evaluation complete! Reports saved to {eval_dir}")
     logger.info(f"Recall@1: {report.recall_at_1:.2f} | MRR: {report.mrr:.2f}")
+    return report, eval_dir
+
+
+if __name__ == "__main__":
+    import argparse
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    parser = argparse.ArgumentParser(description="Run RAG Retrieval Benchmarking Pipeline")
+    parser.add_argument("--dataset", type=str, required=True, help="Path to golden dataset JSON file")
+    parser.add_argument("--collection", type=str, default="nexus_rag_collection", help="Qdrant collection name")
+    parser.add_argument("--top-k", type=int, default=5, help="Number of documents to retrieve")
+    parser.add_argument("--output-dir", type=str, default="retrieval/v1", help="Base output directory")
+    parser.add_argument("--use-reranker", action="store_true", help="Enable Cross-Encoder reranking")
+    parser.add_argument("--use-hybrid", action="store_true", help="Enable Hybrid RRF search")
+    parser.add_argument("--use-sparse", action="store_true", help="Enable Sparse FTS5 search only")
+    parser.add_argument("--tenant-id", type=str, default=None, help="Optional tenant ID to isolate search")
+
+    args = parser.parse_args()
+
+    run_evaluation_pipeline(
+        dataset_path=args.dataset,
+        collection_name=args.collection,
+        top_k=args.top_k,
+        output_dir_base=args.output_dir,
+        use_reranker=args.use_reranker,
+        use_hybrid=args.use_hybrid,
+        use_sparse=args.use_sparse,
+        tenant_id=args.tenant_id,
+    )
+

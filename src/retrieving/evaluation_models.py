@@ -54,4 +54,8 @@ class EvaluationReport(BaseModel):
     recall_at_5: float
     mrr: float
     avg_latency_ms: float
+    p50_latency_ms: float = 0.0
+    p95_latency_ms: float = 0.0
+    reproducibility_fingerprint: Dict[str, Any] = {}
+    reranker_failures: List[Dict[str, Any]] = []
     results: List[EvaluationResult]

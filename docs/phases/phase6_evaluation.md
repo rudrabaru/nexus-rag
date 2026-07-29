@@ -29,5 +29,15 @@ The evaluator acts as an impartial judge, analyzing every claim made in the gene
 
 The evaluator also provides a written reasoning for its decision, which is crucial for debugging why a specific prompt or document caused a hallucination.
 
+### Retrieval Benchmarking & Ablation Suite
+In addition to end-to-end generation evaluation, the system implements a standalone retrieval benchmarking pipeline to scientifically evaluate retrieval accuracy and latency independent of generation:
+- **Corpus-Specific Evaluation Dataset:** Utilizes an empirically validated golden dataset indexing over a thousand chunks across dozens of enterprise sources, spanning distinct document categories (Networking, Cloud Infra, API Docs, Technical Docs, Security, Cryptocurrency, Literature, Workflow, and Financial Reports) and diverse retrieval challenge types (Semantic, Terminology, Procedural, Concept, Code/API, Tables, Hard Negatives, and Long-Tail Vocabulary).
+- **Ablation Studies:** Supports running isolated evaluations across distinct retrieval modes: dense semantic-only, sparse keyword-only, hybrid rank-fused, and cross-encoder reranked retrieval.
+- **Core Metrics & Percentile Profiling:** Calculates precision at various cutoffs (Recall@1, Recall@3, Recall@5) and Mean Reciprocal Rank (MRR), alongside exact vs. partial match tracking. Additionally profiles latencies across mean, median, and 95th percentile distributions to identify tail latencies and outliers.
+- **Automated Reranker Failure Analysis:** Whenever cross-encoder reranking promotes chunks above expected target documents or degrades rank position, the evaluation engine automatically synthesizes an inspectable regression record. This captures pre-reranking vs. post-reranking candidate orders, rank deltas, reranker relevance scores, and metadata of promoted chunks without hiding regression behavior.
+- **Reproducibility Fingerprinting:** Every benchmark report includes a comprehensive cryptographic checksum fingerprint recording the dataset hash, index count, timestamp, and exact retrieval configuration to guarantee auditability and repeatability.
+- **Offline Security Isolation:** Enforces strict security boundaries during offline evaluation runs, requiring explicit administrative authorization without altering or exposing production endpoints.
+
 ## Design Philosophy & Tradeoffs
 - **Judge Fallibility:** Using an LLM to judge another LLM introduces the possibility that the judge itself makes a mistake. To mitigate this, the system uses highly capable, parameter-rich models for the evaluator role, prioritizing reasoning capacity over speed or cost.
+- **Reranker Domain Sensitivity:** Empirical ablation revealed that off-the-shelf cross-encoder rerankers without domain adaptation can sometimes promote summary overview chunks over specific technical sub-sections, temporarily lowering top-1 precision despite maintaining 100% top-5 recall. This validates our engineering principle: always inspect and quantify reranker behavior before mandating it in production pipelines.

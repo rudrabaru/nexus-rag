@@ -10,7 +10,7 @@ The system ingests heterogeneous data formats and transforms them into an intell
 ### Intelligent Data Ingestion
 - **Multi-Format Extraction:** Seamlessly processes URLs, PDFs, DOCX, MD, and TXT files.
 - **Multimodal Vision:** Optional OCR and visual analysis intercepts images and scanned documents, converting visual data into searchable text.
-- **Dynamic Web & Sitemap Crawling:** Employs intelligent Jina Reader API integrations for lightweight, serverless web and sitemap scraping without heavy local headless browsers. Supports selective XML sitemap URL prefix filtering for targeted subsection indexing.
+- **Dynamic Web & Sitemap Crawling:** Employs intelligent external web reading services for lightweight, serverless web and sitemap scraping without heavy local headless browsers. Supports selective XML sitemap URL prefix filtering for targeted subsection indexing.
 
 ### Semantic Normalization & Chunking
 - **Boilerplate Detection:** Uses statistical corpus frequency analysis to automatically detect and strip navigation menus, footers, and noise. For single-document ingestions, gracefully falls back to structural signals (link density, word count, edge position) when corpus statistics aren't available.
@@ -32,6 +32,7 @@ The system ingests heterogeneous data formats and transforms them into an intell
 ### Observability & Automated Evaluation
 - **Pipeline Telemetry:** Built-in observability logs discrete timing for every micro-stage (embedding, search, reranking, generation) to pinpoint latency bottlenecks.
 - **LLM-as-a-Judge Evaluation:** Features an automated evaluation framework that synthesizes evaluation datasets directly from your corpus, grading the pipeline on retrieval recall and generation faithfulness.
+- **Retrieval Benchmarking & Ablation Suite:** A standalone evaluation engine enabling isolated scientific ablation studies across semantic-only, keyword-only, hybrid rank-fused, and reranked retrieval modes. Measures precision, recall, mean reciprocal rank, and full latency distributions (including median and tail latencies), alongside automated failure analysis for reranking regressions. Every evaluation run generates a cryptographic reproducibility fingerprint to guarantee auditability under strict tenant security boundaries.
 
 ## Pipeline Architecture
 
@@ -52,4 +53,4 @@ Detailed architectural and implementation documentation for each phase of the pi
 NexusRAG is designed to be deployed as a containerized microservice. It is optimized to run efficiently even on resource-constrained cloud infrastructure by offloading heavy ML computation (embeddings and generation) to specialized external APIs, maintaining a near-zero memory footprint for AI models.
 
 **Storage & Auto-Rehydration:**
-The system is largely stateless with the exception of the local SQLite registry. For production deployments (currently, Nexus RAG is deployed on Render.io), Qdrant Cloud handles persistent vector and payload storage. Whenever a container restarts or spins up after being idle, the application boot script (`startup.py`) automatically connects to Qdrant Cloud and rehydrates (rebuilds) the local SQLite database and BM25 full-text search index in memory within seconds. This guarantees zero data loss and persistent multi-tenant isolation without needing paid persistent disks. Ensure `QDRANT_URL` and `QDRANT_API_KEY` are securely configured.
+The system is entirely stateless. For production deployments, cloud vector storage handles persistent vector and payload persistence. Whenever a container restarts or spins up after being idle, an automated initialization routine connects to the cloud vector store and rehydrates the local full-text search index and document registries in memory within seconds. Furthermore, tenant authentication is handled via **stateless HMAC-signed API keys**. User credentials and workspace access remain fully valid across server restarts without requiring any persistent relational database or disk storage. This guarantees zero data loss and persistent multi-tenant isolation without requiring paid persistent disks, provided the cloud database connection credentials are securely configured in the environment.

@@ -17,8 +17,12 @@ class SparseIndexMixin:
                 )
             conn.commit()
 
-    def search_fts5(self, query: str, tenant_id: str, limit: int = 20) -> tuple[List[Dict[str, Any]], bool]:
+    def search_fts5(self, query: str, tenant_id: str = None, limit: int = 20, allow_global: bool = False) -> tuple[List[Dict[str, Any]], bool]:
         """Searches the FTS5 table and returns matching chunks."""
+        if not allow_global and (not tenant_id or tenant_id in ("ALL", "*")):
+            # Production security boundary: if tenant_id is missing or ALL/wildcard without allow_global=True, return empty results
+            return [], False
+
         cleaned = re.sub(r"[^\w\s\?\&+\-]", " ", query.lower()).strip()
         if not cleaned:
             return [], False
@@ -33,10 +37,16 @@ class SparseIndexMixin:
 
         def run_query(conn, q):
             results = []
-            cursor = conn.execute(
-                "SELECT chunk_id, source_document, chunk_text, bm25(fts_chunks) as score FROM fts_chunks WHERE fts_chunks MATCH ? AND tenant_id = ? ORDER BY score ASC LIMIT ?",
-                (q, tenant_id, limit)
-            )
+            if allow_global and (not tenant_id or tenant_id in ("ALL", "*")):
+                sql = "SELECT chunk_id, source_document, chunk_text, bm25(fts_chunks) as score FROM fts_chunks WHERE fts_chunks MATCH ? ORDER BY score ASC LIMIT ?"
+                params = (q, limit)
+            elif tenant_id and tenant_id not in ("ALL", "*"):
+                sql = "SELECT chunk_id, source_document, chunk_text, bm25(fts_chunks) as score FROM fts_chunks WHERE fts_chunks MATCH ? AND tenant_id = ? ORDER BY score ASC LIMIT ?"
+                params = (q, tenant_id, limit)
+            else:
+                # Production security boundary: if tenant_id is missing or ALL without allow_global=True, return empty results
+                return []
+            cursor = conn.execute(sql, params)
             for row in cursor.fetchall():
                 score = -row["score"]
                 # Only include if score meets minimum threshold (prevent noisy 1-term matches in OR)
@@ -45,7 +55,7 @@ class SparseIndexMixin:
                         "chunk_id": row["chunk_id"],
                         "source_document": row["source_document"],
                         "chunk_text": row["chunk_text"],
-                        "tenant_id": tenant_id,
+                        "tenant_id": tenant_id or "ALL",
                         "score": score
                     })
             return results

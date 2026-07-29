@@ -25,17 +25,23 @@ class DocumentRegistry(DocumentStoreMixin, JobStoreMixin, SparseIndexMixin):
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
-        self._conn = sqlite3.connect(self.db_path, timeout=15.0, check_same_thread=False)
-        self._conn.row_factory = sqlite3.Row
-        self._lock = threading.Lock()
+        self._local = threading.local()
         
         self._init_db()
 
+    def _get_thread_conn(self):
+        if not hasattr(self._local, "conn"):
+            self._local.conn = sqlite3.connect(self.db_path, timeout=15.0)
+            self._local.conn.row_factory = sqlite3.Row
+            # Enable WAL mode per connection to allow concurrent readers
+            self._local.conn.execute("PRAGMA journal_mode=WAL;")
+        return self._local.conn
+
     @contextmanager
     def _get_conn(self):
-        with self._lock:
-            with self._conn:
-                yield self._conn
+        conn = self._get_thread_conn()
+        with conn:
+            yield conn
 
     def _init_db(self):
         with self._get_conn() as conn:
@@ -168,23 +174,8 @@ class DocumentRegistry(DocumentStoreMixin, JobStoreMixin, SparseIndexMixin):
         import datetime
         from collections import defaultdict
         
-        points = []
         offset = None
-        while True:
-            response, offset = qdrant_manager.client.scroll(
-                collection_name=qdrant_manager.collection_name,
-                limit=100,
-                with_payload=True,
-                with_vectors=False,
-                offset=offset
-            )
-            points.extend(response)
-            if offset is None:
-                break
-                
-        if not points:
-            return 0
-            
+        total_points = 0
         doc_chunks = defaultdict(list)
         doc_tenants = {}
         now = datetime.datetime.now(datetime.timezone.utc).isoformat()
@@ -193,27 +184,48 @@ class DocumentRegistry(DocumentStoreMixin, JobStoreMixin, SparseIndexMixin):
             # Clear existing FTS to avoid duplicates on partial wipe
             conn.execute("DELETE FROM fts_chunks")
             
-            for point in points:
-                payload = point.payload or {}
-                tenant_id = payload.get("tenant_id", "unknown")
-                chunk_id = payload.get("chunk_id")
-                source_document = payload.get("source_document")
-                chunk_text = payload.get("document_text", "")
+            while True:
+                response, offset = qdrant_manager.client.scroll(
+                    collection_name=qdrant_manager.collection_name,
+                    limit=100,
+                    with_payload=True,
+                    with_vectors=False,
+                    offset=offset
+                )
                 
-                if not chunk_id or not source_document:
-                    continue
+                if not response:
+                    break
                     
-                doc_chunks[source_document].append(chunk_id)
-                doc_tenants[source_document] = tenant_id
+                total_points += len(response)
                 
-                try:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO fts_chunks (chunk_id, tenant_id, source_document, chunk_text) VALUES (?, ?, ?, ?)",
-                        (chunk_id, tenant_id, source_document, chunk_text)
-                    )
-                except Exception as e:
-                    logger.warning(f"Failed to insert chunk {chunk_id} into fts: {e}")
+                for point in response:
+                    payload = point.payload or {}
+                    tenant_id = payload.get("tenant_id", "unknown")
+                    chunk_id = payload.get("chunk_id")
+                    source_document = payload.get("source_document")
+                    chunk_text = payload.get("document_text", "")
                     
+                    if not chunk_id or not source_document:
+                        continue
+                        
+                    doc_chunks[source_document].append(chunk_id)
+                    doc_tenants[source_document] = tenant_id
+                    
+                    try:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO fts_chunks (chunk_id, tenant_id, source_document, chunk_text) VALUES (?, ?, ?, ?)",
+                            (chunk_id, tenant_id, source_document, chunk_text)
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to insert chunk {chunk_id} into fts: {e}")
+                
+                # Commit the batch of FTS points
+                conn.commit()
+                
+                if offset is None:
+                    break
+                    
+            # Now insert the document records based on the aggregated chunks
             for source_document, chunk_ids in doc_chunks.items():
                 tenant_id = doc_tenants.get(source_document, "unknown")
                 conn.execute(
@@ -230,4 +242,4 @@ class DocumentRegistry(DocumentStoreMixin, JobStoreMixin, SparseIndexMixin):
                 )
             conn.commit()
             
-        return len(points)
+        return total_points
