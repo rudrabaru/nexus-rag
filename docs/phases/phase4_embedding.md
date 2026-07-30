@@ -6,15 +6,16 @@ The embedding phase transforms textual chunks into mathematical representations,
 ## Core Implementation Logic
 
 ### Dense Embeddings
-The system delegates all dense vector generation to a highly optimized external multilingual embedding service.
+The system delegates all dense vector generation to the **Jina Embeddings v3** API (`jina-embeddings-v3`), a highly optimized external multilingual embedding service.
 
 - **Asymmetric Encoding:** The system uses task-aware encoding. Chunks processed during ingestion are encoded with a passage-specific task profile, optimizing them to be retrieved. User queries are encoded with a query-specific task profile, optimizing them for searching. This asymmetric approach is critical for high-fidelity late-interaction models.
 - **Batching & Concurrency:** Chunks are grouped into specific batches of 50 and sent in parallel to the external embedding service to maximize throughput without exceeding payload limits.
 - **Resiliency & Partial Success:** The system employs exponential backoff and retry logic (up to 3 retries) to absorb transient network failures or API rate limits. If rate limits persist after retries, the pipeline isolates the failed chunk batches without aborting the entire document. Successfully embedded chunks are committed to cloud vector storage, while the job status transitions to partial success and records an explicit diagnostic error reason in the document metadata.
 - **Zero RAM Footprint:** No local embedding model is loaded into memory. All dense embedding computation is remote. This is a deliberate architectural tradeoff that frees significant RAM for the web server and document processing pipeline, allowing the entire system to run comfortably on resource-constrained micro-instances.
+- **Query Embedding Cache:** To avoid redundant external API calls for repeated or near-identical queries, a fixed-capacity (500-entry) MD5-keyed in-memory cache stores recently computed query embeddings. Cache hits serve queries entirely from memory at near-zero latency.
 
 ### Sparse Indexing
-Sparse keyword search is implemented via an embedded, high-performance full-text search database engine.
+Sparse keyword search is implemented via **SQLite FTS5** (Full-Text Search extension 5), an embedded, high-performance full-text search database engine.
 
 - During ingestion, every chunk's text is inserted into a local virtual table alongside its metadata.
 - The index applies stemming algorithms natively (e.g., matching "running" with "run") to handle morphological variations.

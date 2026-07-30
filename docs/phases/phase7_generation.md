@@ -22,8 +22,10 @@ The prompt enforces a strict citation format. Every factual claim made in the ge
 
 This allows end-users to easily trace any claim back to the exact source document, building trust in the system's outputs.
 
-### Streaming Generation
+### Streaming Generation & Token Observability
 To ensure a highly responsive user experience, the generation phase supports real-time streaming. As the generative model produces tokens, they are immediately streamed back to the client via Server-Sent Events (SSE). This reduces the perceived latency of the system to near-zero, even for complex, multi-paragraph answers.
+
+Each LLM provider surfaces usage metadata (prompt and completion token counts) from within its own stream chunks. The pipeline accumulates these token counts during streaming and commits them to the observability registry upon completion. This ensures accurate cost tracking even in streaming mode — a non-trivial problem, since streaming generators complete asynchronously and cannot be naively awaited for a final usage summary.
 
 ## Design Philosophy & Tradeoffs
 - **Strictness vs. Helpfulness:** The prompt's extreme strictness against using outside knowledge means the system might occasionally refuse to answer a question that the underlying LLM actually knows the answer to, simply because it wasn't in the retrieved documents. This is an intentional tradeoff: in a production enterprise environment, failing to answer is vastly preferred over confidently hallucinating incorrect information.

@@ -22,6 +22,7 @@ For dynamic HTML pages and site hierarchies, the system employs scalable web ing
 - **Serverless Web Reading Engine:** Dynamically converts web pages into structured Markdown, stripping unnecessary images and optimizing connection timeouts when visual extraction is disabled to minimize latency.
 - **Sitemap Ingestion & Selective Prefix Filtering:** Automatically parses XML sitemaps to discover site pages. To support targeted indexing without full-site deep crawling, the ingestion engine supports URL prefix filtering. When a prefix or subpath is specified, the sitemap parser isolates and ingests only the matching documentation subsections.
 - **Bounded Concurrent Crawling:** To maximize ingestion throughput while preventing server overload and API rate-limiting, sitemap URL fetching is executed with bounded asynchronous concurrency.
+- **Idempotent Resumption:** Before a sitemap crawl begins, the system proactively queries the cloud vector database to identify pages that have already been indexed under the current tenant and document. Previously indexed URLs are skipped entirely, allowing large-scale crawl jobs interrupted by network errors, timeouts, or hosting spin-downs to be safely resumed without re-processing or duplicating content already in the index.
 
 ### In-Memory Processing & Multi-Tenancy
 The entire ingestion process operates as an in-memory microservice. Temporary files created during uploads are stored in the OS temp directory and are deleted immediately after parsing. No raw source files are permanently stored on disk.

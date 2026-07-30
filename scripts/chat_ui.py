@@ -66,21 +66,33 @@ with st.sidebar:
         st.subheader("Workspace Authentication")
         if st.session_state.api_key:
             st.success("Authenticated with your private workspace")
+            if st.button("Sign Out", use_container_width=True):
+                st.session_state.api_key = ""
+                st.rerun()
         else:
-            st.info("Generate an API key to get your own private document workspace.")
-        
-        if st.button("Generate API Key", use_container_width=True):
-            try:
-                res = requests.post(f"{API_BASE_URL}/register", timeout=10)
-                if res.status_code == 200:
-                    new_key = res.json()["api_key"]
-                    st.session_state.api_key = new_key
-                    st.success(f"Your new API Key:\n\n`{new_key}`\n\nIt's saved in this session.")
-                    st.rerun()
-                else:
-                    st.error("Failed to generate API Key.")
-            except Exception as e:
-                st.error(f"Error connecting to backend: {e}")
+            st.info("Enter an existing API key or generate a new one to get your own private document workspace.")
+            
+            existing_key = st.text_input("Existing API Key", type="password", placeholder="Paste your key here...")
+            if st.button("Login", use_container_width=True) and existing_key:
+                st.session_state.api_key = existing_key
+                st.rerun()
+                
+            st.markdown("---")
+            
+            if st.button("Generate New API Key", use_container_width=True):
+                try:
+                    reg_secret = os.environ.get("REGISTRATION_SECRET", "")
+                    payload = {"secret": reg_secret} if reg_secret else None
+                    res = requests.post(f"{API_BASE_URL}/register", data=payload, timeout=10)
+                    if res.status_code == 200:
+                        new_key = res.json()["api_key"]
+                        st.session_state.api_key = new_key
+                        st.success(f"Your new API Key:\n\n`{new_key}`\n\nPlease save this! You will need it to access your documents later.")
+                        st.rerun()
+                    else:
+                        st.error(f"Failed to generate API Key: {res.status_code} - {res.text}")
+                except Exception as e:
+                    st.error(f"Error connecting to backend: {e}")
     else:
         st.info("Running in **DEMO MODE**. Multi-tenancy is disabled. All users share the 'demo' workspace.")
 
