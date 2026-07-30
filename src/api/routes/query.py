@@ -173,6 +173,12 @@ async def query_rag_stream(
                         # Read actual token counts captured during streaming
                         prompt_tokens = getattr(generator.llm_client, "last_prompt_tokens", 0)
                         completion_tokens = getattr(generator.llm_client, "last_completion_tokens", 0)
+                        
+                        if prompt_tokens == 0:
+                            # Fallback heuristic if provider SDK didn't populate usage_metadata on stream chunks
+                            prompt_tokens = len(body.query + retrieval_result.context_text) // 4
+                        if completion_tokens == 0:
+                            completion_tokens = len(full_answer) // 4
 
                         from src.generating.models import GenerationResult
                         context_window = generator.context_builder.build(retrieval_result.chunks)
