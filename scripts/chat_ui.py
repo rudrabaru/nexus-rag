@@ -3,11 +3,11 @@ import requests
 import os
 from dotenv import load_dotenv
 
+load_dotenv(override=True)
+
 from ui.chat import render_chat_tab
 from ui.dashboard import render_dashboard_tab
 from ui.documents import render_documents_tab
-
-load_dotenv()
 
 st.set_page_config(page_title="Nexus RAG", page_icon="🤖", layout="wide")
 
@@ -66,8 +66,17 @@ with st.sidebar:
         st.subheader("Workspace Authentication")
         if st.session_state.api_key:
             st.success("Authenticated with your private workspace")
+            
+            if st.session_state.get("newly_generated_key"):
+                st.warning("⚠️ Please save your new API key now! You will need it to login later.")
+                st.code(st.session_state.newly_generated_key, language=None)
+                if st.button("I have saved my key", use_container_width=True):
+                    st.session_state.newly_generated_key = None
+                    st.rerun()
+            
             if st.button("Sign Out", use_container_width=True):
                 st.session_state.api_key = ""
+                st.session_state.newly_generated_key = None
                 st.rerun()
         else:
             st.info("Enter an existing API key or generate a new one to get your own private document workspace.")
@@ -87,7 +96,7 @@ with st.sidebar:
                     if res.status_code == 200:
                         new_key = res.json()["api_key"]
                         st.session_state.api_key = new_key
-                        st.success(f"Your new API Key:\n\n`{new_key}`\n\nPlease save this! You will need it to access your documents later.")
+                        st.session_state.newly_generated_key = new_key
                         st.rerun()
                     else:
                         st.error(f"Failed to generate API Key: {res.status_code} - {res.text}")
