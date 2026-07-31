@@ -14,7 +14,6 @@ LLM_PROVIDER=gemini
 GEMINI_API_KEY=your_gemini_api_key_here
 # Optional: GROQ_API_KEY=your_groq_api_key_here
 RAG_API_KEY=your_admin_api_key_here
-REGISTRATION_SECRET=your_registration_secret_here
 ```
 
 ## 3. Quick Run (Docker API)

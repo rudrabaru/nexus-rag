@@ -91,11 +91,7 @@ with st.sidebar:
             
             if st.button("Generate New API Key", use_container_width=True):
                 try:
-                    # The UI automatically injects the registration secret from its own
-                    # environment. End users never need to know or type the secret.
-                    reg_secret = os.environ.get("REGISTRATION_SECRET", "").strip()
-                    payload = {"secret": reg_secret} if reg_secret else None
-                    res = requests.post(f"{API_BASE_URL}/register", data=payload, timeout=10)
+                    res = requests.post(f"{API_BASE_URL}/register", timeout=10)
                     if res.status_code == 200:
                         new_key = res.json()["api_key"]
                         st.session_state.api_key = new_key

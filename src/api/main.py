@@ -9,7 +9,7 @@ if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Depends, Query, Form, HTTPException
+from fastapi import FastAPI, Request, Depends, Query, HTTPException
 
 env_path = Path(__file__).resolve().parent.parent.parent / '.env'
 load_dotenv(dotenv_path=env_path, override=True)
@@ -73,16 +73,8 @@ def ready_check(request: Request):
 
 @app.post("/register")
 def register_tenant(
-    secret: str = Form(None),
     auth_store: AuthStore = Depends(get_auth_store)
 ):
-    import secrets
-    expected = os.environ.get("REGISTRATION_SECRET")
-    if expected:
-        expected = expected.strip()
-        secret = secret.strip() if secret else ""
-        if not secret or not secrets.compare_digest(secret, expected):
-            raise HTTPException(status_code=403, detail="Invalid registration secret")
     tenant_id = str(uuid.uuid4())
     api_key = auth_store.create_api_key(tenant_id)
     return {"api_key": api_key, "tenant_id": tenant_id}
