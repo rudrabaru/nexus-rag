@@ -237,7 +237,7 @@ class DocumentRegistry(DocumentStoreMixin, JobStoreMixin, SparseIndexMixin):
                     """,
                     (
                         source_document, source_document, "reconstructed", "complete", "private",
-                        tenant_id, now, now, ",".join(chunk_ids)
+                        tenant_id, now, now, json.dumps(chunk_ids)
                     )
                 )
             conn.commit()

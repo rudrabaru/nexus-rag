@@ -108,11 +108,14 @@ class EmbeddingGenerator:
 
         texts = []
         for chunk in valid_chunks:
-            context = f"Document: {chunk.title}"
-            if chunk.heading_path:
-                context += f" | Section: {' > '.join(chunk.heading_path)}"
-            text = f"{context}\n\n{chunk.chunk_text}"
-            texts.append(text)
+            if getattr(chunk, "embedding_text", None):
+                texts.append(chunk.embedding_text)
+            else:
+                context = f"Document: {chunk.title}"
+                if chunk.heading_path:
+                    context += f" | Section: {' > '.join(chunk.heading_path)}"
+                text = f"{context}\n\n{chunk.chunk_text}"
+                texts.append(text)
 
         embedded_chunks = []
         failed_indices = []

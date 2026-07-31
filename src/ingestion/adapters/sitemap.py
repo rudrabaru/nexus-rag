@@ -105,6 +105,10 @@ class SitemapAdapter(IngestionAdapter):
 
         seen_urls: Set[str] = set()
         clean_urls: List[str] = []
+        
+        pref = None
+        if filter_prefix and str(filter_prefix).strip():
+            pref = str(filter_prefix).strip().lower()
 
         async with httpx.AsyncClient(headers={"User-Agent": "Mozilla/5.0 (NexusRAG/1.0)"}) as client:
             try:
@@ -120,6 +124,8 @@ class SitemapAdapter(IngestionAdapter):
                 if len(clean_urls) >= MAX_SITEMAP_PAGES:
                     logger.warning(f"Sitemap reached maximum capacity of {MAX_SITEMAP_PAGES} pages.")
                     break
+                if pref and pref not in u.lower():
+                    continue
                 if u not in seen_urls and self._is_valid_page_url(u):
                     seen_urls.add(u)
                     clean_urls.append(u)
@@ -137,16 +143,13 @@ class SitemapAdapter(IngestionAdapter):
                             if len(clean_urls) >= MAX_SITEMAP_PAGES:
                                 logger.warning(f"Sitemap reached maximum capacity of {MAX_SITEMAP_PAGES} pages during recursion.")
                                 break
+                            if pref and pref not in u.lower():
+                                continue
                             if u not in seen_urls and self._is_valid_page_url(u):
                                 seen_urls.add(u)
                                 clean_urls.append(u)
                     except Exception as child_err:
                         logger.warning(f"Failed to fetch child sitemap {child_url}: {child_err}")
-
-        if filter_prefix and str(filter_prefix).strip():
-            pref = str(filter_prefix).strip().lower()
-            clean_urls = [u for u in clean_urls if pref in u.lower()]
-            logger.info(f"SitemapAdapter filtered URLs by prefix '{filter_prefix}': {len(clean_urls)} URLs remain")
 
         if not clean_urls and not child_sitemaps:
             logger.warning(f"No <loc> URLs found in {source}. Might be an RSS feed or empty sitemap.")

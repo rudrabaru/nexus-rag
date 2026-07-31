@@ -22,10 +22,14 @@ class QueryService:
         tenant_id: str
     ):
         search_query = body.query
-        if body.history and rewriter:
+        if rewriter:
             search_query = await asyncio.to_thread(
-                rewriter.rewrite, body.query, body.history
+                rewriter.generalise, search_query
             )
+            if body.history:
+                search_query = await asyncio.to_thread(
+                    rewriter.rewrite, search_query, body.history
+                )
 
         if body.use_reranker:
             ret_start = datetime.datetime.now(datetime.timezone.utc).timestamp()

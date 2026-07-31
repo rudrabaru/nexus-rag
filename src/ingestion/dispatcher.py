@@ -35,6 +35,48 @@ class IngestionDispatcher:
             pass
         return "html"
 
+    async def _discover_sitemap(self, url: str) -> str | None:
+        """
+        Attempts to automatically discover the sitemap for a given URL.
+        Returns the sitemap URL if found, otherwise None.
+        """
+        import httpx
+        from urllib.parse import urlparse, urljoin
+
+        parsed = urlparse(url)
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+                # 1. Check robots.txt for Sitemap directive
+                robots_url = urljoin(base_url, "/robots.txt")
+                try:
+                    resp = await client.get(robots_url)
+                    if resp.status_code == 200:
+                        for line in resp.text.splitlines():
+                            if line.lower().startswith("sitemap:"):
+                                sitemap_url = line.split(":", 1)[1].strip()
+                                logger.info(f"DISPATCHER | Auto-discovered sitemap via robots.txt: {sitemap_url}")
+                                return sitemap_url
+                except Exception:
+                    pass
+
+                # 2. Check common sitemap paths
+                common_paths = ["/sitemap.xml", "/sitemap_index.xml"]
+                for path in common_paths:
+                    sitemap_url = urljoin(base_url, path)
+                    try:
+                        resp = await client.head(sitemap_url)
+                        if resp.status_code == 200:
+                            logger.info(f"DISPATCHER | Auto-discovered sitemap at common path: {sitemap_url}")
+                            return sitemap_url
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.warning(f"DISPATCHER | Error during sitemap auto-discovery for {url}: {e}")
+
+        return None
+
     async def ingest(self, source: str, **kwargs) -> AdapterResult:
         """
         Routes the source to the right adapter based on prefix or extension.
@@ -55,7 +97,26 @@ class IngestionDispatcher:
                 if content_type in ("pdf", "txt", "md"):
                     result = await self.universal_adapter.ingest(source, **kwargs)
                 else:
-                    result = await self.web_adapter.ingest(source, **kwargs)
+                    # Attempt sitemap auto-discovery before falling back to single-page web adapter
+                    discovered_sitemap = await self._discover_sitemap(source)
+                    if discovered_sitemap:
+                        # Auto-extract implicit filter from original URL if user didn't provide one
+                        from urllib.parse import urlparse, parse_qs
+                        parsed_source = urlparse(source)
+                        qs = parse_qs(parsed_source.query)
+                        
+                        if "filter" not in qs and "filter_prefix" not in kwargs:
+                            if parsed_source.path and len(parsed_source.path) > 1: # Ignore "/"
+                                kwargs["filter_prefix"] = parsed_source.path
+                                logger.info(f"DISPATCHER | Auto-extracted implicit filter prefix '{parsed_source.path}' from original URL")
+
+                        logger.info(f"DISPATCHER | Routing discovered sitemap to SitemapAdapter | source={discovered_sitemap!r}")
+                        result = await self.sitemap_adapter.ingest(discovered_sitemap, **kwargs)
+                        if not result or not result.documents:
+                            logger.warning(f"DISPATCHER | SitemapAdapter returned 0 docs for {discovered_sitemap!r}. Falling back to WebAdapter.")
+                            result = await self.web_adapter.ingest(source, **kwargs)
+                    else:
+                        result = await self.web_adapter.ingest(source, **kwargs)
         elif any(source_lower.endswith(ext) for ext in [".pdf", ".docx", ".md", ".txt"]):
             ext = source_lower.rsplit(".", 1)[-1]
             logger.info(f"DISPATCHER | File upload routed to UniversalAdapter | ext={ext!r} source={source!r}")

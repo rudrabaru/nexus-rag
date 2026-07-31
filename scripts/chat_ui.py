@@ -8,6 +8,7 @@ load_dotenv(override=True)
 from ui.chat import render_chat_tab
 from ui.dashboard import render_dashboard_tab
 from ui.documents import render_documents_tab
+from ui.playground import render_playground_tab
 
 st.set_page_config(page_title="Nexus RAG", page_icon="🤖", layout="wide")
 
@@ -121,10 +122,13 @@ with st.sidebar:
         st.session_state.messages = []
         st.rerun()
 
-tab_query, tab_dashboard, tab_docs = st.tabs(["💬 Query Assistant", "📊 Pipeline Dashboard", "📄 Document Management"])
+tab_query, tab_playground, tab_dashboard, tab_docs = st.tabs(["💬 Query Assistant", "🔬 Retrieval Playground", "📊 Pipeline Dashboard", "📄 Document Management"])
 
 with tab_query:
     render_chat_tab(API_BASE_URL, api_headers, top_k, use_reranker, stream_response)
+
+with tab_playground:
+    render_playground_tab(API_BASE_URL, api_headers, top_k)
 
 with tab_dashboard:
     render_dashboard_tab(API_BASE_URL, api_headers)

@@ -40,6 +40,10 @@ class EmbeddingWorker:
                 total_tokens += sum(c.token_count for c in embedded_batch)
                 total_embedded_chunks += len(embedded_batch)
                 
+            if registry and job_id:
+                pct = 75 + int(24 * min(i + BATCH_SIZE, len(all_chunks)) / len(all_chunks))
+                registry.update_job_status(job_id, "processing", min(pct, 99))
+                
         embed_duration_ms = (time.time() - embed_start_time) * 1000
         if pipeline_logger:
             pipeline_logger.log_event(

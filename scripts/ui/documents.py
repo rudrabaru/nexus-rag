@@ -9,8 +9,8 @@ def render_documents_tab(API_BASE_URL, api_headers):
     
     col_input1, col_input2 = st.columns(2)
     with col_input1:
-        ingest_url = st.text_input("URL or Sitemap to crawl")
-        sitemap_filter = st.text_input("Sitemap URL Prefix Filter (optional, e.g. /payment-methods/google-pay/)")
+        ingest_url = st.text_input("Website URL to ingest")
+        sitemap_filter = st.text_input("URL Prefix Filter (optional, e.g. /docs/ or /blog/)")
         extract_visuals = st.toggle("Extract Visuals (Images/Charts)", value=False)
     with col_input2:
         ingest_files = st.file_uploader("Or upload files", type=["pdf", "docx", "md", "txt"], accept_multiple_files=True)
@@ -31,7 +31,7 @@ def render_documents_tab(API_BASE_URL, api_headers):
                     if ingest_url:
                         url_data = data.copy()
                         url_to_send = ingest_url.strip()
-                        if sitemap_filter and sitemap_filter.strip() and ("sitemap" in url_to_send.lower() or url_to_send.lower().endswith(".xml")):
+                        if sitemap_filter and sitemap_filter.strip():
                             sep = "&" if "?" in url_to_send else "?"
                             url_to_send = f"{url_to_send}{sep}filter={sitemap_filter.strip()}"
                         url_data["url"] = url_to_send

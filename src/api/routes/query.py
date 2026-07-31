@@ -3,7 +3,7 @@ import datetime
 import json
 from typing import Optional, Any
 import asyncio
-from fastapi import APIRouter, HTTPException, Request, Depends
+from fastapi import APIRouter, HTTPException, Request, Depends, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from src.api.auth import get_current_tenant, get_real_ip
 from slowapi import Limiter
@@ -25,6 +25,7 @@ limiter = Limiter(key_func=get_real_ip)
 async def query_rag(
     request: Request,
     body: QueryRequest,
+    background_tasks: BackgroundTasks,
     tenant_id: Optional[str] = Depends(get_current_tenant),
     generator: RAGGenerator = Depends(get_generator),
     retriever: DenseRetriever = Depends(get_retriever),
@@ -90,19 +91,22 @@ async def query_rag(
                 logger.error(f"Failed to log query: {e}")
 
         if body.evaluate_faithfulness:
-            result = await asyncio.to_thread(evaluator.evaluate, result)
-            if log_id and metrics_store:
-                try:
-                    metrics_store.update_faithfulness(log_id, result.faithfulness_score, result.faithfulness_reasoning)
-                except Exception as e:
-                    logger.error(f"Failed to update faithfulness score: {e}")
-            if pipeline_logger:
-                pipeline_logger.log_event("faithfulness_complete", query_text=result.query, score=result.faithfulness_score)
+            def run_eval_bg(res, lid, m_store, p_logger):
+                res = evaluator.evaluate(res)
+                if lid and m_store:
+                    try:
+                        m_store.update_faithfulness(lid, res.faithfulness_score, res.faithfulness_reasoning)
+                    except Exception as e:
+                        logger.error(f"Failed to update faithfulness score: {e}")
+                if p_logger:
+                    p_logger.log_event("faithfulness_complete", query_text=res.query, score=res.faithfulness_score)
+
+            background_tasks.add_task(run_eval_bg, result, log_id, metrics_store, pipeline_logger)
 
         return QueryResponse(
             answer=result.answer, sources=sources, 
-            faithfulness_score=result.faithfulness_score if body.evaluate_faithfulness else None, 
-            faithfulness_reasoning=result.faithfulness_reasoning if body.evaluate_faithfulness else None,
+            faithfulness_score=None, 
+            faithfulness_reasoning=None,
             latency_ms=result.total_latency_ms, latency_breakdown={"retrieval": result.retrieval_latency_ms, "generation": result.generation_latency_ms}
         )
     except Exception as e:
@@ -174,14 +178,14 @@ async def query_rag_stream(
                         prompt_tokens = getattr(generator.llm_client, "last_prompt_tokens", 0)
                         completion_tokens = getattr(generator.llm_client, "last_completion_tokens", 0)
                         
-                        if prompt_tokens == 0:
-                            # Fallback heuristic if provider SDK didn't populate usage_metadata on stream chunks
-                            prompt_tokens = len(body.query + retrieval_result.context_text) // 4
-                        if completion_tokens == 0:
-                            completion_tokens = len(full_answer) // 4
-
                         from src.generating.models import GenerationResult
                         context_window = generator.context_builder.build(retrieval_result.chunks)
+
+                        if prompt_tokens == 0:
+                            # Fallback heuristic if provider SDK didn't populate usage_metadata on stream chunks
+                            prompt_tokens = len(body.query + context_window.context_text) // 4
+                        if completion_tokens == 0:
+                            completion_tokens = len(full_answer) // 4
                         temp_result = GenerationResult(
                             query=body.query,
                             answer=full_answer,
@@ -281,3 +285,71 @@ async def get_logs(request: Request, tenant_id: Optional[str] = Depends(get_curr
     }
 
     return {"queries": logs, "summary": summary}
+
+@router.post("/query/compare")
+@limiter.limit("30/minute")
+async def compare_retrieval(
+    request: Request,
+    body: QueryRequest,
+    tenant_id: Optional[str] = Depends(get_current_tenant),
+    retriever: DenseRetriever = Depends(get_retriever),
+    reranker: OptionalReranker = Depends(get_reranker),
+    rewriter: Optional[QueryRewriter] = Depends(get_rewriter),
+    pipeline_logger: Any = Depends(get_pipeline_logger),
+):
+    if not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    search_query = body.query
+    if rewriter:
+        search_query = await asyncio.to_thread(
+            rewriter.generalise, search_query
+        )
+        
+    async def get_baseline():
+        return await retriever.retrieve(search_query, top_k=body.top_k, tenant_id=tenant_id, pipeline_logger=None)
+        
+    async def get_reranked():
+        dense = await retriever.retrieve(search_query, top_k=body.top_k * 4, tenant_id=tenant_id, pipeline_logger=None)
+        if reranker:
+            return await reranker.rerank(search_query, dense.chunks, top_k=body.top_k)
+        
+        # If no reranker is available, just truncate the dense results to top_k to simulate baseline
+        dense.chunks = dense.chunks[:body.top_k]
+        return dense
+        
+    baseline_result, reranked_result = await asyncio.gather(get_baseline(), get_reranked())
+    
+    def construct_preview(chunks):
+        previews = []
+        for chunk in chunks:
+            hpath = chunk.metadata.get("heading_path")
+            if isinstance(hpath, str):
+                section = hpath
+            elif isinstance(hpath, list):
+                section = " > ".join([str(h) for h in hpath if h])
+            else:
+                section = ""
+            
+            source_doc = chunk.metadata.get("source_document", "")
+            if source_doc and section:
+                label = f"{source_doc} > {section}"
+            elif source_doc:
+                label = source_doc
+            else:
+                label = section
+                
+            previews.append({
+                "url": chunk.source_url or "",
+                "section": label,
+                "similarity_score": chunk.similarity_score,
+                "chunk_preview": chunk.text[:300] + "..." if len(chunk.text) > 300 else chunk.text
+            })
+        return previews
+        
+    return {
+        "baseline": construct_preview(baseline_result.chunks),
+        "reranked": construct_preview(reranked_result.chunks),
+        "baseline_latency_ms": baseline_result.latency_ms,
+        "reranked_latency_ms": reranked_result.latency_ms + baseline_result.latency_ms
+    }

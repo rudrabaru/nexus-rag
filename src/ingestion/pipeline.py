@@ -109,6 +109,8 @@ class IncrementalIngestionPipeline:
         for c in all_chunks:
             c.visibility = "private"
             c.tenant_id = tenant_id
+            prefix = f"[{c.source_document} > {' > '.join(c.heading_path or [])}]\n"
+            c.embedding_text = prefix + c.chunk_text
 
         if visual_chunks and crawled_docs:
             parent_doc = crawled_docs[0]

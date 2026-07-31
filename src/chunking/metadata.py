@@ -23,6 +23,7 @@ class ChunkMetadata(BaseModel):
     chunk_index: int = Field(..., description="Chunk position in document")
     total_chunks: int = Field(0, description="Total number of chunks in document")
     chunk_text: str = Field(..., description="Chunk content")
+    embedding_text: Optional[str] = Field(None, description="Injected context for embedding (not displayed)")
     token_count: int = Field(..., description="Token count (for budgeting)")
     char_start: int = Field(..., description="Start position in original doc")
     char_end: int = Field(..., description="End position in original doc")

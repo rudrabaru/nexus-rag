@@ -16,11 +16,46 @@ class QueryRewriter:
     Rewrites a conversational follow-up query into a standalone search query
     using the chat history. This massively improves retrieval relevance for
     pronoun-heavy or context-dependent queries (e.g., 'how do I configure it?').
+    Also performs semantic generalisation for better vector retrieval.
     """
+
+    SEMANTIC_GENERALISE_PROMPT = """
+You are a search query optimiser for a technical documentation RAG system.
+Rewrite the query below to use generic technical vocabulary that a documentation author would use.
+- Replace specific product names, country names, and proper nouns with their canonical technical equivalents.
+- Preserve the technical intent exactly.
+- Output ONLY a JSON object matching the requested schema.
+
+Query: {query}
+"""
 
     def __init__(self, config: GenerationConfig = None):
         self.config = config or GenerationConfig()
         self.llm_client = LLMClient(self.config)
+
+    def generalise(self, query: str) -> str:
+        prompt = self.SEMANTIC_GENERALISE_PROMPT.format(query=query)
+        try:
+            answer, _, _, _ = self.llm_client.call_llm(
+                prompt, response_schema=RewrittenQuery
+            )
+            try:
+                parsed = json.loads(answer.strip())
+            except json.JSONDecodeError:
+                import re
+                match = re.search(r'(\{.*\})', answer, re.DOTALL)
+                if not match:
+                    raise ValueError(f"Could not extract JSON from LLM response: {answer}")
+                parsed = json.loads(match.group(1))
+                
+            rewritten = parsed.get("rewritten_query", query).strip()
+            
+            if rewritten != query:
+                logger.info(f"Generalised query from '{query}' to '{rewritten}'")
+            return rewritten
+        except Exception as e:
+            logger.error(f"Failed to generalise query, falling back to original: {e}")
+            return query
 
     def rewrite(self, query: str, history: List[Dict[str, str]]) -> str:
         if not history:
