@@ -1,6 +1,4 @@
-import os
 import logging
-import secrets
 from fastapi import APIRouter, Request, HTTPException, Depends, Security
 from pydantic import BaseModel
 from typing import List, Optional
@@ -82,27 +80,15 @@ async def delete_document(
     request: Request,
     registry: DocumentRegistry = Depends(get_registry),
     retriever = Depends(get_retriever),
-    auth_store: AuthStore = Depends(get_auth_store),
-    admin_key: str = Security(admin_api_key_header),
-    api_key: str = Security(api_key_header),
+    tenant_id: Optional[str] = Depends(get_current_tenant_from_admin_or_user),
 ):
     """
     Deletes a document from:
     1. Vector store
-    2. Asset store
-    3. Document Registry
+    2. Document Registry
     """
-    expected_admin_key = os.environ.get("RAG_API_KEY")
-    is_admin = admin_key and expected_admin_key and secrets.compare_digest(admin_key, expected_admin_key)
+    is_admin = tenant_id is None
     
-    tenant_id = None
-    if not is_admin:
-        if api_key:
-            tenant_id = auth_store.validate_api_key(api_key)
-            if not tenant_id:
-                raise HTTPException(status_code=401, detail="Invalid API Key.")
-        else:
-            raise HTTPException(status_code=401, detail="Authentication required. Please provide a valid API key.")
     doc = registry.get_document(doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")

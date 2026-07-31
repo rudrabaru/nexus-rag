@@ -45,6 +45,11 @@ def _init_components() -> PipelineComponents:
     retriever = DenseRetriever(vector_store=db_manager)
 
     from src.registry.database import DocumentRegistry
+    
+    # Note: We create a distinct DocumentRegistry instance here purely to furnish the
+    # HybridRetriever with an FTS search handle. The primary application registry is 
+    # instantiated in startup.py and lives on app.state.registry. Both instances use
+    # the same underlying SQLite WAL file so this is completely safe.
     registry = DocumentRegistry()
 
     retriever = HybridRetriever(

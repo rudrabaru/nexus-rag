@@ -72,7 +72,6 @@ class EmbeddingWorker:
             registry.complete_job(
                 job_id,
                 embedded_chunk_ids,
-                [],
                 {"total_added": total_added, "total_tokens": total_tokens},
                 status=job_status,
                 metadata=metadata,

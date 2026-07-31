@@ -41,8 +41,8 @@ class JobStoreMixin:
             # Upsert document as pending
             conn.execute(
                 """
-                INSERT INTO documents (doc_id, source, format, status, visibility, tenant_id, ingested_at, updated_at, chunk_ids, asset_ids, stats, content_hash)
-                VALUES (?, ?, ?, 'pending', 'private', ?, ?, ?, '[]', '[]', '{}', ?)
+                INSERT INTO documents (doc_id, source, format, status, visibility, tenant_id, ingested_at, updated_at, chunk_ids, stats, content_hash)
+                VALUES (?, ?, ?, 'pending', 'private', ?, ?, ?, '[]', '{}', ?)
                 ON CONFLICT(doc_id) DO UPDATE SET
                 status = CASE WHEN documents.status = 'complete' THEN 'complete' ELSE 'pending' END,
                 updated_at = excluded.updated_at
@@ -133,7 +133,6 @@ class JobStoreMixin:
         self,
         job_id: str,
         chunk_ids: List[str],
-        asset_ids: List[str],
         stats: Dict[str, Any],
         status: str = "complete",
         metadata: Optional[Dict[str, Any]] = None,
@@ -175,7 +174,6 @@ class JobStoreMixin:
                     status = ?,
                     updated_at = ?,
                     chunk_ids = ?,
-                    asset_ids = ?,
                     stats = ?,
                     error = COALESCE(?, error)
                 WHERE doc_id = (SELECT doc_id FROM jobs WHERE job_id = ?)
@@ -184,7 +182,6 @@ class JobStoreMixin:
                     status,
                     now,
                     json.dumps(chunk_ids),
-                    json.dumps(asset_ids),
                     json.dumps(stats),
                     error,
                     job_id,

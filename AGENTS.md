@@ -624,9 +624,9 @@ Favor understanding and observability over sophistication.
 
 The RAG system operates as a single, in-memory microservice powered by FastAPI.
 
-Data must flow directly from ingestion through to Qdrant without persisting intermediate representations to disk, except where necessary for critical state (e.g. the BM25 index or SQLite job registry).
+Data must flow directly from ingestion through to Qdrant without persisting intermediate representations to disk, except where necessary for critical state (e.g. the SQLite FTS5 index or SQLite job registry).
 
-Evaluation should be executed directly against the active Qdrant collection and the live BM25 index. 
+Evaluation should be executed directly against the active Qdrant collection and the live SQLite FTS5 index. 
 
 ## Stress Testing
 

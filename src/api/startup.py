@@ -40,11 +40,10 @@ async def lifespan(app: FastAPI):
 
             ingestion_concurrency = int(os.environ.get("INGESTION_CONCURRENCY", "3"))
             app.state.ingestion_semaphore = asyncio.Semaphore(ingestion_concurrency)
-            app.state.embed_semaphore = asyncio.Semaphore(ingestion_concurrency)
             app.state.query_semaphore = asyncio.Semaphore(10)
 
             if hasattr(app.state, 'embedding_generator') and app.state.embedding_generator:
-                app.state.embedding_generator.embed_semaphore = app.state.embed_semaphore
+                app.state.embedding_generator.embed_semaphore = asyncio.Semaphore(ingestion_concurrency)
 
             # Reset stuck jobs on startup
             try:

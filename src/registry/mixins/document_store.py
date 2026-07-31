@@ -13,7 +13,6 @@ class DocumentStoreMixin:
 
             doc = dict(row)
             doc["chunk_ids"] = json.loads(doc["chunk_ids"]) if doc["chunk_ids"] else []
-            doc["asset_ids"] = json.loads(doc["asset_ids"]) if doc["asset_ids"] else []
             doc["stats"] = json.loads(doc["stats"]) if doc["stats"] else {}
             return doc
 
@@ -48,25 +47,9 @@ class DocumentStoreMixin:
 
             doc = dict(row)
             doc["chunk_ids"] = json.loads(doc["chunk_ids"]) if doc["chunk_ids"] else []
-            doc["asset_ids"] = json.loads(doc["asset_ids"]) if doc["asset_ids"] else []
             doc["stats"] = json.loads(doc["stats"]) if doc["stats"] else {}
             return doc
 
-    def get_document_by_source_and_visibility(
-        self, source: str, visibility: str
-    ) -> Optional[Dict[str, Any]]:
-        query = "SELECT * FROM documents WHERE source = ? AND visibility = ?"
-        with self._get_conn() as conn:
-            cursor = conn.execute(query, [source, visibility])
-            row = cursor.fetchone()
-            if not row:
-                return None
-
-            doc = dict(row)
-            doc["chunk_ids"] = json.loads(doc["chunk_ids"]) if doc["chunk_ids"] else []
-            doc["asset_ids"] = json.loads(doc["asset_ids"]) if doc["asset_ids"] else []
-            doc["stats"] = json.loads(doc["stats"]) if doc["stats"] else {}
-            return doc
 
     def get_tenant_quota(self, tenant_id: str) -> int:
         query = "SELECT chunk_ids FROM documents WHERE tenant_id = ?"
@@ -95,9 +78,6 @@ class DocumentStoreMixin:
                 doc = dict(row)
                 doc["chunk_ids"] = (
                     json.loads(doc["chunk_ids"]) if doc["chunk_ids"] else []
-                )
-                doc["asset_ids"] = (
-                    json.loads(doc["asset_ids"]) if doc["asset_ids"] else []
                 )
                 doc["stats"] = json.loads(doc["stats"]) if doc["stats"] else {}
                 docs.append(doc)

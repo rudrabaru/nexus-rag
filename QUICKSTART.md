@@ -25,6 +25,13 @@ docker run -p 8000:8000 nexus-rag-api
 - API available at: [http://localhost:8000](http://localhost:8000)
 - API docs at: [http://localhost:8000/docs](http://localhost:8000/docs)
 
+You can run the Streamlit UI via Docker:
+```bash
+docker build -t nexus-rag-ui -f Dockerfile.ui .
+docker run -p 8080:8080 -e API_BASE_URL=http://host.docker.internal:8000 nexus-rag-ui
+```
+- UI available at: [http://localhost:8080](http://localhost:8080)
+
 ## 4. Local Development Run
 
 If you prefer to run it locally without Docker:
@@ -49,7 +56,7 @@ streamlit run scripts/chat_ui.py
 ```
 
 ## 5. Usage Guide
-1. Open the UI at `http://localhost:7860` (or `http://localhost:8501` if running locally without Docker).
+1. Open the UI at `http://localhost:8080` (or `http://localhost:8501` if running locally without Docker).
 2. Go to the **Ingest Document** tab.
 3. Paste a URL or select a local PDF/Markdown file and click **Ingest**.
 4. Go to the **Chat** tab and ask a question about the document you just uploaded. The system will retrieve the relevant sections and stream an answer with citations.
