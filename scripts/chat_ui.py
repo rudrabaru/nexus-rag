@@ -89,12 +89,12 @@ with st.sidebar:
                 
             st.markdown("---")
             
-            reg_secret_input = st.text_input("Registration Secret (if required by server)", type="password", placeholder="Enter secret to generate key")
             if st.button("Generate New API Key", use_container_width=True):
                 try:
-                    # Use the user-provided secret, or fallback to environment variable if running locally
-                    secret_to_send = reg_secret_input or os.environ.get("REGISTRATION_SECRET", "")
-                    payload = {"secret": secret_to_send} if secret_to_send else None
+                    # The UI automatically injects the registration secret from its own
+                    # environment. End users never need to know or type the secret.
+                    reg_secret = os.environ.get("REGISTRATION_SECRET", "").strip()
+                    payload = {"secret": reg_secret} if reg_secret else None
                     res = requests.post(f"{API_BASE_URL}/register", data=payload, timeout=10)
                     if res.status_code == 200:
                         new_key = res.json()["api_key"]
