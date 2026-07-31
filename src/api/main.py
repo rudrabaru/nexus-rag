@@ -79,6 +79,8 @@ def register_tenant(
     import secrets
     expected = os.environ.get("REGISTRATION_SECRET")
     if expected:
+        expected = expected.strip()
+        secret = secret.strip() if secret else ""
         if not secret or not secrets.compare_digest(secret, expected):
             raise HTTPException(status_code=403, detail="Invalid registration secret")
     tenant_id = str(uuid.uuid4())

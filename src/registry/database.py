@@ -172,6 +172,7 @@ class DocumentRegistry(DocumentStoreMixin, JobStoreMixin, SparseIndexMixin):
         Useful for Render Free Tier where SQLite is wiped on restart but Qdrant persists.
         """
         import datetime
+        import json
         from collections import defaultdict
         
         offset = None
