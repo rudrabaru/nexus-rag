@@ -125,6 +125,9 @@ async def _process_ingestion(
         # ── STAGE 1.5: Sitemap bounded concurrent fetch ────────────────────────
         if adapter_result and adapter_result.documents and all(d.markdown_content == "" for d in adapter_result.documents) and len(adapter_result.documents) > 0:
             urls = [doc.url for doc in adapter_result.documents]
+            if len(urls) > 50:
+                logger.warning(f"{tag} Sitemap exceeds 50 URLs (found {len(urls)}). Truncating to 50 to prevent memory exhaustion.")
+                urls = urls[:50]
             total = len(urls)
             logger.info(f"{tag} STAGE 1.5 | Sitemap bounded concurrent fetch | total_pages={total}")
             if registry:
@@ -163,7 +166,11 @@ async def _process_ingestion(
 
                 async with sem:
                     try:
-                        res = await dispatcher.web_adapter.ingest(u, extract_visuals=extract_visuals)
+                        # Prevent hung requests from permanently locking the ingestion semaphore
+                        res = await asyncio.wait_for(
+                            dispatcher.web_adapter.ingest(u, extract_visuals=extract_visuals),
+                            timeout=20.0
+                        )
                         processed += 1
                         if registry:
                             pct = 5 + int(45 * processed / total)
@@ -227,6 +234,17 @@ async def _process_ingestion(
                 f"is only {total_chars} chars. For scanned PDFs the vision fallback "
                 "should have recovered content — check STAGE 1 logs for vision errors."
             )
+
+        # ── GATE: Massive content (Protect API Limits) ─────────────────────────
+        MAX_CHARS_PER_INGESTION = 1_500_000
+        if total_chars > MAX_CHARS_PER_INGESTION:
+            err_msg = f"Document is too large. Extracted text ({total_chars} characters) exceeds the {MAX_CHARS_PER_INGESTION} limit to prevent API exhaustion."
+            logger.error(f"{tag} GATE FAIL | {err_msg}")
+            if registry:
+                registry.update_job_status(job_id, "failed", error=err_msg)
+            if temp_dir:
+                shutil.rmtree(temp_dir)
+            return
 
         # ── STAGE 3: Duplicate detection ──────────────────────────────────────
         if not content_hash:

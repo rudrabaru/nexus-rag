@@ -21,7 +21,7 @@ router = APIRouter()
 limiter = Limiter(key_func=get_real_ip)
 
 @router.post("/query", response_model=QueryResponse)
-@limiter.limit("15/minute")
+@limiter.limit("5/minute")
 async def query_rag(
     request: Request,
     body: QueryRequest,
@@ -115,7 +115,7 @@ async def query_rag(
 
 
 @router.post("/query/stream")
-@limiter.limit("15/minute")
+@limiter.limit("5/minute")
 async def query_rag_stream(
     request: Request,
     body: QueryRequest,
@@ -287,7 +287,7 @@ async def get_logs(request: Request, tenant_id: Optional[str] = Depends(get_curr
     return {"queries": logs, "summary": summary}
 
 @router.post("/query/compare")
-@limiter.limit("30/minute")
+@limiter.limit("5/minute")
 async def compare_retrieval(
     request: Request,
     body: QueryRequest,

@@ -28,7 +28,7 @@ router = APIRouter()
 limiter = Limiter(key_func=get_real_ip)
 
 @router.post("/ingest")
-@limiter.limit("30/minute")
+@limiter.limit("2/minute")
 async def ingest_document(
     request: Request,
     background_tasks: BackgroundTasks,

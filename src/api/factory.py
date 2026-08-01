@@ -12,8 +12,8 @@ from src.generating.query_rewriter import QueryRewriter
 from src.embedding.generator import EmbeddingGenerator
 from src.embedding.config import EmbeddingConfig
 
-DEFAULT_GEMINI_MODEL = "gemini-2.0-flash-lite"
-DEFAULT_GROQ_MODEL = "llama-3.3-70b-versatile"
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def _init_components() -> PipelineComponents:
         )
         fallback_config = {
             "provider": "groq",
-            "model_name": "llama-3.3-70b-versatile",
+            "model_name": "llama-3.1-8b-instant",
             "max_output_tokens": 4096,
             "temperature": 0.1,
         }
@@ -90,9 +90,8 @@ def _init_components() -> PipelineComponents:
     evaluator = FaithfulnessEvaluator(config=config)
     
     rewriter_config = GenerationConfig(
-        provider=provider,
-        model_name=model_name,
-        fallback_config=fallback_config,
+        provider="groq",
+        model_name="llama-3.1-8b-instant",
         temperature=0.1
     )
     rewriter = QueryRewriter(config=rewriter_config)

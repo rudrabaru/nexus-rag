@@ -23,7 +23,7 @@ class GenerationConfig(BaseModel):
         description="LLM provider: 'gemini' or 'groq'",
     )
     model_name: str = Field(
-        "gemini-2.0-flash-lite",
+        "gemini-3.5-flash",
         description="Model identifier passed to the provider API",
     )
 
