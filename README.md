@@ -3,7 +3,7 @@
 An advanced, highly performant Retrieval-Augmented Generation (RAG) system engineered as an in-memory microservice. Designed for extreme accuracy, strict hallucination prevention, and absolute corpus independence.
 
 **Live Deployment:**
-- 🖥️ **API Backend** (Render Free Tier): `https://nexus-rag-backend-hjxa.onrender.com`
+- 🖥️ **API Backend** (Render Free Tier): `https://nexus-rag-backend-hjxa.onrender.com/docs/`
 - 💬 **Streamlit UI** (Streamlit Cloud): `https://nexus-rag-2026.streamlit.app`
 
 ## Architecture Vision
@@ -51,6 +51,130 @@ Detailed architectural and implementation documentation for each phase of the pi
 7. [Phase 7: Generation](docs/phases/phase7_generation.md) - Strict anti-hallucination prompt engineering and citation.
 8. [Phase 8: Conversational RAG](docs/phases/phase8_conversational_rag.md) - Stateful query rewriting and memory management.
 9. [Phase 9: Production Tradeoffs](docs/phases/phase9_production_tradeoffs.md) - Architectural design decisions and tradeoffs.
+
+## The User Workflow (How to use Nexus RAG)
+
+This flow illustrates the strict multi-tenant isolation and stateless authentication process a user goes through to interact with their private workspace.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Auth as Auth Store
+    participant Ingest as Ingestion API
+    participant Query as Query API
+
+    %% Registration
+    User->>Auth: POST /register
+    Auth-->>User: Returns API Key (HMAC signed) & Tenant ID
+    Note right of User: User saves API Key. No credentials<br/>are persisted in the DB!
+
+    %% Ingestion
+    User->>Ingest: POST /ingest (Headers: X-API-Key) + URL/PDF
+    Ingest->>Auth: Cryptographically verify API Key
+    Auth-->>Ingest: Validated Tenant ID
+    Ingest-->>User: Returns Job ID & Status
+    Note right of User: Data is strictly bound<br/>to Tenant ID at storage layer
+
+    %% Querying
+    User->>Query: POST /query (Headers: X-API-Key)
+    Query->>Auth: Cryptographically verify API Key
+    Auth-->>Query: Validated Tenant ID
+    Query-->>User: Streams LLM Response (SSE)
+```
+
+## The Ingestion Pipeline (Internal Flow)
+
+This flowchart visualizes how heterogeneous data is processed, chunked, and dual-indexed into Qdrant and SQLite without losing its structural hierarchy.
+
+```mermaid
+graph TD
+    %% Inputs
+    A1[PDF / DOCX] --> B(Format Routing & Detection)
+    A2[URLs / Sitemaps] --> B
+    
+    %% Extraction
+    B -->|Local Binary| C1[PyMuPDF / markitdown]
+    B -->|Web Data| C2[Jina AI Reader API]
+    
+    C1 --> D[Uniform Markdown Conversion]
+    C2 --> D
+    
+    %% Processing
+    D --> E[Semantic Normalization<br/>Strip Boilerplate]
+    E --> F[Hierarchical Chunking<br/>Respects Markdown Headings]
+    
+    %% Embedding & Indexing
+    F --> G[Jina Embeddings API<br/>jina-embeddings-v3]
+    
+    G --> H{Dual-Index Commitment<br/>Scoped by Tenant ID}
+    
+    H -->|Dense Vectors| I[(Qdrant Cloud)]
+    H -->|Sparse Text| J[(SQLite FTS5)]
+    
+    style I fill:#f9f,stroke:#333,stroke-width:2px
+    style J fill:#bbf,stroke:#333,stroke-width:2px
+```
+
+## The Query Pipeline (Internal Flow)
+
+This flowchart visualizes the highly orchestrated, multi-stage hybrid retrieval and generation process.
+
+```mermaid
+graph TD
+    A[User Query] --> B{Follow-up Question?}
+    
+    %% Rewriting
+    B -->|Yes| C[Query Rewriter LLM<br/>Resolves context]
+    B -->|No| D[Resolved Query]
+    C --> D
+    
+    %% Hybrid Retrieval
+    D --> E{Concurrent Hybrid Search}
+    E -->|Semantic Search| F[(Qdrant Dense Search)]
+    E -->|Keyword BM25| G[(SQLite FTS5)]
+    
+    F --> H[Reciprocal Rank Fusion]
+    G --> H
+    
+    %% Refinement
+    H --> I{Reranking Enabled?}
+    I -->|Yes| J[Jina Cross-Encoder Reranker]
+    I -->|No| K[Top-K Candidates]
+    J --> K
+    
+    %% Generation
+    K --> L[Context Builder<br/>Stitches chunks & citations]
+    L --> M[Gemini 2.0 / Groq Llama 3.3<br/>Strict Anti-Hallucination Prompt]
+    
+    M -->|Server-Sent Events| N((Streaming Response<br/>to User))
+    
+    %% Evaluation
+    N -.->|Async Background Task| O[Faithfulness Evaluator LLM]
+    O -.->|Log Score| P[(SQLite Metrics Store)]
+    
+    style F fill:#f9f,stroke:#333
+    style G fill:#bbf,stroke:#333
+    style P fill:#bbf,stroke:#333
+```
+
+## Cloud Deployment Resilience (Auto-Recovery Flow)
+
+This shows how the system survives Render's ephemeral disk wipes by treating Qdrant as the durable source of truth.
+
+```mermaid
+graph LR
+    A[Server Cold Start<br/>Ephemeral Disk Wiped] --> B{Check Qdrant vs SQLite}
+    
+    B -->|SQLite Empty & Qdrant Full| C[Trigger Auto-Rebuild]
+    B -->|In Sync| D[Start API Server]
+    
+    C --> E[Scroll Qdrant Vectors]
+    E --> F[Reconstruct SQLite Registry & FTS5]
+    F --> D
+    
+    style C fill:#f96,stroke:#333,stroke-width:2px
+```
+
 
 ## Deployment & Production Notes
 

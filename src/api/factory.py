@@ -90,8 +90,9 @@ def _init_components() -> PipelineComponents:
     evaluator = FaithfulnessEvaluator(config=config)
     
     rewriter_config = GenerationConfig(
-        provider="groq",
-        model_name="llama-3.3-70b-versatile",
+        provider=provider,
+        model_name=model_name,
+        fallback_config=fallback_config,
         temperature=0.1
     )
     rewriter = QueryRewriter(config=rewriter_config)
