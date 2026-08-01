@@ -45,70 +45,85 @@ async def query_rag(
         pipeline_logger.log_event("query_started", query_text=body.query, tenant_id=tenant_id)
 
     try:
-        registry = getattr(request.app.state, "registry", None)
-        if registry:
-            doc_count = await asyncio.to_thread(registry.get_doc_count, tenant_id)
-            if doc_count == 0:
+        query_semaphore = getattr(request.app.state, "query_semaphore", None)
+        semaphore_acquired = False
+        if query_semaphore:
+            if query_semaphore._value <= 0:
                 return QueryResponse(
-                    answer="Your workspace has no documents yet. Please go to the 'Add Source(s)' tab and upload a document or URL first.",
+                    answer="⚠️ **High Traffic Alert:** Our servers are currently at maximum capacity. Please try your query again in a few moments.",
                     sources=[], faithfulness_score=None, faithfulness_reasoning=None, latency_ms=0,
                 )
+            await query_semaphore.acquire()
+            semaphore_acquired = True
 
-        retrieval_result = await QueryService.run_retrieval(body, retriever, reranker, rewriter, pipeline_logger, tenant_id)
+        try:
+            registry = getattr(request.app.state, "registry", None)
+            if registry:
+                doc_count = await asyncio.to_thread(registry.get_doc_count, tenant_id)
+                if doc_count == 0:
+                    return QueryResponse(
+                        answer="Your workspace has no documents yet. Please go to the 'Add Source(s)' tab and upload a document or URL first.",
+                        sources=[], faithfulness_score=None, faithfulness_reasoning=None, latency_ms=0,
+                    )
 
-        gen_start = datetime.datetime.now(datetime.timezone.utc).timestamp()
-        result = await asyncio.to_thread(
-            generator.generate,
-            body.query, top_k=body.top_k, retrieval_result=retrieval_result, chat_history=body.history,
-        )
-        if pipeline_logger:
-            pipeline_logger.log_event(
-                "generation_complete", query_text=body.query, completion_tokens=result.completion_tokens,
-                prompt_tokens=result.prompt_tokens, duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - gen_start) * 1000
+            retrieval_result = await QueryService.run_retrieval(body, retriever, reranker, rewriter, pipeline_logger, tenant_id)
+
+            gen_start = datetime.datetime.now(datetime.timezone.utc).timestamp()
+            result = await asyncio.to_thread(
+                generator.generate,
+                body.query, top_k=body.top_k, retrieval_result=retrieval_result, chat_history=body.history,
             )
-
-        sources = QueryService.construct_sources(result)
-
-        if pipeline_logger:
-            pipeline_logger.log_event("query_complete", query_text=body.query, duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000)
-
-        metrics_store = getattr(request.app.state, "metrics_store", None)
-        log_id = None
-        if metrics_store:
-            details = {
-                "top_k_requested": body.top_k, "faithfulness_reasoning": None,
-                "retrieved_context": [{"chunk_id": c.chunk_id, "source_url": c.source_url, "similarity_score": c.similarity_score} for c in result.context_window.included_chunks],
-            }
-            try:
-                log_id = metrics_store.log_query(
-                    tenant_id=tenant_id, query=body.query, latency_ms=result.total_latency_ms,
-                    tokens_used=result.prompt_tokens + result.completion_tokens, faithfulness_score=None,
-                    details=details, embedding_tokens=retrieval_result.embedding_tokens,
-                    generation_input_tokens=result.prompt_tokens, generation_output_tokens=result.completion_tokens,
-                    rerank_tokens=retrieval_result.rerank_tokens, provider=getattr(result, "provider", "gemini")
+            if pipeline_logger:
+                pipeline_logger.log_event(
+                    "generation_complete", query_text=body.query, completion_tokens=result.completion_tokens,
+                    prompt_tokens=result.prompt_tokens, duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - gen_start) * 1000
                 )
-            except Exception as e:
-                logger.error(f"Failed to log query: {e}")
 
-        if body.evaluate_faithfulness:
-            def run_eval_bg(res, lid, m_store, p_logger):
-                res = evaluator.evaluate(res)
-                if lid and m_store:
-                    try:
-                        m_store.update_faithfulness(lid, res.faithfulness_score, res.faithfulness_reasoning)
-                    except Exception as e:
-                        logger.error(f"Failed to update faithfulness score: {e}")
-                if p_logger:
-                    p_logger.log_event("faithfulness_complete", query_text=res.query, score=res.faithfulness_score)
+            sources = QueryService.construct_sources(result)
 
-            background_tasks.add_task(run_eval_bg, result, log_id, metrics_store, pipeline_logger)
+            if pipeline_logger:
+                pipeline_logger.log_event("query_complete", query_text=body.query, duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000)
 
-        return QueryResponse(
-            answer=result.answer, sources=sources, 
-            faithfulness_score=None, 
-            faithfulness_reasoning=None,
-            latency_ms=result.total_latency_ms, latency_breakdown={"retrieval": result.retrieval_latency_ms, "generation": result.generation_latency_ms}
-        )
+            metrics_store = getattr(request.app.state, "metrics_store", None)
+            log_id = None
+            if metrics_store:
+                details = {
+                    "top_k_requested": body.top_k, "faithfulness_reasoning": None,
+                    "retrieved_context": [{"chunk_id": c.chunk_id, "source_url": c.source_url, "similarity_score": c.similarity_score} for c in result.context_window.included_chunks],
+                }
+                try:
+                    log_id = metrics_store.log_query(
+                        tenant_id=tenant_id, query=body.query, latency_ms=result.total_latency_ms,
+                        tokens_used=result.prompt_tokens + result.completion_tokens, faithfulness_score=None,
+                        details=details, embedding_tokens=retrieval_result.embedding_tokens,
+                        generation_input_tokens=result.prompt_tokens, generation_output_tokens=result.completion_tokens,
+                        rerank_tokens=retrieval_result.rerank_tokens, provider=getattr(result, "provider", "gemini")
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to log query: {e}")
+
+            if body.evaluate_faithfulness:
+                def run_eval_bg(res, lid, m_store, p_logger):
+                    res = evaluator.evaluate(res)
+                    if lid and m_store:
+                        try:
+                            m_store.update_faithfulness(lid, res.faithfulness_score, res.faithfulness_reasoning)
+                        except Exception as e:
+                            logger.error(f"Failed to update faithfulness score: {e}")
+                    if p_logger:
+                        p_logger.log_event("faithfulness_complete", query_text=res.query, score=res.faithfulness_score)
+
+                background_tasks.add_task(run_eval_bg, result, log_id, metrics_store, pipeline_logger)
+
+            return QueryResponse(
+                answer=result.answer, sources=sources, 
+                faithfulness_score=None, 
+                faithfulness_reasoning=None,
+                latency_ms=result.total_latency_ms, latency_breakdown={"retrieval": result.retrieval_latency_ms, "generation": result.generation_latency_ms}
+            )
+        finally:
+            if semaphore_acquired and query_semaphore:
+                query_semaphore.release()
     except Exception as e:
         logger.error(f"Error during query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -301,24 +316,25 @@ async def compare_retrieval(
         raise HTTPException(status_code=401, detail="Authentication required")
         
     search_query = body.query
+    import os
     if rewriter:
-        search_query = await asyncio.to_thread(
-            rewriter.generalise, search_query
-        )
-        
-    async def get_baseline():
-        return await retriever.retrieve(search_query, top_k=body.top_k, tenant_id=tenant_id, pipeline_logger=None)
-        
-    async def get_reranked():
-        dense = await retriever.retrieve(search_query, top_k=body.top_k * 4, tenant_id=tenant_id, pipeline_logger=None)
-        if reranker:
-            return await reranker.rerank(search_query, dense.chunks, top_k=body.top_k)
-        
-        # If no reranker is available, just truncate the dense results to top_k to simulate baseline
-        dense.chunks = dense.chunks[:body.top_k]
-        return dense
-        
-    baseline_result, reranked_result = await asyncio.gather(get_baseline(), get_reranked())
+        if os.environ.get("ENABLE_QUERY_GENERALISATION", "false").lower() == "true":
+            search_query = await asyncio.to_thread(
+                rewriter.generalise, search_query
+            )
+            
+    # Do dense retrieval once to avoid double Jina embedding API calls
+    dense_result = await retriever.retrieve(search_query, top_k=body.top_k * 4, tenant_id=tenant_id, pipeline_logger=None)
+    
+    import copy
+    baseline_result = copy.copy(dense_result)
+    baseline_result.chunks = dense_result.chunks[:body.top_k]
+    baseline_result.top_k = body.top_k
+    
+    if reranker:
+        reranked_result = await reranker.rerank(search_query, dense_result.chunks, top_k=body.top_k)
+    else:
+        reranked_result = baseline_result
     
     def construct_preview(chunks):
         previews = []

@@ -99,8 +99,13 @@ async def _process_ingestion(
 ):
     start_time = time.time()
     tag = f"[job={job_id[:8]} doc={doc_id[:8]}]"
+    semaphore_acquired = False
 
     try:
+        # Implicit Job Queue: Suspend here until the semaphore is free
+        await semaphore.acquire()
+        semaphore_acquired = True
+
         # ── STAGE 1: Adapter dispatch ─────────────────────────────────────────
         logger.info(
             f"{tag} STAGE 1 | Adapter dispatch | source={source_path!r} "
@@ -315,4 +320,5 @@ async def _process_ingestion(
     finally:
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
-        semaphore.release()
+        if semaphore_acquired:
+            semaphore.release()

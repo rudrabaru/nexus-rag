@@ -28,7 +28,7 @@ router = APIRouter()
 limiter = Limiter(key_func=get_real_ip)
 
 @router.post("/ingest")
-@limiter.limit("2/minute")
+@limiter.limit("10/minute")
 async def ingest_document(
     request: Request,
     background_tasks: BackgroundTasks,
@@ -42,15 +42,6 @@ async def ingest_document(
     retriever: Any = Depends(get_retriever),
     pipeline_logger: Any = Depends(get_pipeline_logger),
 ):
-    semaphore_acquired = False
-    if semaphore._value <= 0:
-        raise HTTPException(
-            status_code=429,
-            detail="System is currently at maximum capacity for ingestion. Please try again later."
-        )
-    await semaphore.acquire()
-    semaphore_acquired = True
-
     try:
         if not tenant_id:
             raise HTTPException(
@@ -103,14 +94,10 @@ async def ingest_document(
             if estimated_chunks > 500:
                 response["warning"] = f"Large document (~{int(estimated_chunks)} estimated chunks). Ingestion may take 8-10 minutes due to API rate limits. Partial results will be available progressively."
 
-        semaphore_acquired = False
         return response
 
     except Exception:
         raise
-    finally:
-        if semaphore_acquired:
-            semaphore.release()
 
 
 @router.get("/ingest/{job_id}", response_model=JobStatusResponse)

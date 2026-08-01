@@ -52,14 +52,11 @@ class DocumentStoreMixin:
 
 
     def get_tenant_quota(self, tenant_id: str) -> int:
-        query = "SELECT chunk_ids FROM documents WHERE tenant_id = ?"
-        total_chunks = 0
+        query = "SELECT SUM(json_array_length(chunk_ids)) FROM documents WHERE tenant_id = ?"
         with self._get_conn() as conn:
             cursor = conn.execute(query, [tenant_id])
-            for row in cursor.fetchall():
-                chunk_ids = json.loads(row["chunk_ids"]) if row["chunk_ids"] else []
-                total_chunks += len(chunk_ids)
-        return total_chunks
+            row = cursor.fetchone()
+            return int(row[0]) if row and row[0] is not None else 0
 
     def list_documents(
         self, tenant_id: Optional[str] = None

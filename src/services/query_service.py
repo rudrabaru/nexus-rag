@@ -22,10 +22,12 @@ class QueryService:
         tenant_id: str
     ):
         search_query = body.query
+        import os
         if rewriter:
-            search_query = await asyncio.to_thread(
-                rewriter.generalise, search_query
-            )
+            if os.environ.get("ENABLE_QUERY_GENERALISATION", "false").lower() == "true":
+                search_query = await asyncio.to_thread(
+                    rewriter.generalise, search_query
+                )
             if body.history:
                 search_query = await asyncio.to_thread(
                     rewriter.rewrite, search_query, body.history
