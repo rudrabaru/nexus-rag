@@ -9,6 +9,55 @@ An advanced, highly performant Retrieval-Augmented Generation (RAG) system engin
 ## Architecture Vision
 The system ingests heterogeneous data formats and transforms them into an intelligent, vector-searchable knowledge base. It adheres strictly to in-memory processing patterns—avoiding slow intermediate disk writes—while maintaining comprehensive pipeline observability and strict multi-tenant security isolation. Built for the cloud, it gracefully handles complex, stateful human conversations at scale.
 
+## Local Quickstart
+
+**1. Prerequisites & Tech Stack**
+- **Language**: Python 3.10+
+- **Frameworks**: FastAPI, Streamlit
+- **Databases**: Qdrant Cloud (Dense), SQLite FTS5 (Sparse & Registry)
+- **APIs**: Groq / Gemini (Generation), Jina AI (Embeddings & Reranking)
+
+**2. Environment Setup**
+Create a `.env` file in the root directory and populate it with your API keys:
+```env
+# Required API Keys
+GEMINI_API_KEY="your_gemini_key"
+GROQ_API_KEY="your_groq_key"
+JINA_API_KEY="your_jina_key"
+
+# Qdrant Vector Database
+QDRANT_URL="your_qdrant_cluster_url"
+QDRANT_API_KEY="your_qdrant_api_key"
+QDRANT_COLLECTION_NAME="nexus_rag_collection"
+
+# Security (HMAC Signing Seed)
+RAG_API_KEY="your-super-secret-admin-key"
+
+# Optional Toggles
+INGESTION_CONCURRENCY=2
+ENABLE_QUERY_GENERALISATION=false
+ENABLE_RERANKER=false
+```
+
+**3. Run the Backend (FastAPI)**
+```bash
+git clone https://github.com/rudrabaru/nexus-rag.git
+cd nexus-rag
+python -m venv venv
+# Windows: venv\Scripts\activate
+# Mac/Linux: source venv/bin/activate
+pip install -r requirements.txt
+uvicorn src.api.main:app --reload
+```
+*The API will be available at `http://localhost:8000/docs`*
+
+**4. Run the Frontend (Streamlit)**
+In a new terminal window, activate the virtual environment and run:
+```bash
+streamlit run ui/app.py
+```
+*The UI will automatically open in your default browser.*
+
 ## Features
 
 ### Intelligent Data Ingestion
