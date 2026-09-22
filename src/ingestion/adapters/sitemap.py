@@ -6,6 +6,7 @@ import httpx
 
 from src.crawling.metadata import CrawledDocument, AdapterResult
 from src.ingestion.base import IngestionAdapter
+from src.ingestion.url_policy import UnsafeUrlError, validate_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -26,24 +27,13 @@ class SitemapAdapter(IngestionAdapter):
 
     async def _fetch_xml(self, client: httpx.AsyncClient, url: str) -> bytes:
         logger.info(f"SitemapAdapter fetching XML: {url}")
-        
-        import socket
-        import ipaddress
-        from urllib.parse import urlparse
-        
         try:
-            parsed = urlparse(url)
-            hostname = parsed.hostname
-            if hostname:
-                ip = socket.gethostbyname(hostname)
-                ip_obj = ipaddress.ip_address(ip)
-                if ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local:
-                    raise ValueError(f"URL resolves to private/internal IP: {ip}")
-        except Exception as e:
+            validate_public_url(url)
+        except UnsafeUrlError as e:
             logger.error(f"SSRF validation failed for sitemap {url}: {e}")
             raise ValueError(f"Invalid or restricted URL: {e}")
 
-        resp = await client.get(url, follow_redirects=True, timeout=15.0)
+        resp = await client.get(url, follow_redirects=False, timeout=15.0)
         resp.raise_for_status()
         return resp.content
 
@@ -126,6 +116,11 @@ class SitemapAdapter(IngestionAdapter):
                     break
                 if pref and pref not in u.lower():
                     continue
+                try:
+                    validate_public_url(u)
+                except UnsafeUrlError:
+                    logger.warning(f"Skipping non-public URL from sitemap: {u}")
+                    continue
                 if u not in seen_urls and self._is_valid_page_url(u):
                     seen_urls.add(u)
                     clean_urls.append(u)
@@ -144,6 +139,11 @@ class SitemapAdapter(IngestionAdapter):
                                 logger.warning(f"Sitemap reached maximum capacity of {MAX_SITEMAP_PAGES} pages during recursion.")
                                 break
                             if pref and pref not in u.lower():
+                                continue
+                            try:
+                                validate_public_url(u)
+                            except UnsafeUrlError:
+                                logger.warning(f"Skipping non-public URL from child sitemap: {u}")
                                 continue
                             if u not in seen_urls and self._is_valid_page_url(u):
                                 seen_urls.add(u)

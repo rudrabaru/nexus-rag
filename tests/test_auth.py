@@ -105,8 +105,14 @@ def test_forwarded_headers_are_honoured_only_when_proxies_are_trusted(monkeypatc
 
 
 def test_authenticated_callers_are_limited_per_tenant_not_per_ip():
-    request = make_request({"x-forwarded-for": "9.9.9.9"})
-    request.state.tenant_id = "tenant-1"
+    from fastapi import FastAPI
+
+    app = FastAPI()
+    app.state.auth_store = AuthStore(MagicMock(), SIGNING_SECRET)
+    key = app.state.auth_store.create_api_key("tenant-1")
+
+    request = make_request({"x-api-key": key, "x-forwarded-for": "9.9.9.9"})
+    request.scope["app"] = app
     assert get_rate_limit_key(request) == "tenant:tenant-1"
 
 

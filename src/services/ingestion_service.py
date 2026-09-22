@@ -178,6 +178,7 @@ async def _process_ingestion(
 
                 async with sem:
                     try:
+                        await asyncio.to_thread(validate_public_url, u)
                         # Prevent hung requests from permanently locking the ingestion semaphore
                         res = await asyncio.wait_for(
                             dispatcher.web_adapter.ingest(u, extract_visuals=extract_visuals),

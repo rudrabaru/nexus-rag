@@ -68,6 +68,11 @@ def test_unresolvable_hosts_are_rejected(monkeypatch):
         validate_public_url("https://does-not-exist.invalid/")
 
 
+def test_malformed_port_is_rejected_with_validation_error():
+    with pytest.raises(UnsafeUrlError):
+        validate_public_url("https://example.com:99999/")
+
+
 @pytest.mark.parametrize("url", ["https://example.com/docs", "http://example.com/a.pdf", "HTTPS://Example.com/x"])
 def test_public_http_urls_are_accepted(url, monkeypatch):
     resolve_to(monkeypatch, "93.184.216.34")
@@ -84,6 +89,15 @@ async def test_prepare_ingestion_rejects_a_local_path_in_the_url_field():
 
     assert exc.value.status_code == 400
     registry.get_tenant_quota.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_prepare_ingestion_rejects_malformed_port_with_http_400():
+    registry = MagicMock()
+    with pytest.raises(HTTPException) as exc:
+        await prepare_ingestion("https://example.com:99999/", None, "tenant-1", registry)
+
+    assert exc.value.status_code == 400
 
 
 # ── Job status is tenant-scoped ──────────────────────────────────────────────
