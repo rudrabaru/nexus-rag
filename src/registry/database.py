@@ -132,6 +132,7 @@ class DocumentRegistry(DocumentStoreMixin, JobStoreMixin, SparseIndexMixin):
                 ("generation_cost_usd", "REAL"),
                 ("rerank_cost_usd", "REAL"),
                 ("total_cost_usd", "REAL"),
+                ("provider", "TEXT"),
             ]
             for col, col_type in cost_columns:
                 try:

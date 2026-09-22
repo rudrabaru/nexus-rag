@@ -104,7 +104,8 @@ async def query_rag(
                         tokens_used=result.prompt_tokens + result.completion_tokens, faithfulness_score=None,
                         details=details, embedding_tokens=retrieval_result.embedding_tokens,
                         generation_input_tokens=result.prompt_tokens, generation_output_tokens=result.completion_tokens,
-                        rerank_tokens=retrieval_result.rerank_tokens, provider=getattr(result, "provider", "gemini")
+                        rerank_tokens=retrieval_result.rerank_tokens, provider=getattr(result, "provider", "gemini"),
+                        generation_cost_usd=result.generation_cost_usd,
                     )
                 except Exception as e:
                     logger.error(f"Failed to log query: {e}")
@@ -255,7 +256,9 @@ async def query_rag_stream(
                                 tokens_used=prompt_tokens + completion_tokens, faithfulness_score=None,
                                 details=details, embedding_tokens=retrieval_result.embedding_tokens,
                                 generation_input_tokens=prompt_tokens, generation_output_tokens=completion_tokens,
-                                rerank_tokens=retrieval_result.rerank_tokens, provider="gemini"
+                                rerank_tokens=retrieval_result.rerank_tokens,
+                                provider=generator.llm_client.last_served_provider,
+                                generation_cost_usd=generator.llm_client.last_cost_usd,
                             )
                         except Exception as e:
                             logger.error(f"Failed to log streaming query: {e}")

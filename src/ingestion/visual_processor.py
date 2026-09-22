@@ -1,10 +1,9 @@
 import logging
+import os
 from PIL import Image
 import io
 
 from src.config import get_settings
-from src.generating.models import GenerationConfig
-from src.generating.llm_client import LLMClient
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +26,17 @@ class VisualProcessor:
     """
 
     def __init__(self):
-        model_name = get_settings().vision_model_name or "gemini-2.0-flash"
-        config = GenerationConfig(
-            provider="gemini", model_name=model_name, temperature=0.0
-        )
-        self.llm = LLMClient(config)
+        # Vision needs raw image input, which the text-only LLMClient/litellm.completion
+        # path (src/generating/llm_client.py) does not carry today, and this whole module
+        # is replaced by Docling parsing in a later step — so it keeps its own minimal
+        # client rather than being wired into that path for one release.
+        from google import genai
+
+        self.model_name = get_settings().vision_model_name or "gemini-2.0-flash"
+        api_key = os.environ.get("GEMINI_API_KEY")
+        if not api_key:
+            raise EnvironmentError("GEMINI_API_KEY environment variable not set.")
+        self.client = genai.Client(api_key=api_key)
 
     def describe_page(self, image_bytes: bytes) -> str:
         """
@@ -44,7 +49,7 @@ class VisualProcessor:
             img = Image.open(io.BytesIO(image_bytes))
             kb = len(image_bytes) // 1024
             logger.info(
-                f"VISION | describe_page | model={self.llm.config.model_name} "
+                f"VISION | describe_page | model={self.model_name} "
                 f"image={img.size[0]}x{img.size[1]}px {kb}KB"
             )
 
@@ -56,8 +61,8 @@ class VisualProcessor:
             
             for attempt in range(max_retries):
                 try:
-                    response = self.llm._provider_instance.client.models.generate_content(
-                        model=self.llm.config.model_name,
+                    response = self.client.models.generate_content(
+                        model=self.model_name,
                         contents=[self.PAGE_PROMPT, img],
                         config=types.GenerateContentConfig(
                             temperature=0.0,

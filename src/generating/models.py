@@ -124,6 +124,9 @@ class GenerationResult(BaseModel):
     # Token accounting
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    generation_cost_usd: float = Field(
+        0.0, description="Real per-call cost from litellm.completion_cost(), not an estimate"
+    )
 
     # Model used
     model_name: str = ""

@@ -13,7 +13,9 @@ from src.embedding.generator import EmbeddingGenerator
 from src.embedding.config import EmbeddingConfig
 
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
-DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
+# llama-3.1-8b-instant was retired from Groq (404 NotFoundError, confirmed live
+# 2026-09-22 against the project's key; the key's /models list no longer carries it).
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +79,7 @@ def _init_components() -> PipelineComponents:
         )
         fallback_config = {
             "provider": "groq",
-            "model_name": "llama-3.1-8b-instant",
+            "model_name": DEFAULT_GROQ_MODEL,
             "max_output_tokens": 4096,
             "temperature": 0.1,
         }
@@ -90,8 +92,14 @@ def _init_components() -> PipelineComponents:
     
     rewriter_config = GenerationConfig(
         provider="groq",
-        model_name="llama-3.1-8b-instant",
-        temperature=0.1
+        model_name=DEFAULT_GROQ_MODEL,
+        temperature=0.1,
+        fallback_config={
+            "provider": "gemini",
+            "model_name": "gemini-2.5-flash",
+            "max_output_tokens": 1024,
+            "temperature": 0.1,
+        },
     )
     rewriter = QueryRewriter(config=rewriter_config)
     

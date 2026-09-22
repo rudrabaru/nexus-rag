@@ -133,6 +133,7 @@ class RAGGenerator:
             total_latency_ms=total_latency,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            model_name=self.config.model_name,
-            provider=self.config.provider,
+            generation_cost_usd=self.llm_client.last_cost_usd,
+            model_name=self.llm_client.last_served_model,
+            provider=self.llm_client.last_served_provider,
         )

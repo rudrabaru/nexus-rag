@@ -5,7 +5,6 @@ import logging
 from src.observability.costs import (
     JINA_EMBEDDING_COST_PER_TOKEN,
     JINA_RERANK_COST_PER_1K_TOKENS,
-    COST_TABLE,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,35 +29,31 @@ class MetricsStore:
         generation_output_tokens: int = 0,
         rerank_tokens: int = 0,
         provider: str = "gemini",
+        generation_cost_usd: float = 0.0,
     ):
-        """Logs query analytics and costs to SQLite."""
+        """
+        Logs query analytics and costs to SQLite. generation_cost_usd is computed by the
+        caller from the LLM client's actual per-call cost (litellm.completion_cost against
+        the real model used, including whichever provider a fallback landed on) rather
+        than being re-derived here from token counts and a static rate table.
+        """
         now = datetime.now(timezone.utc).isoformat()
 
-
-        # Calculate costs
         embedding_cost = embedding_tokens * JINA_EMBEDDING_COST_PER_TOKEN
-        
-        provider_costs = COST_TABLE.get(provider.lower(), COST_TABLE["gemini"])
-        input_cost_rate = provider_costs["input_cost_per_1k"]
-        output_cost_rate = provider_costs["output_cost_per_1k"]
-        
-        generation_cost = (
-            (generation_input_tokens / 1000.0) * input_cost_rate +
-            (generation_output_tokens / 1000.0) * output_cost_rate
-        )
+        generation_cost = generation_cost_usd
         rerank_cost = (rerank_tokens / 1000.0) * JINA_RERANK_COST_PER_1K_TOKENS
         total_cost = embedding_cost + generation_cost + rerank_cost
 
         with self._get_conn() as conn:
             cursor = conn.execute(
-                """INSERT INTO observability_logs 
+                """INSERT INTO observability_logs
                 (tenant_id, timestamp, query, latency_ms, tokens_used, faithfulness_score, details,
                 embedding_tokens, embedding_cost_usd, generation_input_tokens, generation_output_tokens,
-                generation_cost_usd, rerank_cost_usd, total_cost_usd) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                generation_cost_usd, rerank_cost_usd, total_cost_usd, provider)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (tenant_id, now, query, latency_ms, tokens_used, faithfulness_score, json.dumps(details),
                  embedding_tokens, embedding_cost, generation_input_tokens, generation_output_tokens,
-                 generation_cost, rerank_cost, total_cost)
+                 generation_cost, rerank_cost, total_cost, provider)
             )
             log_id = cursor.lastrowid
             conn.commit()
