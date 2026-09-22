@@ -13,14 +13,25 @@ Create a `.env` file in the root directory:
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your_gemini_api_key_here
 # Optional: GROQ_API_KEY=your_groq_api_key_here
-RAG_API_KEY=your_admin_api_key_here
+ADMIN_API_KEY=your_admin_api_key_here
+API_KEY_SIGNING_SECRET=a_different_random_secret_of_16_or_more_characters
+QDRANT_URL=your_qdrant_url
+QDRANT_API_KEY=your_qdrant_api_key
+JINA_API_KEY=your_jina_api_key
 ```
+See `.env.example` for every variable.
 
 ## 3. Quick Run (Docker API)
 You can run the API backend via Docker:
 ```bash
 docker build -t nexus-rag-api .
-docker run -p 8000:8000 nexus-rag-api
+docker run --env-file .env -p 8000:8000 nexus-rag-api
+```
+The image deliberately contains no `.env`, so pass it at run time. Docker's `--env-file` keeps quotes literally, so write values unquoted.
+
+Issue a workspace key (there is no open sign-up):
+```bash
+curl -X POST http://localhost:8000/admin/keys -H "RAG-API-KEY: <your ADMIN_API_KEY>"
 ```
 - API available at: [http://localhost:8000](http://localhost:8000)
 - API docs at: [http://localhost:8000/docs](http://localhost:8000/docs)

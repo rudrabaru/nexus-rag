@@ -2,6 +2,7 @@ import logging
 from PIL import Image
 import io
 
+from src.config import get_settings
 from src.generating.models import GenerationConfig
 from src.generating.llm_client import LLMClient
 
@@ -26,8 +27,7 @@ class VisualProcessor:
     """
 
     def __init__(self):
-        import os
-        model_name = os.environ.get("LLM_MODEL_NAME", "gemini-2.0-flash")
+        model_name = get_settings().vision_model_name or "gemini-2.0-flash"
         config = GenerationConfig(
             provider="gemini", model_name=model_name, temperature=0.0
         )

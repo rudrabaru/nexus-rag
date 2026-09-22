@@ -1,3 +1,18 @@
 [tool.pyrefly]
 # Disable missing import warnings globally for all third-party modules
 ignore-missing-imports = ["*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning", "ignore::pydantic.warnings.PydanticDeprecatedSince20"]
+
+[tool.ruff]
+line-length = 120
+extend-exclude = [".venv", "scratch", "retrieval", "sources"]
+
+[tool.ruff.lint]
+# Correctness rules only: syntax errors, undefined names, redefinitions and unused imports.
+# Style rules are deliberately off so CI fails on bugs, not on legacy formatting.
+select = ["E9", "F63", "F7", "F82", "F811", "F401"]

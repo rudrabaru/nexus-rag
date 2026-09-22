@@ -1,7 +1,6 @@
 import json
 import logging
 import random
-import os
 from pathlib import Path
 from collections import defaultdict
 

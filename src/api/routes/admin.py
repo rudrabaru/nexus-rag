@@ -1,10 +1,30 @@
-import logging
-from fastapi import APIRouter, Request, HTTPException, Depends
-from src.api.auth import get_admin_tenant
 import asyncio
+import logging
+import uuid
+from typing import Optional
+
+from fastapi import APIRouter, Depends, HTTPException, Request
+
+from src.api.auth import get_admin_tenant
+from src.api.dependencies import get_auth_store
+from src.api.models.admin_models import IssueKeyRequest, IssueKeyResponse
+from src.registry.auth_store import AuthStore
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+@router.post("/keys", response_model=IssueKeyResponse)
+async def issue_api_key(
+    body: Optional[IssueKeyRequest] = None,
+    _: None = Depends(get_admin_tenant),
+    auth_store: AuthStore = Depends(get_auth_store),
+):
+    """Issues a tenant API key. This replaces the former open /register endpoint."""
+    tenant_id = (body.tenant_id if body else None) or str(uuid.uuid4())
+    logger.info(f"Admin issued an API key for tenant {tenant_id}")
+    return IssueKeyResponse(tenant_id=tenant_id, api_key=auth_store.create_api_key(tenant_id))
+
 
 @router.post("/rebuild-registry")
 async def rebuild_registry(

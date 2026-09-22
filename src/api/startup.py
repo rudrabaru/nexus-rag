@@ -1,8 +1,9 @@
-import os
+import asyncio
 import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
+from src.config import get_settings
 from src.registry.database import DocumentRegistry
 from src.api.factory import _init_components
 
@@ -11,11 +12,13 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not os.environ.get("RAG_API_KEY"):
-        raise RuntimeError("RAG_API_KEY environment variable is missing. Startup aborted.")
+    settings = get_settings()
+    missing = settings.missing_required()
+    if missing:
+        raise RuntimeError(f"Missing or invalid configuration: {', '.join(missing)}. Startup aborted.")
+    settings.warn_on_legacy_secrets()
 
-    # Startup: Run model loading in a background thread so the server binds to the port immediately and /health starts passing.
-    import asyncio
+    # Model loading runs in the background so the server binds to its port immediately.
 
     async def _load_models_async():
         try:
@@ -34,13 +37,13 @@ async def lifespan(app: FastAPI):
             from src.registry.auth_store import AuthStore
             from src.registry.metrics_store import MetricsStore
             from src.observability.logger import PipelineLogger
-            app.state.auth_store = AuthStore(registry._get_conn)
+            app.state.auth_store = AuthStore(registry._get_conn, settings.effective_signing_secret)
             app.state.metrics_store = MetricsStore(registry._get_conn)
             app.state.pipeline_logger = PipelineLogger("nexus_rag", registry=registry)
 
-            ingestion_concurrency = int(os.environ.get("INGESTION_CONCURRENCY", "3"))
+            ingestion_concurrency = settings.ingestion_concurrency
             app.state.ingestion_semaphore = asyncio.Semaphore(ingestion_concurrency)
-            app.state.query_semaphore = asyncio.Semaphore(4)
+            app.state.query_semaphore = asyncio.Semaphore(settings.query_concurrency)
 
             if hasattr(app.state, 'embedding_generator') and app.state.embedding_generator:
                 app.state.embedding_generator.embed_semaphore = asyncio.Semaphore(ingestion_concurrency)

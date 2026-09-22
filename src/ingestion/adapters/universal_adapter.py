@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 from datetime import datetime, timezone
+from src.config import get_settings
 from src.crawling.metadata import CrawledDocument, AdapterResult
 from src.ingestion.base import IngestionAdapter
 from markitdown import MarkItDown
@@ -35,7 +36,7 @@ class UniversalAdapter(IngestionAdapter):
                     api_key=api_key,
                     base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
                 )
-                llm_model = os.environ.get("LLM_MODEL_NAME", "gemini-2.5-flash")
+                llm_model = get_settings().vision_model_name or "gemini-2.5-flash"
                 self.md_vision = MarkItDown(llm_client=llm_client, llm_model=llm_model)
                 logger.info("UniversalAdapter: Vision extraction enabled (Gemini)")
         elif provider == "openai":
@@ -43,7 +44,7 @@ class UniversalAdapter(IngestionAdapter):
             if api_key:
                 from openai import OpenAI
                 llm_client = OpenAI(api_key=api_key)
-                llm_model = os.environ.get("LLM_MODEL_NAME", "gpt-4o-mini")
+                llm_model = get_settings().vision_model_name or "gpt-4o-mini"
                 self.md_vision = MarkItDown(llm_client=llm_client, llm_model=llm_model)
                 logger.info("UniversalAdapter: Vision extraction enabled (OpenAI)")
         

@@ -14,9 +14,8 @@ from fastapi import (
     Request,
     Depends,
 )
-from src.api.auth import get_current_tenant
+from src.api.auth import get_current_tenant, get_rate_limit_key
 from slowapi import Limiter
-from src.api.auth import get_real_ip
 from src.api.dependencies import get_registry, get_retriever, get_ingestion_semaphore, get_pipeline_logger
 from src.registry.database import DocumentRegistry
 from typing import Any
@@ -25,7 +24,7 @@ from src.services.ingestion_service import _process_ingestion, prepare_ingestion
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-limiter = Limiter(key_func=get_real_ip)
+limiter = Limiter(key_func=get_rate_limit_key)
 
 @router.post("/ingest")
 @limiter.limit("10/minute")
@@ -103,10 +102,16 @@ async def ingest_document(
 @router.get("/ingest/{job_id}", response_model=JobStatusResponse)
 async def get_job_status(
     job_id: str,
+    tenant_id: Optional[str] = Depends(get_current_tenant),
     registry: DocumentRegistry = Depends(get_registry)
 ):
+    if not tenant_id:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
     job = registry.get_job(job_id)
-    if not job:
+    doc = registry.get_document(job["doc_id"]) if job else None
+    # A job owned by another tenant is reported as missing so job IDs cannot be probed.
+    if not job or not doc or doc.get("tenant_id") != tenant_id:
         raise HTTPException(status_code=404, detail="Job not found")
 
     metadata = job.get("metadata")
@@ -126,8 +131,6 @@ async def get_job_status(
     )
 
     if job["status"] in ("complete", "partial_success"):
-        doc = registry.get_document(job["doc_id"])
-        if doc:
-            response.chunk_count = len(doc.get("chunk_ids", []))
+        response.chunk_count = len(doc.get("chunk_ids", []))
 
     return response

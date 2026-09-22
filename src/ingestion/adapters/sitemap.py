@@ -1,7 +1,7 @@
 import logging
 import xml.etree.ElementTree as ET
 from typing import List, Set
-from urllib.parse import urljoin, urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs
 import httpx
 
 from src.crawling.metadata import CrawledDocument, AdapterResult

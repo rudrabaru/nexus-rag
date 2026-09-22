@@ -1,7 +1,6 @@
 import logging
 import json
 from datetime import datetime, timezone
-from typing import Optional
 
 class PipelineLogger:
     def __init__(self, name: str, registry=None):

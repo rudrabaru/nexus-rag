@@ -56,8 +56,9 @@ class EmbeddingWorker:
 
         logger.info(f"Upserted {total_added} chunks to Qdrant.")
 
+        job_status = "partial_success" if all_failed_indices else "complete"
+
         if registry and job_id:
-            job_status = "partial_success" if all_failed_indices else "complete"
             metadata = None
             err_reason = None
             if all_failed_indices:
@@ -82,7 +83,7 @@ class EmbeddingWorker:
         return {
             "total_added": total_added,
             "total_tokens": total_tokens,
-            "job_status": job_status if job_id else "complete",
+            "job_status": job_status,
             "failed_indices": all_failed_indices
         }
 

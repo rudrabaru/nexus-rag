@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import MagicMock, patch
 from src.retrieving.sparse import SparseRetriever
 from src.retrieving.vector_store import QdrantManager

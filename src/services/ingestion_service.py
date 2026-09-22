@@ -12,6 +12,7 @@ from fastapi import UploadFile, HTTPException
 
 from src.ingestion.dispatcher import IngestionDispatcher
 from src.ingestion.pipeline import IncrementalIngestionPipeline
+from src.ingestion.url_policy import UnsafeUrlError, validate_public_url
 from src.registry.database import DocumentRegistry
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,12 @@ async def prepare_ingestion(
 ) -> Tuple[str, str, str, Optional[str], Optional[str], Optional[str], str]:
     if not url and not file:
         raise HTTPException(status_code=400, detail="Must provide either url or file")
+
+    if url:
+        try:
+            await asyncio.to_thread(validate_public_url, url)
+        except UnsafeUrlError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
     quota = registry.get_tenant_quota(tenant_id)
     if quota >= 2000:

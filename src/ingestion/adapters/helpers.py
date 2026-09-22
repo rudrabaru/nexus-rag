@@ -1,6 +1,5 @@
 import re
 import os
-import urllib.request
 import tempfile
 import logging
 

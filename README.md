@@ -30,14 +30,17 @@ QDRANT_URL="your_qdrant_cluster_url"
 QDRANT_API_KEY="your_qdrant_api_key"
 QDRANT_COLLECTION_NAME="nexus_rag_collection"
 
-# Security (Master Password)
-RAG_API_KEY="your-super-secret-admin-key"
+# Security: two separate secrets (min 16 chars for the signing secret).
+# ADMIN_API_KEY authorises POST /admin/keys; API_KEY_SIGNING_SECRET signs tenant keys.
+ADMIN_API_KEY="your-admin-key"
+API_KEY_SIGNING_SECRET="your-long-random-signing-secret"
 
 # Optional Settings
 INGESTION_CONCURRENCY=2
 ENABLE_QUERY_GENERALISATION=false
 ENABLE_RERANKER=false
 ```
+`.env.example` lists every variable. The API refuses to start and names each missing or invalid one.
 
 **3. Run the Backend (FastAPI)**
 ```bash
@@ -104,15 +107,17 @@ This flow illustrates how your private workspace is kept secure.
 
 ```mermaid
 sequenceDiagram
+    actor Admin
     actor User
     participant Auth as Auth Store
     participant Ingest as Ingestion API
     participant Query as Query API
 
-    %% Registration
-    User->>Auth: POST /register
-    Auth-->>User: Returns API Key & Workspace ID
-    Note right of User: Save your API Key! No passwords<br/>are saved in the database.
+    %% Key provisioning (admin only; there is no open sign-up)
+    Admin->>Auth: POST /admin/keys (admin key)
+    Auth-->>Admin: Returns API Key & Workspace ID
+    Admin-->>User: Shares the API Key
+    Note right of User: Keep your API Key. No passwords<br/>are saved in the database.
 
     %% Ingestion
     User->>Ingest: Upload a PDF or URL
@@ -222,4 +227,4 @@ Nexus RAG is incredibly easy to host in the cloud with RAM constraints because i
 The system stores all the heavy, searchable data securely in **Qdrant Cloud**. If your server ever restarts or crashes, it takes just a few seconds to automatically reconnect to Qdrant and restore your entire search index back into memory. This means you never lose data and don't have to pay for expensive, persistent hard drives on your hosting provider.
 
 **Workspace Access:**
-You don't need to sign up with an email or password. Simply click **"Generate New API Key"** in the sidebar of the chat interface. This unique key acts as your private workspace lock. Save this key somewhere safe! The next time you visit, paste that exact key into the **"Existing API Key"** box to instantly unlock your workspace, your chat history, and all the documents you previously uploaded.
+There is no open sign-up. An administrator issues your workspace key with `POST /admin/keys` (sending the `RAG-API-KEY` header). Paste that key into the **"API Key"** box in the sidebar of the chat interface to unlock your workspace and the documents you previously uploaded. Chat history lives only in the browser session and is not restored after a refresh.

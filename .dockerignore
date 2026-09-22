@@ -1,0 +1,35 @@
+# Secrets and local state must never enter an image layer
+.env
+.env.*
+!.env.example
+data/
+sources/
+observability/
+logs.txt
+*.log
+
+# Evaluation artifacts and scratch work are not needed at runtime
+retrieval/
+scratch/
+evaluations/
+test_results_*.json
+
+# Development-only files
+.git/
+.github/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.vscode/
+.idea/
+tests/
+docs/
+*.md
+*.pptx
+Dockerfile*
+.dockerignore

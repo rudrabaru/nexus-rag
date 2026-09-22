@@ -1,8 +1,8 @@
-import os
 import logging
 from dataclasses import dataclass
 from typing import Optional, Union
 
+from src.config import get_settings
 from src.retrieving.vector_store import QdrantManager
 from src.retrieving.retriever import DenseRetriever, OptionalReranker, HybridRetriever
 from src.generating.models import GenerationConfig
@@ -57,22 +57,21 @@ def _init_components() -> PipelineComponents:
     )
     logger.info("HybridRetriever loaded with SQLite FTS5 + Dense.")
 
-    enable_reranker = os.environ.get("ENABLE_RERANKER", "true").lower() == "true"
-    if enable_reranker:
+    settings = get_settings()
+
+    if settings.enable_reranker:
         reranker = OptionalReranker()
     else:
         reranker = None
         logger.info("Reranker disabled via ENABLE_RERANKER env var.")
 
-    provider = os.environ.get("LLM_PROVIDER", "gemini")
-    model_name = os.environ.get("LLM_MODEL_NAME")
-    if not model_name:
-        model_name = (
-            DEFAULT_GEMINI_MODEL if provider == "gemini" else DEFAULT_GROQ_MODEL
-        )
+    provider = settings.llm_provider
+    model_name = settings.llm_model_name or (
+        DEFAULT_GEMINI_MODEL if provider == "gemini" else DEFAULT_GROQ_MODEL
+    )
 
     fallback_config = None
-    if provider == "gemini" and os.environ.get("GROQ_API_KEY"):
+    if provider == "gemini" and settings.groq_api_key:
         logger.info(
             "GROQ_API_KEY detected. Configuring Groq as automatic fallback for rate limits."
         )

@@ -4,6 +4,7 @@ import asyncio
 from typing import Optional, Any
 
 from src.api.models.query_models import QueryRequest, SourceDocument
+from src.config import get_settings
 from src.retrieving.retriever import DenseRetriever, OptionalReranker
 from src.generating.query_rewriter import QueryRewriter
 
@@ -22,9 +23,8 @@ class QueryService:
         tenant_id: str
     ):
         search_query = body.query
-        import os
         if rewriter:
-            if os.environ.get("ENABLE_QUERY_GENERALISATION", "false").lower() == "true":
+            if get_settings().enable_query_generalisation:
                 search_query = await asyncio.to_thread(
                     rewriter.generalise, search_query
                 )

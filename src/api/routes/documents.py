@@ -1,12 +1,11 @@
 import logging
-from fastapi import APIRouter, Request, HTTPException, Depends, Security
+from fastapi import APIRouter, Request, HTTPException, Depends
 from pydantic import BaseModel
 from typing import List, Optional
 import asyncio
 from src.registry.database import DocumentRegistry
-from src.api.dependencies import get_registry, get_retriever, get_auth_store
-from src.registry.auth_store import AuthStore
-from src.api.auth import get_current_tenant_from_admin_or_user, admin_api_key_header, api_key_header
+from src.api.dependencies import get_registry, get_retriever
+from src.api.auth import get_current_tenant_from_admin_or_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
