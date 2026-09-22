@@ -26,10 +26,17 @@ def get_real_ip(request: Request) -> str:
 
 def get_rate_limit_key(request: Request) -> str:
     """
-    Authenticated callers are limited per tenant, which cannot be spoofed with a header.
-    Anonymous callers fall back to the client IP. The auth dependency runs before the
-    rate-limited handler, so request.state.tenant_id is already populated here.
+    Authenticated callers are limited per tenant when their API key validates.
+    Anonymous or invalid callers fall back to the client IP bucket.
     """
+    api_key = request.headers.get("x-api-key")
+    app = request.scope.get("app")
+    auth_store = getattr(getattr(app, "state", None), "auth_store", None)
+    if api_key and auth_store:
+        tenant_id = auth_store.validate_api_key(api_key)
+        if tenant_id:
+            return f"tenant:{tenant_id}"
+
     tenant_id = getattr(request.state, "tenant_id", None)
     return f"tenant:{tenant_id}" if tenant_id else f"ip:{get_real_ip(request)}"
 

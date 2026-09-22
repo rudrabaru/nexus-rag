@@ -55,7 +55,7 @@ async def download_file_async(url: str) -> str:
     downloaded_size = 0
 
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
             async with client.stream("GET", url, headers={"User-Agent": "Mozilla/5.0"}) as resp:
                 resp.raise_for_status()
                 async for chunk in resp.aiter_bytes(chunk_size=65536):

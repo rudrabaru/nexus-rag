@@ -1,4 +1,5 @@
 import logging
+from src.ingestion.url_policy import validate_public_url, UnsafeUrlError
 from src.crawling.metadata import AdapterResult
 from src.ingestion.adapters.web import WebAdapter
 from src.ingestion.adapters.universal_adapter import UniversalAdapter
@@ -22,7 +23,7 @@ class IngestionDispatcher:
         try:
             import httpx
 
-            async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+            async with httpx.AsyncClient(follow_redirects=False, timeout=10) as client:
                 resp = await client.head(url)
                 ct = resp.headers.get("content-type", "").lower()
                 if "pdf" in ct:
@@ -47,7 +48,7 @@ class IngestionDispatcher:
         base_url = f"{parsed.scheme}://{parsed.netloc}"
 
         try:
-            async with httpx.AsyncClient(follow_redirects=True, timeout=10) as client:
+            async with httpx.AsyncClient(follow_redirects=False, timeout=10) as client:
                 # 1. Check robots.txt for Sitemap directive
                 robots_url = urljoin(base_url, "/robots.txt")
                 try:
@@ -56,6 +57,13 @@ class IngestionDispatcher:
                         for line in resp.text.splitlines():
                             if line.lower().startswith("sitemap:"):
                                 sitemap_url = line.split(":", 1)[1].strip()
+                                if sitemap_url:
+                                    sitemap_url = urljoin(base_url, sitemap_url)
+                                try:
+                                    validate_public_url(sitemap_url)
+                                except UnsafeUrlError:
+                                    logger.warning(f"DISPATCHER | Ignoring unsafe sitemap URL from robots.txt: {sitemap_url}")
+                                    continue
                                 logger.info(f"DISPATCHER | Auto-discovered sitemap via robots.txt: {sitemap_url}")
                                 return sitemap_url
                 except Exception:
@@ -66,10 +74,13 @@ class IngestionDispatcher:
                 for path in common_paths:
                     sitemap_url = urljoin(base_url, path)
                     try:
+                        validate_public_url(sitemap_url)
                         resp = await client.head(sitemap_url)
                         if resp.status_code == 200:
                             logger.info(f"DISPATCHER | Auto-discovered sitemap at common path: {sitemap_url}")
                             return sitemap_url
+                    except UnsafeUrlError:
+                        logger.warning(f"DISPATCHER | Ignoring unsafe sitemap URL candidate: {sitemap_url}")
                     except Exception:
                         pass
         except Exception as e:
@@ -128,4 +139,3 @@ class IngestionDispatcher:
         if isinstance(result, list):
             return AdapterResult(documents=result, visual_chunks=[])
         return result
-

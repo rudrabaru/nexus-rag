@@ -31,9 +31,11 @@ def validate_public_url(url: str) -> None:
     if parsed.username or parsed.password:
         raise UnsafeUrlError("URLs with embedded credentials are not accepted.")
 
-    port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
     try:
+        port = parsed.port or (443 if parsed.scheme.lower() == "https" else 80)
         addresses = {info[4][0] for info in socket.getaddrinfo(parsed.hostname, port, type=socket.SOCK_STREAM)}
+    except ValueError:
+        raise UnsafeUrlError("URL has an invalid port.")
     except socket.gaierror:
         raise UnsafeUrlError("URL host could not be resolved.")
 
