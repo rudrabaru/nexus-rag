@@ -52,11 +52,17 @@ def render_documents_tab(API_BASE_URL, api_headers):
                                 job_ids.append((f.name, res.json().get("job_id")))
                     if success:
                         st.success("Jobs queued successfully.")
+                        # Ingestion is queued, not processed inline — a job stays "queued"
+                        # forever if no worker process is running. Cap the poll so that
+                        # misconfiguration shows up as a clear message instead of a frozen bar.
+                        MAX_POLL_SECONDS = 600
                         for src_name, jid in job_ids:
                             if not jid: continue
                             prog_ph = st.empty()
-                            while True:
+                            waited = 0
+                            while waited < MAX_POLL_SECONDS:
                                 time.sleep(2)
+                                waited += 2
                                 s_res = requests.get(f"{API_BASE_URL}/ingest/{jid}", headers=api_headers, timeout=10)
                                 if s_res.status_code == 200:
                                     j_data = s_res.json()
@@ -90,6 +96,8 @@ def render_documents_tab(API_BASE_URL, api_headers):
                                         break
                                 else:
                                     break
+                            else:
+                                prog_ph.warning(f"⏳ [{src_name}] Still queued after {MAX_POLL_SECONDS}s — is a worker process running? (`python -m src.jobs.worker`)")
                 except Exception as e:
                     st.error(f"Ingestion error: {str(e)}")
                     

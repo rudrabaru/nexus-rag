@@ -5,7 +5,7 @@ import pytest
 
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.models import ContextWindow, GenerationConfig, GenerationResult
-from src.ingestion.embedding_worker import EmbeddingWorker
+from src.ingestion.embedding_worker import EmbeddingUnavailableError, EmbeddingWorker
 
 
 @pytest.fixture
@@ -38,26 +38,51 @@ def test_judge_uses_zero_temperature_without_touching_the_generators_config(judg
     assert evaluator.config is not generator_config
 
 
-def make_worker(failed_indices=()):
-    chunks = [SimpleNamespace(chunk_id=f"c{i}", token_count=10) for i in range(3)]
+def make_worker(chunk_count=3, embedded_indices=None, embedding_text="e"):
+    """embedded_indices=None embeds every chunk; otherwise only those indices succeed."""
+    input_chunks = [SimpleNamespace(chunk_id=f"c{i}", chunk_text=embedding_text, token_count=10) for i in range(chunk_count)]
+    kept = range(chunk_count) if embedded_indices is None else embedded_indices
+    embedded = [SimpleNamespace(chunk_id=f"c{i}", token_count=10) for i in kept]
+    failed = sorted(set(range(chunk_count)) - set(kept))
+
     generator = MagicMock()
-    generator.generate_embeddings.return_value = (chunks, list(failed_indices))
-    db = MagicMock()
-    db.load_chunks.return_value = len(chunks)
-    return EmbeddingWorker(generator, db), chunks
+    generator.generate_embeddings.return_value = (embedded, failed)
+    generator.last_error = None  # matches EmbeddingGenerator's real default
+    return EmbeddingWorker(generator), input_chunks
 
 
-def test_embedding_worker_runs_without_a_registry_or_job():
+def test_embedding_worker_reports_complete_when_nothing_fails():
     worker, chunks = make_worker()
-    assert worker.process_batches(chunks, "tenant-1")["job_status"] == "complete"
-
-
-def test_embedding_worker_runs_with_a_job_id_but_no_registry():
-    """Regression: job_status was bound only inside `if registry and job_id`, so this path raised."""
-    worker, chunks = make_worker()
-    assert worker.process_batches(chunks, "tenant-1", registry=None, job_id="job-1")["job_status"] == "complete"
+    outcome = worker.embed(chunks)
+    assert outcome.status == "complete"
+    assert len(outcome.chunks) == 3
+    assert outcome.failed_indices == []
+    assert outcome.metadata is None
 
 
 def test_embedding_worker_reports_partial_success_on_failed_batches():
-    worker, chunks = make_worker(failed_indices=[1])
-    assert worker.process_batches(chunks, "tenant-1")["job_status"] == "partial_success"
+    worker, chunks = make_worker(embedded_indices=[0, 2])
+    outcome = worker.embed(chunks)
+    assert outcome.status == "partial_success"
+    assert outcome.failed_indices == [1]
+    assert outcome.metadata["failed_chunk_indices"] == [1]
+
+
+def test_embedding_worker_raises_when_nothing_could_be_embedded():
+    """A total embedding failure (API outage, dead key) must not be reported as a silent success."""
+    worker, chunks = make_worker(embedded_indices=[])
+    with pytest.raises(EmbeddingUnavailableError):
+        worker.embed(chunks)
+
+
+def test_embedding_worker_reports_increasing_progress():
+    chunks = [SimpleNamespace(chunk_id=f"c{i}", chunk_text="e", token_count=10) for i in range(120)]  # 3 batches of <=50
+    generator = MagicMock()
+    generator.generate_embeddings.side_effect = lambda batch: (batch, [])
+    worker = EmbeddingWorker(generator)
+
+    seen = []
+    worker.embed(chunks, on_progress=seen.append)
+
+    assert seen == sorted(seen) and len(seen) == 3
+    assert seen[-1] == 99

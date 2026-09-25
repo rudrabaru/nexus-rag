@@ -1,7 +1,7 @@
 import logging
 import time
 import re
-from typing import List, Dict, Any
+from typing import Any, Callable, List, Optional
 
 from src.crawling.metadata import CrawledDocument, VisualChunkDraft
 from src.processing.cleaner import DocumentCleaner
@@ -11,8 +11,8 @@ from src.processing.validator import ProcessingValidator
 from src.chunking.chunker import DocumentChunker
 from src.embedding.config import EmbeddingConfig
 from src.embedding.generator import EmbeddingGenerator
-from src.retrieving.vector_store import QdrantManager
-from src.ingestion.embedding_worker import EmbeddingWorker
+from src.ingestion.embedding_worker import EmbeddingOutcome, EmbeddingWorker
+from src.ingestion.errors import UnprocessableSourceError
 
 logger = logging.getLogger(__name__)
 
@@ -32,30 +32,34 @@ def _strip_intra_document_repeats(blocks: List[Block]) -> List[Block]:
     return cleaned_blocks
 
 class IncrementalIngestionPipeline:
-    def __init__(self, embedding_generator=None, db_manager=None):
-        if db_manager is None:
-            try:
-                self.db_manager = QdrantManager()
-                logger.info("Pipeline initialized new QdrantManager.")
-            except Exception as e:
-                logger.critical(f"QdrantManager failed to initialize in pipeline: {e}")
-                raise e
-        else:
-            self.db_manager = db_manager
-            
+    """
+    Parses, cleans, chunks and embeds documents. It writes nothing to storage: the caller
+    commits the returned outcome in one transaction (src/jobs/commit.py).
+    """
+
+    def __init__(self, embedding_generator=None):
+        # A generator per pipeline run by default: it keeps per-run state (stats, last_error)
+        # that must not be shared between ingestions running concurrently in one worker.
         self.embedding_generator = embedding_generator
 
     def run(
-        self, crawled_docs: List[CrawledDocument], tenant_id: str, registry=None, job_id: str = None, doc_id: str = None, visual_chunks: List[VisualChunkDraft] = None, pipeline_logger: Any = None,
-    ) -> Dict[str, Any]:
-        if not tenant_id:
-            raise ValueError("tenant_id is required for ingestion")
+        self,
+        crawled_docs: List[CrawledDocument],
+        tenant_id: str,
+        doc_id: str,
+        visual_chunks: Optional[List[VisualChunkDraft]] = None,
+        on_progress: Optional[Callable[[int], None]] = None,
+        pipeline_logger: Any = None,
+        job_id: Optional[str] = None,
+    ) -> EmbeddingOutcome:
+        if not tenant_id or not doc_id:
+            raise ValueError("tenant_id and doc_id are required for ingestion")
 
         logger.info(f"Starting incremental ingestion for {len(crawled_docs)} documents.")
 
         total_chars = sum(len(doc.markdown_content) for doc in crawled_docs)
         if total_chars < 50:
-            raise ValueError("Extracted content is too short or empty. If this is a scanned PDF, vision extraction was also attempted by the adapter but returned no content. Ensure a GEMINI_API_KEY is configured, or upload a text-based PDF.")
+            raise UnprocessableSourceError("Extracted content is too short or empty. If this is a scanned PDF, vision extraction was also attempted by the adapter but returned no content. Ensure a GEMINI_API_KEY is configured, or upload a text-based PDF.")
 
         _LOG_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2}:\d{2}")
         for doc in crawled_docs:
@@ -65,9 +69,9 @@ class IncrementalIngestionPipeline:
                 if log_lines / len(lines) > 0.4:
                     logger.warning(f"Document {doc.url} appears to be a log file. Retrieval quality may be degraded.")
 
-        def update_progress(pct: int, status="processing"):
-            if registry and job_id:
-                registry.update_job_status(job_id, status, pct)
+        def update_progress(pct: int):
+            if on_progress:
+                on_progress(pct)
 
         update_progress(55)
         start_time = time.time()
@@ -109,6 +113,7 @@ class IncrementalIngestionPipeline:
         for c in all_chunks:
             c.visibility = "private"
             c.tenant_id = tenant_id
+            c.doc_id = doc_id
             prefix = f"[{c.source_document} > {' > '.join(c.heading_path or [])}]\n"
             c.embedding_text = prefix + c.chunk_text
 
@@ -122,27 +127,31 @@ class IncrementalIngestionPipeline:
                     title=parent_doc.title or "Unknown", chunk_index=start_index + i, total_chunks=start_index + len(visual_chunks),
                     chunk_text=vc.text, token_count=est_tokens, char_start=0, char_end=0, content_type="visual_description",
                     visual_asset_ref=vc.asset_ref, visual_asset_type=vc.asset_type, document_version="v_live", chunk_version="v_live",
-                    visibility="private", tenant_id=tenant_id,
+                    visibility="private", tenant_id=tenant_id, doc_id=doc_id,
                 )
                 all_chunks.append(v_meta)
 
         update_progress(75)
 
         generator = self.embedding_generator or EmbeddingGenerator(EmbeddingConfig())
-        worker = EmbeddingWorker(generator, self.db_manager)
-        
-        result = worker.process_batches(all_chunks, tenant_id, registry, job_id, pipeline_logger)
-        total_added = result["total_added"]
+        outcome = EmbeddingWorker(generator).embed(all_chunks, update_progress, pipeline_logger, job_id)
 
-        duration = time.time() - start_time
-
-        if job_id:
-            EmbeddingWorker.write_audit_log(job_id, crawled_docs, all_blocks, all_chunks, result["total_tokens"], duration)
-
-        return {
-            "status": "success",
-            "version": "v_live",
-            "docs_processed": len(crawled_docs),
-            "chunks_added": total_added,
-            "latency_seconds": round(duration, 2),
-        }
+        if pipeline_logger:
+            pipeline_logger.log_event(
+                "ingestion_audit",
+                job_id=job_id,
+                tenant_id=tenant_id,
+                source=crawled_docs[0].url if crawled_docs else "unknown",
+                docs_crawled=len(crawled_docs),
+                blocks_parsed=sum(len(blocks) for blocks in all_blocks),
+                blocks_removed=sum(1 for doc_blocks in all_blocks for b in doc_blocks if getattr(b, "is_removed", False)),
+                chunks_created=len(all_chunks),
+                chunks_by_type={
+                    ct: sum(1 for c in all_chunks if getattr(c, "content_type", "") == ct)
+                    for ct in ["text", "code", "table", "mixed", "visual_description"]
+                },
+                chunks_embedded=len(outcome.chunks),
+                total_tokens=outcome.total_tokens,
+                pipeline_latency_seconds=round(time.time() - start_time, 2),
+            )
+        return outcome

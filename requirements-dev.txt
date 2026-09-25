@@ -1,4 +1,10 @@
--r requirements-prod.txt
+# Tests exercise both the API and the worker, so development installs both images' dependencies.
+-r requirements-api.txt
+-r requirements-worker.txt
 pytest>=8.0
 pytest-asyncio>=0.23
 ruff>=0.5
+numpy>=1.24  # integration tests and the legacy migration's verification
+
+# One-off legacy migration only (python -m scripts.migrate_legacy); never in an image
+qdrant-client>=1.9.0

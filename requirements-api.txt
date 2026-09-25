@@ -1,0 +1,9 @@
+# Slim API image: serving, retrieval and generation. It queues ingestion jobs but never
+# runs them, so no document parser is installed here (CI checks that none is importable).
+-r requirements-base.txt
+asyncpg>=0.30
+litellm==1.102.0
+fastapi==0.111.0
+uvicorn>=0.29.0
+slowapi>=0.1.9
+python-multipart>=0.0.9

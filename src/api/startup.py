@@ -1,13 +1,49 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 
-from src.config import get_settings
-from src.registry.database import DocumentRegistry
 from src.api.factory import _init_components
+from src.config import get_settings
+from src.jobs.queue import api_queue
+from src.observability.logger import PipelineLogger
+from src.registry.auth_store import AuthStore
+from src.registry.engine import dispose_engines, get_sync_engine
+from src.registry.metrics_store import MetricsStore
+from src.registry.schema_version import assert_schema_current
 
 logger = logging.getLogger(__name__)
+
+
+def _initialize(app: FastAPI) -> None:
+    """Blocking initialisation, run in a worker thread so the server binds its port immediately."""
+    settings = get_settings()
+    sync_engine = get_sync_engine()
+    assert_schema_current(sync_engine)
+
+    components = _init_components()
+    app.state.chunk_store = components.chunk_store
+    app.state.registry = components.registry
+    app.state.retriever = components.retriever
+    app.state.reranker = components.reranker
+    app.state.generator = components.generator
+    app.state.evaluator = components.evaluator
+    app.state.rewriter = components.rewriter
+    app.state.embedding_generator = components.embedding_generator
+    app.state.auth_store = AuthStore(sync_engine)
+    app.state.metrics_store = MetricsStore(sync_engine)
+    app.state.pipeline_logger = PipelineLogger("nexus_rag", engine=sync_engine)
+
+    # The API only defers ingestion jobs; it never runs them (src/jobs/worker.py does), so a
+    # crashed or restarted API process cannot leave a job stuck "processing" — the worker's
+    # own stalled-job detection (heartbeats) is what recovers those.
+    app.state.job_queue = api_queue(settings.database_url).open()
+
+    logger.info(
+        f"RAG Pipeline API ready. Provider: {components.provider}, Model: {components.model_name}, "
+        f"chunks indexed: {components.chunk_store.get_collection_size()}"
+    )
 
 
 @asynccontextmanager
@@ -18,92 +54,30 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(f"Missing or invalid configuration: {', '.join(missing)}. Startup aborted.")
     settings.warn_on_legacy_secrets()
 
-    # Model loading runs in the background so the server binds to its port immediately.
+    # The semaphore belongs to the serving event loop, so it is created here, not in the thread.
+    app.state.query_semaphore = asyncio.Semaphore(settings.query_concurrency)
 
-    async def _load_models_async():
+    async def _load():
         try:
-            loop = asyncio.get_running_loop()
-            components = await loop.run_in_executor(None, _init_components)
-
-            app.state.retriever = components.retriever
-            app.state.reranker = components.reranker
-            app.state.generator = components.generator
-            app.state.evaluator = components.evaluator
-            app.state.rewriter = components.rewriter
-            app.state.embedding_generator = components.embedding_generator
-            registry = DocumentRegistry()
-            app.state.registry = registry
-            
-            from src.registry.auth_store import AuthStore
-            from src.registry.metrics_store import MetricsStore
-            from src.observability.logger import PipelineLogger
-            app.state.auth_store = AuthStore(registry._get_conn, settings.effective_signing_secret)
-            app.state.metrics_store = MetricsStore(registry._get_conn)
-            app.state.pipeline_logger = PipelineLogger("nexus_rag", registry=registry)
-
-            ingestion_concurrency = settings.ingestion_concurrency
-            app.state.ingestion_semaphore = asyncio.Semaphore(ingestion_concurrency)
-            app.state.query_semaphore = asyncio.Semaphore(settings.query_concurrency)
-
-            if hasattr(app.state, 'embedding_generator') and app.state.embedding_generator:
-                app.state.embedding_generator.embed_semaphore = asyncio.Semaphore(ingestion_concurrency)
-
-            # Reset stuck jobs on startup
-            try:
-                registry.reset_stuck_jobs()
-            except Exception as e:
-                logger.error(f"Failed to reset stuck jobs: {e}")
-
-            try:
-                vector_store = getattr(components.retriever, "vector_store", None)
-                if not vector_store and hasattr(components.retriever, "dense_retriever"):
-                    vector_store = getattr(
-                        components.retriever.dense_retriever, "vector_store", None
-                    )
-
-                qdrant_count = vector_store.get_collection_size() if vector_store else 0
-
-                registry_docs = registry.list_documents(tenant_id=None)
-                registry_chunk_count = sum(
-                    len(d.get("chunk_ids", [])) for d in registry_docs
-                )
-
-                logger.info(
-                    f"Startup check: Qdrant chunks={qdrant_count}, Registry chunks={registry_chunk_count}"
-                )
-                if qdrant_count != registry_chunk_count:
-                    logger.warning(
-                        f"CRITICAL STATE DIVERGENCE: Qdrant has {qdrant_count} chunks but Registry has {registry_chunk_count} chunks. "
-                        f"In a stateless environment like Render, this is expected if the ephemeral SQLite DB is wiped but Qdrant persists."
-                    )
-                    
-                    if registry_chunk_count == 0 and qdrant_count > 0:
-                        logger.info("Auto-rebuilding local SQLite registry from Qdrant...")
-                        try:
-                            rebuilt_count = await loop.run_in_executor(None, registry.rebuild_registry_from_qdrant, vector_store)
-                            logger.info(f"Successfully auto-rebuilt {rebuilt_count} chunks into local SQLite registry.")
-                        except Exception as e:
-                            logger.error(f"Auto-rebuild failed: {e}")
-            except Exception as e:
-                logger.error(f"Failed to perform startup consistency check: {e}")
-
-            logger.info(
-                f"RAG Pipeline API ready. Provider: {components.provider}, Model: {components.model_name}"
-            )
+            await asyncio.to_thread(_initialize, app)
             app.state.ready = True
         except Exception as e:
             logger.error(f"Failed to initialize RAG pipeline: {e}")
             app.state.init_error = str(e)
 
-    # Fire and forget the background loading
-    task = asyncio.create_task(_load_models_async())
-    app.state._startup_task = task
+    app.state._startup_task = asyncio.create_task(_load())
 
     yield
-    # Shutdown
-    if hasattr(app.state, "_startup_task"):
-        app.state._startup_task.cancel()
-        try:
-            await app.state._startup_task
-        except asyncio.CancelledError:
-            pass
+
+    app.state._startup_task.cancel()
+    try:
+        await app.state._startup_task
+    except asyncio.CancelledError:
+        pass
+    pipeline_logger = getattr(app.state, "pipeline_logger", None)
+    if pipeline_logger:
+        pipeline_logger.close()
+    job_queue = getattr(app.state, "job_queue", None)
+    if job_queue:
+        job_queue.close()
+    await dispose_engines()

@@ -1,14 +1,17 @@
-import asyncio
 from fastapi import HTTPException, Request
 from typing import Any, Optional
+
+import procrastinate
 
 from src.generating.generator import RAGGenerator
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.query_rewriter import QueryRewriter
+from src.retrieving.chunk_store import ChunkStore
 from src.retrieving.retriever import OptionalReranker
 from src.registry.database import DocumentRegistry
 from src.registry.auth_store import AuthStore
-from src.registry.metrics_store import MetricsStore
+
+
 def _check_ready(request: Request):
     """Helper to check if the background task crashed or is still initializing."""
     # If ready=True, always serve — a prior partial error is irrelevant.
@@ -26,6 +29,10 @@ def get_generator(request: Request) -> RAGGenerator:
 def get_retriever(request: Request) -> Any:
     _check_ready(request)
     return request.app.state.retriever
+
+def get_chunk_store(request: Request) -> ChunkStore:
+    _check_ready(request)
+    return request.app.state.chunk_store
 
 def get_reranker(request: Request) -> OptionalReranker:
     _check_ready(request)
@@ -47,13 +54,9 @@ def get_auth_store(request: Request) -> AuthStore:
     _check_ready(request)
     return request.app.state.auth_store
 
-def get_metrics_store(request: Request) -> MetricsStore:
-    _check_ready(request)
-    return request.app.state.metrics_store
-
 def get_pipeline_logger(request: Request):
     return getattr(request.app.state, "pipeline_logger", None)
 
-def get_ingestion_semaphore(request: Request) -> asyncio.Semaphore:
+def get_job_queue(request: Request) -> procrastinate.App:
     _check_ready(request)
-    return request.app.state.ingestion_semaphore
+    return request.app.state.job_queue

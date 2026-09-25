@@ -1,0 +1,30 @@
+# The worker: fetches, parses, chunks and embeds documents (src/jobs/tasks.py). It never
+# serves HTTP traffic — it only claims jobs from the ingest queue. Deliberately a separate
+# image from the API: this is the only place document-parsing dependencies are installed
+# (requirements-worker.txt), and the one that grows heavy when Docling replaces MarkItDown.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY requirements-base.txt requirements-worker.txt ./
+RUN pip install --no-cache-dir -r requirements-worker.txt
+
+# alembic.ini and migrations/ are included: the worker verifies the schema revision at
+# startup, same as the API (src/registry/schema_version.py).
+COPY . .
+
+ENV PYTHONIOENCODING=utf-8
+# The `procrastinate` console script, unlike `python -m`, does not put the working directory on
+# sys.path, so --app=src.jobs.worker.app would not be importable without this.
+ENV PYTHONPATH=/app
+
+# Shell form (with exec, so procrastinate is PID 1 and receives SIGTERM for graceful shutdown) so ${WORKER_CONCURRENCY} expands: WORKER_CONCURRENCY is our own validated setting
+# (src/config.py), kept as the single name for it rather than also relying on Procrastinate's
+# separate PROCRASTINATE_WORKER_CONCURRENCY variable. -w/--no-wait is intentionally absent:
+# the worker runs forever, listening for new jobs.
+CMD exec procrastinate --app=src.jobs.worker.app worker --queues=ingest --concurrency=${WORKER_CONCURRENCY:-2}

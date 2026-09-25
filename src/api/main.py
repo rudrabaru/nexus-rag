@@ -8,6 +8,7 @@ if sys.platform == "win32":
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 
 # override=False: variables already set in the real environment win over the file.
 env_path = Path(__file__).resolve().parent.parent.parent / '.env'
@@ -51,9 +52,10 @@ app.include_router(
 )
 @app.get("/health")
 def health_check(request: Request):
-    # Liveness probe: returns immediately if server is up
+    # Liveness probe. A failed initialisation never recovers in-process, so it reports 503
+    # and the platform restarts or replaces the instance instead of routing traffic to it.
     if hasattr(request.app.state, "init_error"):
-        return {"status": "error", "message": request.app.state.init_error}
+        return JSONResponse(status_code=503, content={"status": "error", "message": request.app.state.init_error})
     return {"status": "ok"}
 
 
