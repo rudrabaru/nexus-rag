@@ -1,36 +1,25 @@
 import time
 from typing import Optional, Any
-from src.registry.database import DocumentRegistry
-from src.retrieving.models import RetrievedChunk, RetrievalResult
+
+from src.retrieving.chunk_store import ChunkStore
+from src.retrieving.models import RetrievalResult
+
 
 class SparseRetriever:
-    """Retrieves document chunks using SQLite FTS5 sparse keyword search."""
+    """Retrieves chunks by Postgres full-text search over the chunk text."""
 
-    def __init__(self, registry: Optional[DocumentRegistry] = None):
-        self.registry = registry or DocumentRegistry()
+    def __init__(self, chunk_store: ChunkStore):
+        self.chunk_store = chunk_store
 
     async def retrieve(
         self, query: str, top_k: int = 5, tenant_id: Optional[str] = None, pipeline_logger: Optional[Any] = None, allow_global: bool = False
     ) -> RetrievalResult:
         start_time = time.time()
-        fts_results, fallback_used = self.registry.search_fts5(
-            query=query, tenant_id=tenant_id, limit=top_k, allow_global=allow_global
+        chunks, fallback_used = await self.chunk_store.search_sparse(
+            query, tenant_id=tenant_id, limit=top_k, allow_global=allow_global
         )
         if fallback_used and pipeline_logger:
             pipeline_logger.log_event("fts_fallback_triggered", query=query, tenant_id=tenant_id)
-
-        chunks = []
-        for res in fts_results:
-            chunks.append(
-                RetrievedChunk(
-                    chunk_id=res["chunk_id"],
-                    source_document=res["source_document"],
-                    source_url=res.get("source_url"),
-                    text=res["chunk_text"],
-                    similarity_score=res["score"],
-                    metadata=res,
-                )
-            )
 
         latency = (time.time() - start_time) * 1000
         return RetrievalResult(

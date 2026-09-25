@@ -54,6 +54,15 @@ class GenerationConfig(BaseModel):
         description="Instruct the LLM to cite source URLs in its answer",
     )
 
+    request_timeout_seconds: float = Field(
+        60.0,
+        description=(
+            "Upper bound on one LLM call. litellm's default is 6000 s, so without this a "
+            "provider that hangs holds a query slot for up to 100 minutes and the fallback "
+            "never fires. 60 s covers a full answer (max_output_tokens=4096 at the ~100 "
+            "tokens/s of flash-class models is ~40 s) with headroom for queueing."
+        ),
+    )
     fallback_config: Optional[dict] = Field(
         None,
         description="Optional GenerationConfig dictionary to use if primary fails.",
@@ -124,6 +133,9 @@ class GenerationResult(BaseModel):
     # Token accounting
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    generation_cost_usd: float = Field(
+        0.0, description="Real per-call cost from litellm.completion_cost(), not an estimate"
+    )
 
     # Model used
     model_name: str = ""

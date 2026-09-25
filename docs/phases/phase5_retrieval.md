@@ -8,7 +8,8 @@ The retrieval phase surfaces the most relevant chunks from the indexed knowledge
 ### Multi-Tenancy & Strict Security Filtering
 Before any chunk is evaluated for relevance, a strict security filter is enforced directly at the storage and retrieval layer:
 - In production execution, if a tenant identifier is missing, unassigned, or set to a wildcard, the query is immediately rejected and returns an empty result set without querying the underlying databases.
-- When a valid tenant identifier is provided, queries are strictly scoped using database-level payload filters and exact query predicates.
+- When a valid tenant identifier is provided, both searches carry a `tenant_id = :tenant` SQL predicate on the one `chunks` table.
+- Chunks are keyed by `(tenant_id, chunk_id)`. The previous vector store keyed them by `chunk_id` alone, and chunk IDs derive from the source URL, so a second tenant ingesting the same page overwrote the first tenant's vectors. The legacy data showed it: all 260 chunks of one page ingested by two tenants were held under the second tenant only.
 - For offline evaluation and benchmarking pipelines, an explicit, trusted administrative override allows cross-tenant evaluation without risking production leakage.
 
 ### Standalone Retrieval Modes for scientific Ablation
@@ -19,16 +20,26 @@ The architecture decouples retrieval modes into modular components to support sc
 
 ### Stage 1: Dense Retrieval (Semantic Search)
 1. The user's query is embedded via an external service, specifically tagged with a query-specific task profile to optimize for searching.
-2. The vector database is queried to find the top candidates based on pure mathematical similarity (cosine distance).
+2. Postgres returns the nearest chunks by cosine distance (`ORDER BY embedding <=> :query LIMIT k`) through a pgvector HNSW index over `halfvec(1024)` columns.
 3. These results capture the *meaning* and *concepts* of the query, even if the exact words don't match.
 
+**Filtered approximate search.** An HNSW index scan finds a fixed-size candidate list (`hnsw.ef_search`) and the tenant filter is applied afterwards, so a tenant owning a small share of the index could get fewer than `k` results. pgvector 0.8 added iterative scans (`hnsw.iterative_scan = relaxed_order`), which keep scanning until `k` rows pass the filter. `ef_search = 100` covers the largest candidate pool the API can request (rerank pool = `top_k × 4`, `top_k ≤ 20`). `relaxed_order` can return rows slightly out of order, so the store re-sorts by score. Both settings are applied when a connection opens, not per query.
+
 ### Stage 2: Sparse Retrieval (Keyword Search)
-In parallel, the local full-text search database is queried with the raw string. This engine applies linguistic stemming and a keyword scoring algorithm to find exact terminology matches. This is critical for queries involving specific acronyms, error codes, or proper nouns that semantic search might misinterpret.
+Concurrently, Postgres full-text search runs over a generated `tsvector` column (`to_tsvector('english', chunk_text)`, GIN-indexed). The query goes through `plainto_tsquery`, which treats every character as plain text, so query syntax cannot be injected. All terms must match first (AND). When nothing matches, the same terms are retried with any-term matching (OR), and that fallback is logged. Results are ranked by `ts_rank_cd`, which is not BM25. RRF consumes only the rank order, so only the ordering matters.
+
+Because the sparse index is a generated column of the same row as the vector, it cannot fall out of sync with it. The SQLite FTS5 index it replaces held 1,162 rows against 2,284 vectors, so hybrid search had been searching about half the corpus for keywords.
+
+Known limitation: `'english'` stemming is applied to every document. A non-English corpus needs a per-document text-search configuration (language detection already exists in the ingestion stage).
 
 ### Stage 3: Reciprocal Rank Fusion (RRF)
 The semantic and keyword results are completely different mathematically and cannot be simply added together. The system fuses them using **Reciprocal Rank Fusion (RRF)**.
 
 RRF looks at the *rank order* of the results rather than their raw scores. A document that appears high in both the semantic list and the keyword list will be boosted to the absolute top of the final fused list. This mathematical approach guarantees the best of both worlds without requiring brittle, manual score weighting.
+
+RRF fuses on `chunk_id`, so both lists must use the same identifier. Until the Postgres migration they did not: dense results carried the vector store's UUID point ID while sparse results carried the real chunk ID. A chunk found by both retrievers therefore never received a fused score, and it could occupy two of the five result slots. Measured on the benchmark's 38 queries: 27 of 190 top-5 slots (14.2%) held a duplicate, so the generator saw four distinct chunks instead of five in 27 queries. Recall did not change (see Phase 6 for why the benchmark could not detect it).
+
+**Filtered-search settings on Neon.** The HNSW settings above must reach every search connection. Neon's proxy silently drops individual startup parameters (tested with `work_mem`, which was ignored) but forwards libpq's `options` parameter, so the settings are sent as `options=-chnsw.iterative_scan=relaxed_order -chnsw.ef_search=100`. An integration test asserts the values actually arrive in the session. Without it, filtered search would have silently lost iterative scans.
 
 ### Stage 4: Optional Cross-Encoder Reranking
 If configured, the top results from the fused list are sent to a specialized external cross-encoder reranking service. 

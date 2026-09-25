@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    # Real Postgres + pgvector for tests/integration. Credentials are throwaway: the
+    # container exists only for this job and is unreachable from outside the runner.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: nexus
+          POSTGRES_PASSWORD: nexus
+          POSTGRES_DB: nexus_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nexus -d nexus_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_DATABASE_URL: postgresql://nexus:nexus@localhost:5432/nexus_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11" # matches Dockerfile.api and Dockerfile.worker
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Lint (correctness rules only)
+        run: ruff check src scripts tests
+      - name: Tests (unit + Postgres integration)
+        run: pytest -q -rs
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the API image
+        run: docker build -f Dockerfile.api -t nexus-api:ci .
+      - name: Build the worker image
+        run: docker build -f Dockerfile.worker -t nexus-worker:ci .
+      - name: Images must contain no secrets or local state
+        run: |
+          leaked=0
+          for image in nexus-api:ci nexus-worker:ci; do
+            for path in .env data sources observability retrieval logs.txt tests docs; do
+              if docker run --rm --entrypoint sh "$image" -c "[ -e /app/$path ]"; then
+                echo "::error::/app/$path is present in $image"
+                leaked=1
+              fi
+            done
+          done
+          exit $leaked
+      - name: Images must carry what the startup schema check needs
+        run: |
+          for image in nexus-api:ci nexus-worker:ci; do
+            docker run --rm --entrypoint sh "$image" -c "[ -f /app/alembic.ini ] && [ -d /app/migrations/versions ]"
+          done
+      - name: The API image must not carry document-parsing dependencies
+        # The slim/fat split (item 7b) is only real if this holds: the worker (Dockerfile.worker)
+        # is the sole place markitdown/PyMuPDF/Pillow/google-genai are installed.
+        run: |
+          for pkg in markitdown fitz PIL google.genai; do
+            if docker run --rm --entrypoint python nexus-api:ci -c "import $pkg" 2>/dev/null; then
+              echo "::error::$pkg is importable in the API image; it belongs in the worker image only"
+              exit 1
+            fi
+          done
+      - name: The worker image must be able to import its task module
+        run: docker run --rm --entrypoint python nexus-worker:ci -c "import src.jobs.tasks"
+
+  # Manual only: spends embedding quota and needs repository secrets DATABASE_URL and
+  # JINA_API_KEY. Gates dense and hybrid; hybrid became gateable once the keyword index
+  # moved into Postgres (it used to live on one machine's disk).
+  retrieval-gate:
+    if: github.event_name == 'workflow_dispatch'
+    needs: test
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: Dense — evaluate and gate
+        run: |
+          python -m src.retrieving.eval_runner --dataset evaluation_datasets/benchmark.json --output-dir retrieval/ci/dense
+          python -m src.retrieving.baseline_check evaluation_datasets/baselines/dense_top5.json "$(ls -d retrieval/ci/dense/eval_*/ | tail -1)evaluation_metrics.json"
+      - name: Hybrid — evaluate and gate
+        run: |
+          python -m src.retrieving.eval_runner --dataset evaluation_datasets/benchmark.json --output-dir retrieval/ci/hybrid --use-hybrid
+          python -m src.retrieving.baseline_check evaluation_datasets/baselines/hybrid_top5.json "$(ls -d retrieval/ci/hybrid/eval_*/ | tail -1)evaluation_metrics.json"

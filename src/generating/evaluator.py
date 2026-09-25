@@ -45,7 +45,9 @@ class FaithfulnessEvaluator:
     """
 
     def __init__(self, config: GenerationConfig = None):
-        self.config = config or GenerationConfig()
+        # A private copy fixed at temperature 0.0: the judge must be deterministic, and it
+        # must never share (or mutate) the generator's config object.
+        self.config = (config or GenerationConfig()).model_copy(update={"temperature": 0.0})
         from .llm_client import LLMClient
         self.llm_client = LLMClient(self.config)
 
@@ -60,14 +62,9 @@ class FaithfulnessEvaluator:
             answer=result.answer,
         )
 
-        original_temp = self.config.temperature
-        self.config.temperature = 0.0
-        try:
-            answer_text, _, _, _ = self.llm_client.call_llm(
-                prompt, response_schema=EvaluationResponse
-            )
-        finally:
-            self.config.temperature = original_temp
+        answer_text, _, _, _ = self.llm_client.call_llm(
+            prompt, response_schema=EvaluationResponse
+        )
 
         try:
             if not answer_text:

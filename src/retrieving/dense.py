@@ -4,19 +4,19 @@ import os
 import httpx
 from typing import Optional, Any
 
-from src.retrieving.vector_store import QdrantManager
+from src.retrieving.chunk_store import ChunkStore
 from src.embedding.config import EmbeddingConfig
-from src.retrieving.models import RetrievedChunk, RetrievalResult
+from src.retrieving.models import RetrievalResult
 
 logger = logging.getLogger(__name__)
 
 class DenseRetriever:
     def __init__(
         self,
-        vector_store: QdrantManager,
+        chunk_store: ChunkStore,
         embedding_config: Optional[EmbeddingConfig] = None,
     ):
-        self.vector_store = vector_store
+        self.chunk_store = chunk_store
         self.config = embedding_config or EmbeddingConfig()
         
         logger.info(
@@ -80,57 +80,20 @@ class DenseRetriever:
         embed_latency = (time.time() - embed_start) * 1000
 
         search_start = time.time()
-
-        collection_size = self.vector_store.get_collection_size()
-        safe_top_k = min(top_k, collection_size)
-
-        if safe_top_k == 0:
-            search_latency = (time.time() - search_start) * 1000
-            return RetrievalResult(
-                query=query,
-                top_k=top_k,
-                latency_ms=(time.time() - start_time) * 1000,
-                embedding_latency_ms=embed_latency,
-                search_latency_ms=search_latency,
-                chunks=[],
-            )
-
-        merged = self.vector_store.search(
+        candidates = await self.chunk_store.search_dense(
             query_embedding=query_embedding,
-            top_k=safe_top_k,
+            top_k=top_k,
             tenant_id=tenant_id,
-            allow_global=allow_global
+            allow_global=allow_global,
         )
-
         search_latency = (time.time() - search_start) * 1000
-
-        candidates = []
-        for item in merged:
-            metric = getattr(self.vector_store, "distance_metric", "cosine")
-            if metric == "l2":
-                similarity = 1.0 / (1.0 + item["dist"])
-            else:
-                similarity = item["dist"] # Qdrant cosine returns similarity directly
-
-            chunk = RetrievedChunk(
-                chunk_id=item["id"],
-                source_document=item["meta"].get("source_document", ""),
-                source_url=item["meta"].get("source_url"),
-                text=item["doc"],
-                similarity_score=similarity,
-                metadata=item["meta"],
-            )
-            candidates.append(chunk)
-
-        candidates.sort(key=lambda x: x.similarity_score, reverse=True)
-
         latency = (time.time() - start_time) * 1000
 
         if candidates:
             scores_str = ", ".join(f"{c.similarity_score:.4f}" for c in candidates[:5])
             logger.info(
                 f"Retrieved {len(candidates)} chunks for tenant={tenant_id}"
-                f" | metric={getattr(self.vector_store, 'distance_metric', 'cosine')}"
+                f" | metric={self.chunk_store.distance_metric}"
                 f" | top-5 scores: [{scores_str}]"
             )
 

@@ -14,7 +14,8 @@ Nexus RAG takes your files (PDFs, URLs, text) and turns them into a searchable k
 **1. Prerequisites & Tech Stack**
 - **Language**: Python 3.10+
 - **Frameworks**: FastAPI, Streamlit
-- **Databases**: Qdrant Cloud (Cloud Vector DB), SQLite (Local Keyword Search)
+- **Database**: Postgres (Neon) with pgvector: vectors (HNSW), keyword search (full-text), documents, jobs, keys and metrics in one store; schema managed by Alembic
+- **Job queue**: [Procrastinate](https://procrastinate.readthedocs.io/) (Postgres-backed). The API validates a request and queues it; a separate **worker** process does the actual fetching, parsing, chunking and embedding, so it ships as its own image (`Dockerfile.worker`) with the document-parsing dependencies the API doesn't need
 - **APIs**: Groq / Gemini (Text Generation), Jina AI (Embeddings & Reranking)
 
 **2. Environment Setup**
@@ -25,19 +26,18 @@ GEMINI_API_KEY="your_gemini_key"
 GROQ_API_KEY="your_groq_key"
 JINA_API_KEY="your_jina_key"
 
-# Qdrant Vector Database
-QDRANT_URL="your_qdrant_cluster_url"
-QDRANT_API_KEY="your_qdrant_api_key"
-QDRANT_COLLECTION_NAME="nexus_rag_collection"
+# Postgres (Neon) — the DIRECT endpoint, not the "-pooler" one
+DATABASE_URL="postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?sslmode=require"
 
-# Security (Master Password)
-RAG_API_KEY="your-super-secret-admin-key"
+# Authorises POST /admin/keys and /admin/keys/revoke
+ADMIN_API_KEY="your-admin-key"
 
 # Optional Settings
-INGESTION_CONCURRENCY=2
+WORKER_CONCURRENCY=2
 ENABLE_QUERY_GENERALISATION=false
 ENABLE_RERANKER=false
 ```
+`.env.example` lists every variable. The API and the worker each refuse to start and name each missing or invalid one.
 
 **3. Run the Backend (FastAPI)**
 ```bash
@@ -47,11 +47,20 @@ python -m venv venv
 # Windows: venv\Scripts\activate
 # Mac/Linux: source venv/bin/activate
 pip install -r requirements.txt
+alembic upgrade head          # create or update the schema (once per database, and after pulling migrations)
 uvicorn src.api.main:app --reload
 ```
+The API checks the schema revision at startup and refuses to run against a database that has not been migrated.
 *The API will be available at `http://localhost:8000/docs`*
 
-**4. Run the Frontend (Streamlit)**
+**4. Run the Worker**
+In a second terminal, with the same `.env` — the API only queues an ingestion job; this is what actually runs it:
+```bash
+python -m src.jobs.worker
+```
+Without a running worker, an uploaded document's job stays at `status: "queued"` forever.
+
+**5. Run the Frontend (Streamlit)**
 In a new terminal window, activate the virtual environment and run:
 ```bash
 streamlit run scripts/chat_ui.py
@@ -72,7 +81,7 @@ streamlit run scripts/chat_ui.py
 ### Search Engine
 - **Hybrid Search:** Combines meaning-based search (Dense Vectors) with exact keyword matching (Sparse Text) so it never misses a relevant detail.
 - **Reranking:** Re-evaluates search results on the fly to ensure the most useful information is placed at the very top. Exposed as a runtime toggle — empirical ablation on our benchmark showed the off-the-shelf reranker reduces Recall@1 (0.974 → 0.816), so it is recommended only for latency-tolerant, non-interactive workloads where deeper cross-attention is more valuable than pinpoint top-1 precision.
-- **Private Workspaces:** Your uploaded documents and chat history are cryptographically locked to your API key. No one else can query or see your data.
+- **Private Workspaces:** Every search is scoped to the workspace of your API key, and a request with no workspace returns nothing without touching the database. Keys are stored only as hashes and can be revoked individually.
 
 ### Chat & Memory
 - **Follow-up Questions:** Remembers the context of your conversation so you can ask natural follow-up questions without repeating yourself.
@@ -104,21 +113,30 @@ This flow illustrates how your private workspace is kept secure.
 
 ```mermaid
 sequenceDiagram
+    actor Admin
     actor User
     participant Auth as Auth Store
     participant Ingest as Ingestion API
+    participant Queue as Job Queue (Postgres)
+    participant Worker
     participant Query as Query API
 
-    %% Registration
-    User->>Auth: POST /register
-    Auth-->>User: Returns API Key & Workspace ID
-    Note right of User: Save your API Key! No passwords<br/>are saved in the database.
+    %% Key provisioning (admin only; there is no open sign-up)
+    Admin->>Auth: POST /admin/keys (admin key)
+    Auth-->>Admin: Returns API Key & Workspace ID
+    Admin-->>User: Shares the API Key
+    Note right of User: Keep your API Key. No passwords<br/>are saved in the database.
 
-    %% Ingestion
+    %% Ingestion: the API only validates and queues
     User->>Ingest: Upload a PDF or URL
     Ingest->>Auth: Verify API Key
     Auth-->>Ingest: Validated Workspace ID
-    Ingest-->>User: Success
+    Ingest->>Queue: Defer ingestion job
+    Ingest-->>User: job_id, status: queued
+    Worker->>Queue: Claim the job
+    Worker-->>Queue: Fetch, parse, chunk, embed, commit
+    User->>Ingest: GET /ingest/{job_id}
+    Ingest-->>User: status: complete
     Note right of User: Data is securely locked<br/>to your Workspace
 
     %% Querying
@@ -130,35 +148,36 @@ sequenceDiagram
 
 ## The Ingestion Pipeline (Internal Flow)
 
-This flowchart visualizes how your files are processed and saved.
+This flowchart visualizes how your files are processed and saved. The API (left) only validates and queues; the worker (right) — a separate process, a separate Docker image — does everything else.
 
 ```mermaid
 graph TD
-    %% Inputs
-    A1[PDF / DOCX] --> B(Format Routing)
-    A2[URLs / Sitemaps] --> B
-    
-    %% Extraction
-    B -->|Local File| C1[Extract Text]
-    B -->|Web Link| C2[Read Website]
-    
-    C1 --> D[Convert to Markdown]
-    C2 --> D
-    
-    %% Processing
-    D --> E[Clean up Noise & Menus]
-    E --> F[Split text smartly by Headings]
-    
-    %% Embedding & Indexing
-    F --> G[Generate Searchable Vectors]
-    
-    G --> H{Save securely to your Workspace}
-    
-    H -->|Dense Vectors| I[(Qdrant Cloud)]
-    H -->|Keywords| J[(Local SQLite)]
-    
-    style I fill:#f9f,stroke:#333,stroke-width:2px
-    style J fill:#bbf,stroke:#333,stroke-width:2px
+    subgraph API["API — validates & queues, no document parsers installed"]
+        A1[PDF / DOCX Upload] --> V{Validate: type, size, quota}
+        A2[URL] --> V
+        V --> Q[Register job + defer to queue]
+    end
+
+    Q --> QT[(Postgres job queue<br/>Procrastinate)]
+    QT --> W
+
+    subgraph Worker["Worker — claims jobs, does the parsing"]
+        W(Format Routing) -->|Local File| C1[Extract Text]
+        W -->|Web Link| C2[Read Website]
+
+        C1 --> D[Convert to Markdown]
+        C2 --> D
+
+        D --> E[Clean up Noise & Menus]
+        E --> F[Split text smartly by Headings]
+
+        F --> G[Generate Searchable Vectors]
+    end
+
+    G --> H[(Postgres chunks table<br/>vector + keyword index + text<br/>one row, one transaction)]
+
+    style H fill:#bbf,stroke:#333,stroke-width:2px
+    style QT fill:#bbf,stroke:#333,stroke-width:2px
 ```
 
 ## The Query Pipeline (Internal Flow)
@@ -175,9 +194,9 @@ graph TD
     C --> D
     
     %% Hybrid Retrieval
-    D --> E{Search Both Databases}
-    E -->|Meaning Search| F[(Qdrant Cloud)]
-    E -->|Keyword Search| G[(Local SQLite)]
+    D --> E{Search concurrently}
+    E -->|Meaning Search| F[(pgvector HNSW)]
+    E -->|Keyword Search| G[(Postgres full-text)]
     
     F --> H[Combine Results]
     G --> H
@@ -195,31 +214,34 @@ graph TD
     M -->|Real-Time| N((Streams to your screen))
 ```
 
-## Cloud Deployment Resilience (Auto-Recovery Flow)
+## Startup (Stateless Host, Durable Database)
 
-This shows how the system survives Render's ephemeral disk wipes by treating Qdrant as the durable source of truth.
+The API keeps nothing on local disk, so a host that wipes its filesystem on restart (Render, Hugging Face Spaces) loses nothing and needs no recovery step.
 
 ```mermaid
 graph LR
-    A[Server Cold Start<br/>Ephemeral Disk Wiped] --> B{Check Qdrant vs SQLite}
-    
-    B -->|SQLite Empty & Qdrant Full| C[Trigger Auto-Rebuild]
-    B -->|In Sync| D[Start API Server]
-    
-    C --> E[Scroll Qdrant Vectors]
-    E --> F[Reconstruct SQLite Registry & FTS5]
-    F --> D
-    
-    style C fill:#f96,stroke:#333,stroke-width:2px
+    A[Server start] --> B{Config complete?}
+    B -->|No| X[Refuse to start<br/>name each missing setting]
+    B -->|Yes| C{Schema at code revision?}
+    C -->|No| Y[/health returns 503<br/>run: alembic upgrade head/]
+    C -->|Yes| D[Serve traffic]
+
+    style X fill:#f96,stroke:#333,stroke-width:2px
+    style Y fill:#f96,stroke:#333,stroke-width:2px
 ```
 
+The worker follows the same rule on its own startup (config, then schema), independently of the API.
 
 ## Setup & Hosting Notes
 
-Nexus RAG is incredibly easy to host in the cloud with RAM constraints because it doesn't rely on massive local databases. 
+**Storage:**
+Everything durable lives in one Postgres database (Neon free tier): document text and vectors, the keyword index, jobs, the job queue itself, API keys and cost history. Deleting a document removes its chunks, vectors and keyword entries in the same transaction. Neon suspends an idle database after about five minutes, so the first request after a pause can take a few seconds longer.
 
-**Storage & Recovery:**
-The system stores all the heavy, searchable data securely in **Qdrant Cloud**. If your server ever restarts or crashes, it takes just a few seconds to automatically reconnect to Qdrant and restore your entire search index back into memory. This means you never lose data and don't have to pay for expensive, persistent hard drives on your hosting provider.
+**Ingestion needs a running worker:**
+`POST /ingest` only validates and queues; a separate worker process (`Dockerfile.worker`, or `python -m src.jobs.worker` locally) does the actual fetching, parsing, chunking and embedding. A deployment that only runs the API image will accept uploads that never progress past `status: "queued"`.
+
+**Moving from the old Qdrant + SQLite storage:**
+`python -m scripts.migrate_legacy --dry-run` reads both old stores and prints what it would copy. Without `--dry-run` it writes everything in one transaction and then verifies it. Existing API keys keep working.
 
 **Workspace Access:**
-You don't need to sign up with an email or password. Simply click **"Generate New API Key"** in the sidebar of the chat interface. This unique key acts as your private workspace lock. Save this key somewhere safe! The next time you visit, paste that exact key into the **"Existing API Key"** box to instantly unlock your workspace, your chat history, and all the documents you previously uploaded.
+There is no open sign-up. An administrator issues your workspace key with `POST /admin/keys` and can revoke it with `POST /admin/keys/revoke` (both send the `RAG-API-KEY` header). Paste the key into the **"API Key"** box in the sidebar of the chat interface to unlock your workspace and the documents you previously uploaded. Chat history lives only in the browser session and is not restored after a refresh.

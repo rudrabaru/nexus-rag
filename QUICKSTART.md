@@ -1,10 +1,11 @@
 #Nexus RAG System - Quickstart
 
-This is a production-grade, no-framework RAG (Retrieval-Augmented Generation) system built entirely from scratch with FastAPI, Qdrant Cloud, and Streamlit.
+This is a production-grade, no-framework RAG (Retrieval-Augmented Generation) system built entirely from scratch with FastAPI, Postgres (Neon + pgvector), and Streamlit.
 
 ## 1. Prerequisites
-- Python 3.12+ (or Docker)
+- Python 3.11+ (or Docker)
 - A Gemini API Key (or Groq API Key)
+- A Postgres database with the pgvector extension, e.g. a free Neon project. Use its **direct** connection string (host without `-pooler`).
 
 ## 2. Environment Setup
 
@@ -13,14 +14,32 @@ Create a `.env` file in the root directory:
 LLM_PROVIDER=gemini
 GEMINI_API_KEY=your_gemini_api_key_here
 # Optional: GROQ_API_KEY=your_groq_api_key_here
-RAG_API_KEY=your_admin_api_key_here
+ADMIN_API_KEY=your_admin_api_key_here
+DATABASE_URL=postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?sslmode=require
+JINA_API_KEY=your_jina_api_key
+```
+See `.env.example` for every variable.
+
+Create the schema (once per database, and again after pulling new migrations):
+```bash
+alembic upgrade head
 ```
 
-## 3. Quick Run (Docker API)
-You can run the API backend via Docker:
+## 3. Quick Run (Docker: API + worker)
+Ingestion runs as two processes: the API (validates requests, serves queries) and a worker (fetches, parses, chunks and embeds documents). They are two separate images so the API stays free of document-parsing dependencies. Both need the same `.env`.
 ```bash
-docker build -t nexus-rag-api .
-docker run -p 8000:8000 nexus-rag-api
+docker build -f Dockerfile.api -t nexus-rag-api .
+docker build -f Dockerfile.worker -t nexus-rag-worker .
+docker run --env-file .env nexus-rag-api alembic upgrade head   # release step: migrate first
+
+docker run --env-file .env -p 8000:8000 nexus-rag-api
+docker run --env-file .env nexus-rag-worker   # in a second terminal
+```
+The images deliberately contain no `.env`, so pass it at run time. Docker's `--env-file` keeps quotes literally, so write values unquoted. Uploading a document without a running worker leaves its job at `status: "queued"` indefinitely — start the worker before testing ingestion.
+
+Issue a workspace key (there is no open sign-up):
+```bash
+curl -X POST http://localhost:8000/admin/keys -H "RAG-API-KEY: <your ADMIN_API_KEY>"
 ```
 - API available at: [http://localhost:8000](http://localhost:8000)
 - API docs at: [http://localhost:8000/docs](http://localhost:8000/docs)
@@ -48,6 +67,16 @@ pip install -r requirements.txt
 uvicorn src.api.main:app --reload --port 8000
 ```
 Wait for `RAG Pipeline API ready` in the console.
+
+### Start the worker
+In a separate terminal — this is what actually processes uploads and URLs; the API only queues them:
+```powershell
+python -m src.jobs.worker
+```
+Or with Procrastinate's own CLI, which supports more options (`--concurrency`, `--queues`, ...):
+```powershell
+procrastinate --app=src.jobs.worker.app worker --queues=ingest
+```
 
 ### Start the Streamlit UI
 In a separate terminal:

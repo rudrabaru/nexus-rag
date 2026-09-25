@@ -75,3 +75,9 @@ data/
 .ruff_cache/
 .code-review-graph/
 .streamlit/secrets.toml
+
+# Local scratch and personal files — not part of the codebase
+*.pptx
+scripts/experiments/
+system_technical_analysis.md
+you-are-acting-as-melodic-knuth.md

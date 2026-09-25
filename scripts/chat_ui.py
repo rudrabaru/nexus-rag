@@ -1,5 +1,4 @@
 import streamlit as st
-import requests
 import os
 from dotenv import load_dotenv
 
@@ -55,54 +54,27 @@ st.markdown(
 )
 
 API_BASE_URL = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
-DEMO_MODE = os.environ.get("DEMO_MODE", "false").lower() == "true"
 
 if "api_key" not in st.session_state:
-    st.session_state.api_key = "demo" if DEMO_MODE else ""
+    st.session_state.api_key = ""
 
 # Sidebar Settings
 with st.sidebar:
     st.header("Nexus RAG Configuration")
-    if not DEMO_MODE:
-        st.subheader("Workspace Authentication")
-        if st.session_state.api_key:
-            st.success("Authenticated with your private workspace")
-            
-            if st.session_state.get("newly_generated_key"):
-                st.warning("⚠️ Please save your new API key now! You will need it to login later.")
-                st.code(st.session_state.newly_generated_key, language=None)
-                if st.button("I have saved my key", use_container_width=True):
-                    st.session_state.newly_generated_key = None
-                    st.rerun()
-            
-            if st.button("Sign Out", use_container_width=True):
-                st.session_state.api_key = ""
-                st.session_state.newly_generated_key = None
-                st.rerun()
-        else:
-            st.info("Enter an existing API key or generate a new one to get your own private document workspace.")
-            
-            existing_key = st.text_input("Existing API Key", type="password", placeholder="Paste your key here...")
-            if st.button("Login", use_container_width=True) and existing_key:
-                st.session_state.api_key = existing_key
-                st.rerun()
-                
-            st.markdown("---")
-            
-            if st.button("Generate New API Key", use_container_width=True):
-                try:
-                    res = requests.post(f"{API_BASE_URL}/register", timeout=10)
-                    if res.status_code == 200:
-                        new_key = res.json()["api_key"]
-                        st.session_state.api_key = new_key
-                        st.session_state.newly_generated_key = new_key
-                        st.rerun()
-                    else:
-                        st.error(f"Failed to generate API Key: {res.status_code} - {res.text}")
-                except Exception as e:
-                    st.error(f"Error connecting to backend: {e}")
+    st.subheader("Workspace Authentication")
+    if st.session_state.api_key:
+        st.success("Authenticated with your private workspace")
+
+        if st.button("Sign Out", use_container_width=True):
+            st.session_state.api_key = ""
+            st.rerun()
     else:
-        st.info("Running in **DEMO MODE**. Multi-tenancy is disabled. All users share the 'demo' workspace.")
+        st.info("Enter the API key your administrator issued for your workspace.")
+
+        existing_key = st.text_input("API Key", type="password", placeholder="Paste your key here...")
+        if st.button("Login", use_container_width=True) and existing_key:
+            st.session_state.api_key = existing_key
+            st.rerun()
 
     api_headers = {}
     if st.session_state.api_key:

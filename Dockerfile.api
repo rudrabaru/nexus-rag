@@ -1,0 +1,26 @@
+# The API: serving, retrieval and generation. It queues ingestion jobs but never runs them
+# (src/jobs/worker.py, in Dockerfile.worker, does), so it installs no document-parsing
+# dependency (markitdown, pymupdf, Pillow, ...) — see requirements-api.txt.
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements first to leverage Docker's layer cache.
+COPY requirements-base.txt requirements-api.txt ./
+RUN pip install --no-cache-dir -r requirements-api.txt
+
+# Copy the application (.dockerignore keeps secrets and local state out).
+# alembic.ini and migrations/ are included: the API verifies the schema revision at startup.
+COPY . .
+
+EXPOSE 8000
+
+ENV PYTHONIOENCODING=utf-8
+
+# Migrations are applied as a release step (`alembic upgrade head`), never on boot.
+CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

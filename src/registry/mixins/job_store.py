@@ -1,29 +1,69 @@
-import json
-from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from typing import Any, Dict, Optional, Tuple
+
+from sqlalchemy import bindparam, case, delete, func, literal, select, update
+from sqlalchemy.dialects.postgresql import JSONB, insert
+from sqlalchemy.engine import Connection
+
+from src.registry.rows import row_to_dict, utcnow
+from src.registry.schema import documents, ingest_sources, jobs
+
+TERMINAL_STATUSES = ("complete", "failed")
+STATUSES_WITH_DOCUMENT_ERROR = ("failed", "partial_success")
+PARTIAL_SUCCESS_DEFAULT_ERROR = "Some chunks or pages failed processing (e.g., API rate limits or crawling errors)."
+
+
+def _merged_metadata(new_meta: Dict[str, Any]):
+    """Merges keys into jobs.metadata atomically in SQL (JSONB ||), with no read-modify-write race."""
+    return func.coalesce(jobs.c.metadata, literal({}, JSONB)).op("||")(bindparam("new_meta", new_meta, type_=JSONB))
+
+
+def _error_from_metadata(meta: Optional[Dict[str, Any]]) -> Optional[str]:
+    if isinstance(meta, dict):
+        return meta.get("error_reason") or meta.get("error")
+    return None
+
+
+def _doc_of_job(job_id: str):
+    return select(jobs.c.doc_id).where(jobs.c.job_id == job_id).scalar_subquery()
+
+
+def complete_job(
+    conn: Connection,
+    job_id: str,
+    stats: Dict[str, Any],
+    status: str = "complete",
+    metadata: Optional[Dict[str, Any]] = None,
+    error: Optional[str] = None,
+) -> None:
+    """Marks a job complete (or partial_success) and records the document's final stats, on the caller's transaction."""
+    now = utcnow()
+    if metadata is not None:
+        conn.execute(update(jobs).where(jobs.c.job_id == job_id).values(metadata=_merged_metadata(metadata)))
+
+    if error is None:
+        stored = conn.execute(select(jobs.c.metadata).where(jobs.c.job_id == job_id)).scalar_one_or_none()
+        error = _error_from_metadata(metadata) or _error_from_metadata(stored)
+    if error is None and status == "partial_success":
+        error = PARTIAL_SUCCESS_DEFAULT_ERROR
+
+    conn.execute(
+        update(jobs)
+        .where(jobs.c.job_id == job_id)
+        .values(status=status, progress_pct=100, finished_at=now, error=func.coalesce(error, jobs.c.error))
+    )
+    conn.execute(
+        update(documents)
+        .where(documents.c.doc_id == _doc_of_job(job_id))
+        .values(status=status, updated_at=now, stats=stats, error=func.coalesce(error, documents.c.error))
+    )
+
+
+def delete_ingest_source(conn: Connection, job_id: str) -> None:
+    conn.execute(delete(ingest_sources).where(ingest_sources.c.job_id == job_id))
+
 
 class JobStoreMixin:
-    """Mixin handling job-related registry operations."""
-
-    def _save_metadata(self, conn, job_id: str, new_meta: Optional[Dict[str, Any]]):
-        if new_meta is None:
-            return
-        cursor = conn.execute("SELECT metadata FROM jobs WHERE job_id = ?", (job_id,))
-        row = cursor.fetchone()
-        existing_meta = {}
-        if row and row[0]:
-            try:
-                existing = json.loads(row[0])
-                if isinstance(existing, dict):
-                    existing_meta = existing
-            except Exception:
-                pass
-        if isinstance(new_meta, dict):
-            existing_meta.update(new_meta)
-            final_str = json.dumps(existing_meta)
-        else:
-            final_str = json.dumps(new_meta)
-        conn.execute("UPDATE jobs SET metadata = ? WHERE job_id = ?", (final_str, job_id))
+    """Ingestion job rows, the document status they drive, and uploads waiting for the worker."""
 
     def register_job(
         self,
@@ -34,32 +74,37 @@ class JobStoreMixin:
         tenant_id: str,
         content_hash: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-    ):
-        """Registers a new job and creates/updates a pending document entry."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._get_conn() as conn:
-            # Upsert document as pending
+        upload: Optional[Tuple[str, bytes]] = None,
+    ) -> None:
+        """
+        Creates a queued job and upserts its document as pending (a complete document stays
+        complete). An uploaded file (filename, bytes) is stored in the same transaction, so a
+        queued job never exists without its source.
+        """
+        now = utcnow()
+        upsert_document = insert(documents).values(
+            doc_id=doc_id, tenant_id=tenant_id, source=source, format=format, status="pending",
+            content_hash=content_hash, ingested_at=now, updated_at=now,
+        )
+        upsert_document = upsert_document.on_conflict_do_update(
+            index_elements=[documents.c.doc_id],
+            set_={
+                "status": case((documents.c.status == "complete", "complete"), else_="pending"),
+                "updated_at": now,
+            },
+        )
+        with self._engine.begin() as conn:
+            conn.execute(upsert_document)
             conn.execute(
-                """
-                INSERT INTO documents (doc_id, source, format, status, visibility, tenant_id, ingested_at, updated_at, chunk_ids, stats, content_hash)
-                VALUES (?, ?, ?, 'pending', 'private', ?, ?, ?, '[]', '{}', ?)
-                ON CONFLICT(doc_id) DO UPDATE SET
-                status = CASE WHEN documents.status = 'complete' THEN 'complete' ELSE 'pending' END,
-                updated_at = excluded.updated_at
-            """,
-                (doc_id, source, format, tenant_id, now, now, content_hash),
+                insert(jobs).values(
+                    job_id=job_id, doc_id=doc_id, status="queued", progress_pct=0, created_at=now, metadata=metadata
+                )
             )
-
-            # Create job
-            conn.execute(
-                """
-                INSERT INTO jobs (job_id, doc_id, status, progress_pct, created_at, metadata)
-                VALUES (?, ?, 'queued', 0, ?, ?)
-            """,
-                (job_id, doc_id, now, json.dumps(metadata) if metadata else None),
-            )
-
-            conn.commit()
+            if upload is not None:
+                filename, content = upload
+                conn.execute(
+                    insert(ingest_sources).values(job_id=job_id, tenant_id=tenant_id, filename=filename, content=content)
+                )
 
     def update_job_status(
         self,
@@ -68,130 +113,65 @@ class JobStoreMixin:
         progress_pct: int = 0,
         error: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
-    ):
-        """Updates the progress of a job."""
-        now = (
-            datetime.now(timezone.utc).isoformat() if status in ["complete", "failed"] else None
-        )
+    ) -> None:
+        values = {"status": status, "progress_pct": progress_pct}
+        if status in TERMINAL_STATUSES:
+            values.update(finished_at=utcnow(), error=error)
+        elif error is not None:
+            values["error"] = error
+        if metadata is not None:
+            values["metadata"] = _merged_metadata(metadata)
 
-        with self._get_conn() as conn:
-            if status in ["complete", "failed"]:
+        with self._engine.begin() as conn:
+            conn.execute(update(jobs).where(jobs.c.job_id == job_id).values(**values))
+            if status in STATUSES_WITH_DOCUMENT_ERROR and error:
                 conn.execute(
-                    """
-                    UPDATE jobs SET status = ?, progress_pct = ?, finished_at = ?, error = ?
-                    WHERE job_id = ?
-                """,
-                    (status, progress_pct, now, error, job_id),
+                    update(documents)
+                    .where(documents.c.doc_id == _doc_of_job(job_id))
+                    .values(status=status, error=error, updated_at=utcnow())
                 )
-            else:
-                conn.execute(
-                    """
-                    UPDATE jobs SET status = ?, progress_pct = ?
-                    WHERE job_id = ?
-                """,
-                    (status, progress_pct, job_id),
-                )
-
-            self._save_metadata(conn, job_id, metadata)
-
-            if status in ("failed", "partial_success") and error:
-                conn.execute(
-                    """
-                    UPDATE documents SET status = ?, error = ?, updated_at = ?
-                    WHERE doc_id = (SELECT doc_id FROM jobs WHERE job_id = ?)
-                """,
-                    (status, error, datetime.now(timezone.utc).isoformat(), job_id),
-                )
-
-            conn.commit()
-
-    def reset_stuck_jobs(self):
-        """Finds any jobs left in 'queued' or 'processing' states (e.g. from a server restart) and marks them as failed."""
-        now = datetime.now(timezone.utc).isoformat()
-        with self._get_conn() as conn:
-            # Update documents first
-            conn.execute(
-                """
-                UPDATE documents SET status = 'failed', error = 'Server restarted during ingestion', updated_at = ?
-                WHERE doc_id IN (SELECT doc_id FROM jobs WHERE status IN ('queued', 'processing'))
-            """,
-                (now,),
-            )
-
-            # Then, Update jobs
-            conn.execute(
-                """
-                UPDATE jobs SET status = 'failed', error = 'Server restarted during ingestion', finished_at = ?
-                WHERE status IN ('queued', 'processing')
-            """,
-                (now,),
-            )
-
-            conn.commit()
 
     def complete_job(
         self,
         job_id: str,
-        chunk_ids: List[str],
         stats: Dict[str, Any],
         status: str = "complete",
         metadata: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
-    ):
-        """Marks a job as complete (or partial_success) and updates the document with final metadata."""
-        now = datetime.now(timezone.utc).isoformat()
+    ) -> None:
+        """Convenience wrapper around the module-level complete_job, opening its own transaction."""
+        with self._engine.begin() as conn:
+            complete_job(conn, job_id, stats, status=status, metadata=metadata, error=error)
 
-        with self._get_conn() as conn:
-            self._save_metadata(conn, job_id, metadata)
-            
-            if error is None:
-                if metadata and isinstance(metadata, dict):
-                    error = metadata.get("error_reason") or metadata.get("error")
-                if error is None:
-                    cursor = conn.execute("SELECT metadata FROM jobs WHERE job_id = ?", (job_id,))
-                    row = cursor.fetchone()
-                    if row and row[0]:
-                        try:
-                            meta_dict = json.loads(row[0])
-                            if isinstance(meta_dict, dict):
-                                error = meta_dict.get("error_reason") or meta_dict.get("error")
-                        except Exception:
-                            pass
-            if error is None and status == "partial_success":
-                error = "Some chunks or pages failed processing (e.g., API rate limits or crawling errors)."
-
+    def fail_job(self, job_id: str, error: str) -> None:
+        """Final failure: marks the job and its document failed and discards the pending upload, atomically."""
+        now = utcnow()
+        with self._engine.begin() as conn:
             conn.execute(
-                """
-                UPDATE jobs SET status = ?, progress_pct = 100, finished_at = ?, error = COALESCE(?, error)
-                WHERE job_id = ?
-            """,
-                (status, now, error, job_id),
+                update(jobs).where(jobs.c.job_id == job_id).values(status="failed", finished_at=now, error=error)
             )
-
             conn.execute(
-                """
-                UPDATE documents SET 
-                    status = ?,
-                    updated_at = ?,
-                    chunk_ids = ?,
-                    stats = ?,
-                    error = COALESCE(?, error)
-                WHERE doc_id = (SELECT doc_id FROM jobs WHERE job_id = ?)
-            """,
-                (
-                    status,
-                    now,
-                    json.dumps(chunk_ids),
-                    json.dumps(stats),
-                    error,
-                    job_id,
-                ),
+                update(documents)
+                .where(documents.c.doc_id == _doc_of_job(job_id))
+                .values(status="failed", error=error, updated_at=now)
             )
-
-            conn.commit()
+            delete_ingest_source(conn, job_id)
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
-        with self._get_conn() as conn:
-            cursor = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,))
-            row = cursor.fetchone()
-            return dict(row) if row else None
+        with self._engine.connect() as conn:
+            return row_to_dict(conn.execute(select(jobs).where(jobs.c.job_id == job_id)).first())
+
+    def get_ingest_source(self, job_id: str) -> Optional[Tuple[str, bytes]]:
+        """The uploaded (filename, bytes) waiting for this job, or None once committed or discarded."""
+        stmt = select(ingest_sources.c.filename, ingest_sources.c.content).where(ingest_sources.c.job_id == job_id)
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).first()
+        return (row.filename, bytes(row.content)) if row else None
+
+    def pending_upload_bytes(self, tenant_id: str) -> int:
+        """Bytes of uploads a tenant has queued but not yet processed."""
+        stmt = select(func.coalesce(func.sum(func.octet_length(ingest_sources.c.content)), 0)).where(
+            ingest_sources.c.tenant_id == tenant_id
+        )
+        with self._engine.connect() as conn:
+            return int(conn.execute(stmt).scalar_one())

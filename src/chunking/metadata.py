@@ -59,6 +59,7 @@ class ChunkMetadata(BaseModel):
     # Multi-tenancy
     visibility: str = Field("public", description="Public or private access")
     tenant_id: Optional[str] = Field(None, description="Tenant ID for private docs")
+    doc_id: Optional[str] = Field(None, description="Registry document this chunk belongs to")
 
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

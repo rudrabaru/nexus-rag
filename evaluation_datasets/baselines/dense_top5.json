@@ -1,0 +1,115 @@
+{
+  "dataset_used": "evaluation_datasets/benchmark.json",
+  "collection_used": "nexus_rag_collection",
+  "reproducibility_fingerprint": {
+    "dataset_path": "evaluation_datasets/benchmark.json",
+    "dataset_md5": "97737198fa770c8103771e095d047377",
+    "index_count": 2284,
+    "timestamp": "20260923_044657",
+    "configuration": {
+      "top_k": 5,
+      "use_hybrid": false,
+      "use_sparse": false,
+      "use_reranker": false,
+      "tenant_id": "ALL"
+    }
+  },
+  "total_queries": 38,
+  "overall_metrics": {
+    "recall_at_1": 0.9736842105263158,
+    "recall_at_3": 0.9736842105263158,
+    "recall_at_5": 1.0,
+    "mrr": 0.9802631578947368,
+    "avg_latency_ms": 1908.2362212632831,
+    "p50_latency_ms": 1834.0771198272705,
+    "p95_latency_ms": 2197.007417678833
+  },
+  "metrics_by_difficulty": {
+    "Easy": {
+      "total": 10,
+      "recall_at_1": 0.9,
+      "recall_at_3": 0.9,
+      "recall_at_5": 1.0,
+      "mrr": 0.925
+    },
+    "Medium": {
+      "total": 18,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0
+    },
+    "Hard": {
+      "total": 10,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0
+    }
+  },
+  "metrics_by_category": {
+    "technical_docs": {
+      "total": 10,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0
+    },
+    "networking": {
+      "total": 8,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0
+    },
+    "cloud_infra": {
+      "total": 5,
+      "recall_at_1": 0.8,
+      "recall_at_3": 0.8,
+      "recall_at_5": 1.0,
+      "mrr": 0.85
+    },
+    "api_docs": {
+      "total": 6,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0
+    },
+    "security": {
+      "total": 1,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0
+    },
+    "cryptocurrency": {
+      "total": 3,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0
+    },
+    "workflow": {
+      "total": 2,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0
+    },
+    "financial": {
+      "total": 1,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0
+    },
+    "literature": {
+      "total": 2,
+      "recall_at_1": 1.0,
+      "recall_at_3": 1.0,
+      "recall_at_5": 1.0,
+      "mrr": 1.0
+    }
+  }
+}

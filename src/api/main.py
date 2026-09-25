@@ -1,23 +1,22 @@
 import sys
 import asyncio
 import logging
-import os
-import uuid
 from pathlib import Path
 
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Depends, Query, HTTPException
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.responses import JSONResponse
 
+# override=False: variables already set in the real environment win over the file.
 env_path = Path(__file__).resolve().parent.parent.parent / '.env'
-load_dotenv(dotenv_path=env_path, override=True)
+load_dotenv(dotenv_path=env_path, override=False)
 
 from src.api.startup import lifespan
 from src.api.routes import query, ingest, documents, admin
-from src.api.dependencies import get_auth_store
-from src.registry.auth_store import AuthStore
+from src.config import get_settings
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
@@ -28,12 +27,12 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Nexus RAG API", lifespan=lifespan)
 
-# CORS
-allowed_origins = os.environ.get("ALLOWED_ORIGINS", "*").split(",")
+# CORS: no origins are allowed unless ALLOWED_ORIGINS lists them. Credentials are
+# never allowed cross-origin because authentication uses headers, not cookies.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=True,
+    allow_origins=get_settings().cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -53,9 +52,10 @@ app.include_router(
 )
 @app.get("/health")
 def health_check(request: Request):
-    # Liveness probe: returns immediately if server is up
+    # Liveness probe. A failed initialisation never recovers in-process, so it reports 503
+    # and the platform restarts or replaces the instance instead of routing traffic to it.
     if hasattr(request.app.state, "init_error"):
-        return {"status": "error", "message": request.app.state.init_error}
+        return JSONResponse(status_code=503, content={"status": "error", "message": request.app.state.init_error})
     return {"status": "ok"}
 
 
@@ -69,15 +69,6 @@ def ready_check(request: Request):
         generator = request.app.state.generator
         return {"status": "ready", "provider": generator.config.provider}
     raise HTTPException(status_code=503, detail="Models still loading")
-
-
-@app.post("/register")
-def register_tenant(
-    auth_store: AuthStore = Depends(get_auth_store)
-):
-    tenant_id = str(uuid.uuid4())
-    api_key = auth_store.create_api_key(tenant_id)
-    return {"api_key": api_key, "tenant_id": tenant_id}
 
 
 if __name__ == "__main__":

@@ -1,0 +1,24 @@
+# Force LF line endings in the repository AND on checkout, on every platform. Without
+# this, a Windows dev machine with core.autocrlf=true checks files out with CRLF while
+# Linux CI checks out the LF blob unchanged — same file, different bytes, different
+# hash. That silently broke the retrieval-regression baselines in evaluation_datasets/
+# baselines/, whose dataset_md5 is computed from the file's raw bytes: the baseline was
+# frozen from a CRLF working copy, so CI's LF checkout could never match it, regardless
+# of any real retrieval-quality change.
+* text=auto eol=lf
+
+*.json text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+*.sh text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.pptx binary
+*.docx binary
