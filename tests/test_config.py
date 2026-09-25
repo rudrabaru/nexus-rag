@@ -13,12 +13,17 @@ def test_complete_environment_has_no_missing_settings():
 
 
 def test_missing_settings_are_all_reported_at_once(monkeypatch):
-    for key in ("QDRANT_URL", "QDRANT_API_KEY", "JINA_API_KEY", "GEMINI_API_KEY"):
+    for key in ("DATABASE_URL", "JINA_API_KEY", "GEMINI_API_KEY"):
         monkeypatch.delenv(key)
     get_settings.cache_clear()
 
     missing = get_settings().missing_required()
-    assert {"QDRANT_URL", "QDRANT_API_KEY", "JINA_API_KEY", "GEMINI_API_KEY"} <= set(missing)
+    assert {"DATABASE_URL", "JINA_API_KEY", "GEMINI_API_KEY"} <= set(missing)
+
+
+def test_qdrant_is_no_longer_required_to_serve():
+    """Qdrant is read only by the one-off migration script."""
+    assert not any("QDRANT" in p for p in get_settings().missing_required())
 
 
 def test_provider_key_requirement_follows_llm_provider(monkeypatch):
@@ -28,22 +33,15 @@ def test_provider_key_requirement_follows_llm_provider(monkeypatch):
     assert "GEMINI_API_KEY" not in settings.missing_required()
 
 
-def test_short_signing_secret_is_rejected(monkeypatch):
-    settings = make_settings(monkeypatch, API_KEY_SIGNING_SECRET="short")
-    assert any(p.startswith("API_KEY_SIGNING_SECRET") for p in settings.missing_required())
-
-
-def test_legacy_rag_api_key_is_a_fallback_for_both_secrets(monkeypatch):
+def test_legacy_rag_api_key_is_a_fallback_for_the_admin_key(monkeypatch):
     monkeypatch.delenv("ADMIN_API_KEY")
-    monkeypatch.delenv("API_KEY_SIGNING_SECRET")
     settings = make_settings(monkeypatch, RAG_API_KEY="legacy-secret-0123456789")
 
     assert settings.effective_admin_key == "legacy-secret-0123456789"
-    assert settings.effective_signing_secret == "legacy-secret-0123456789"
     assert settings.missing_required() == []
 
 
-def test_new_secrets_take_precedence_over_legacy(monkeypatch):
+def test_admin_key_takes_precedence_over_legacy(monkeypatch):
     settings = make_settings(monkeypatch, RAG_API_KEY="legacy-secret-0123456789")
     assert settings.effective_admin_key != "legacy-secret-0123456789"
 

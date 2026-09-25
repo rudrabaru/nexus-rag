@@ -16,7 +16,7 @@ from src.generating.llm_client import LLMClient
 from src.generating.models import GenerationConfig
 
 
-def config(provider="gemini", model_name="primary-model", fallback=None, max_retries_field=None):
+def config(provider="gemini", model_name="primary-model", fallback=None):
     return GenerationConfig(provider=provider, model_name=model_name, fallback_config=fallback)
 
 
@@ -205,7 +205,60 @@ def test_cost_lookup_failure_does_not_break_generation(monkeypatch):
     assert client.last_cost_usd == 0.0
 
 
+def timeout_error(model="gemini/primary-model"):
+    return litellm.Timeout(message="request timed out", model=model, llm_provider="gemini")
+
+
+def test_every_call_carries_the_configured_timeout(monkeypatch):
+    """Regression: no timeout was passed, so litellm's 6000 s default applied and a hung
+    provider held a query slot for up to 100 minutes (observed live on Gemini)."""
+    seen = {}
+    monkeypatch.setattr("src.generating.llm_client.litellm.completion", lambda **kw: seen.update(kw) or response())
+    LLMClient(GenerationConfig(request_timeout_seconds=12.0)).call_llm("hi")
+    assert seen["timeout"] == 12.0
+
+
+def test_a_timeout_goes_straight_to_the_fallback_without_local_retries():
+    calls = []
+
+    def fake_completion(**kw):
+        calls.append(kw["model"])
+        if kw["model"] == "gemini/primary-model":
+            raise timeout_error()
+        return response(content="from fallback")
+
+    import src.generating.llm_client as mod
+    mod.litellm.completion = fake_completion
+    try:
+        client = LLMClient(config(fallback={"provider": "groq", "model_name": "fallback-model"}))
+        answer, *_ = client.call_llm("hi", max_retries=3)
+    finally:
+        mod.litellm.completion = litellm.completion
+
+    assert answer == "from fallback"
+    assert calls == ["gemini/primary-model", "groq/fallback-model"]
+
+
 # ── call_llm_stream: fail-before-first-token only ───────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_stream_timeout_before_first_token_falls_back_without_retries(monkeypatch):
+    calls = []
+
+    async def acompletion(**kw):
+        calls.append((kw["model"], kw["timeout"]))
+        if kw["model"] == "gemini/primary-model":
+            raise timeout_error()
+        return fake_stream([("fallback answer", usage())])
+
+    monkeypatch.setattr("src.generating.llm_client.litellm.acompletion", acompletion)
+    client = LLMClient(config(fallback={"provider": "groq", "model_name": "fallback-model"}))
+
+    text = "".join([c async for c in client.call_llm_stream("hi", max_retries=3)])
+
+    assert text == "fallback answer"
+    assert calls == [("gemini/primary-model", 60.0), ("groq/fallback-model", 60.0)]
 
 async def fake_stream(chunks):
     for delta, usage in chunks:

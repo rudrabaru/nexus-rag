@@ -12,8 +12,10 @@ Error handling is deliberately more precise than a single "is this a rate limit"
 check: a dead/misconfigured model (NotFoundError, BadRequestError, ...) is retried
 zero times locally before falling back, because retrying an identical request against
 a model that does not exist cannot succeed. A transient error (RateLimitError,
-InternalServerError, ServiceUnavailableError, Timeout, APIConnectionError) is retried
-with backoff first. An empty response body on a 200 (observed live: Gemini 3.5's
+InternalServerError, ServiceUnavailableError, APIConnectionError) is retried with backoff
+first. A Timeout (every call is bounded by GenerationConfig.request_timeout_seconds) falls
+back immediately: the call's time budget is already spent, and retrying a deployment that
+just hung multiplies the wait. An empty response body on a 200 (observed live: Gemini 3.5's
 "thinking" mode can consume the entire token budget on internal reasoning and return
 no visible text, surfacing as finish_reason="length" with content=None) is treated the
 same as a transient error rather than silently passed on as an answer.
@@ -36,9 +38,12 @@ _TRANSIENT_ERRORS = (
     litellm.RateLimitError,
     litellm.InternalServerError,
     litellm.ServiceUnavailableError,
-    litellm.Timeout,
     litellm.APIConnectionError,
 )
+# A timeout has already spent the call's whole time budget. Retrying the same deployment
+# would multiply the user's wait (3 retries x request_timeout_seconds) against a provider
+# that just hung, so a timeout goes straight to the fallback.
+_FAIL_OVER_NOW_ERRORS = (litellm.Timeout,)
 _NO_LOCAL_RETRY_ERRORS = (
     litellm.NotFoundError,
     litellm.BadRequestError,
@@ -98,6 +103,7 @@ class LLMClient:
             messages=[{"role": "user", "content": prompt}],
             temperature=self.config.temperature,
             max_tokens=self.config.max_output_tokens,
+            timeout=self.config.request_timeout_seconds,
             num_retries=0,  # we own retry/backoff below
         )
         if response_schema:
@@ -122,6 +128,10 @@ class LLMClient:
             except _NO_LOCAL_RETRY_ERRORS as e:
                 last_error = e
                 logger.warning(f"{model} rejected the request ({type(e).__name__}); not retrying locally: {e}")
+                break
+            except _FAIL_OVER_NOW_ERRORS as e:
+                last_error = e
+                logger.warning(f"{model} timed out after {self.config.request_timeout_seconds:.0f}s; not retrying locally.")
                 break
             except (*_TRANSIENT_ERRORS, EmptyResponseError) as e:
                 last_error = e
@@ -176,6 +186,7 @@ class LLMClient:
                     max_tokens=self.config.max_output_tokens,
                     stream=True,
                     stream_options={"include_usage": True},
+                    timeout=self.config.request_timeout_seconds,
                     num_retries=0,
                 )
                 async for chunk in response:
@@ -197,9 +208,10 @@ class LLMClient:
             except Exception as e:
                 last_error = e
                 is_transient = isinstance(e, (*_TRANSIENT_ERRORS, EmptyResponseError))
+                fail_over_now = isinstance(e, _FAIL_OVER_NOW_ERRORS)
 
-                if is_transient and not yielded_any:
-                    if attempt < max_retries:
+                if (is_transient or fail_over_now) and not yielded_any:
+                    if is_transient and attempt < max_retries:
                         sleep_time = (2**attempt) + random.uniform(0, 1)
                         logger.warning(
                             f"{model} transient error in stream ({type(e).__name__}: {e}). "

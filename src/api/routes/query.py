@@ -26,6 +26,21 @@ MISSING_KEY_MESSAGE = (
     "Please provide a valid API key (X-API-Key header) to query your private workspace. "
     "Ask your administrator for a key."
 )
+OVERLOAD_RETRY_AFTER_SECONDS = 5
+
+
+def _reject_when_at_capacity(query_semaphore) -> None:
+    """
+    Sheds load instead of queueing it. Overload is an HTTP 503 with Retry-After, not an
+    HTTP 200 whose answer text says the server is busy, so clients and load balancers can
+    tell an overload from an answer.
+    """
+    if query_semaphore is not None and query_semaphore.locked():
+        raise HTTPException(
+            status_code=503,
+            detail="Server is at capacity. Retry shortly.",
+            headers={"Retry-After": str(OVERLOAD_RETRY_AFTER_SECONDS)},
+        )
 
 @router.post("/query", response_model=QueryResponse)
 @limiter.limit("5/minute")
@@ -51,15 +66,12 @@ async def query_rag(
     if pipeline_logger:
         pipeline_logger.log_event("query_started", query_text=body.query, tenant_id=tenant_id)
 
+    query_semaphore = getattr(request.app.state, "query_semaphore", None)
+    _reject_when_at_capacity(query_semaphore)
+
     try:
-        query_semaphore = getattr(request.app.state, "query_semaphore", None)
         semaphore_acquired = False
         if query_semaphore:
-            if query_semaphore._value <= 0:
-                return QueryResponse(
-                    answer="⚠️ **High Traffic Alert:** Our servers are currently at maximum capacity. Please try your query again in a few moments.",
-                    sources=[], faithfulness_score=None, faithfulness_reasoning=None, latency_ms=0,
-                )
             await query_semaphore.acquire()
             semaphore_acquired = True
 
@@ -99,7 +111,8 @@ async def query_rag(
                     "retrieved_context": [{"chunk_id": c.chunk_id, "source_url": c.source_url, "similarity_score": c.similarity_score} for c in result.context_window.included_chunks],
                 }
                 try:
-                    log_id = metrics_store.log_query(
+                    log_id = await asyncio.to_thread(
+                        metrics_store.log_query,
                         tenant_id=tenant_id, query=body.query, latency_ms=result.total_latency_ms,
                         tokens_used=result.prompt_tokens + result.completion_tokens, faithfulness_score=None,
                         details=details, embedding_tokens=retrieval_result.embedding_tokens,
@@ -158,20 +171,12 @@ async def query_rag_stream(
     if pipeline_logger:
         pipeline_logger.log_event("query_started", query_text=body.query, tenant_id=tenant_id)
 
+    query_semaphore = getattr(request.app.state, "query_semaphore", None)
+    _reject_when_at_capacity(query_semaphore)
+
     try:
-        query_semaphore = getattr(request.app.state, "query_semaphore", None)
         semaphore_acquired = False
         if query_semaphore:
-            if query_semaphore._value <= 0:
-                error_msg = "⚠️ **High Traffic Alert:** Our servers are currently at maximum capacity. Please try your query again in a few moments."
-                payload = json.dumps({'type': 'token', 'content': error_msg})
-                
-                async def error_stream():
-                    yield f"data: {payload}\n\n"
-                    yield f"data: {json.dumps({'type': 'done'})}\n\n"
-                
-                return StreamingResponse(error_stream(), media_type="text/event-stream")
-                
             await query_semaphore.acquire()
             semaphore_acquired = True
             
@@ -250,7 +255,8 @@ async def query_rag_stream(
                             "retrieved_context": [{"chunk_id": c.chunk_id, "source_url": c.source_url, "similarity_score": c.similarity_score} for c in temp_result.context_window.included_chunks],
                         }
                         try:
-                            log_id = metrics_store.log_query(
+                            log_id = await asyncio.to_thread(
+                                metrics_store.log_query,
                                 tenant_id=tenant_id, query=body.query,
                                 latency_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - query_start_time) * 1000,
                                 tokens_used=prompt_tokens + completion_tokens, faithfulness_score=None,
@@ -270,7 +276,10 @@ async def query_rag_stream(
                                 
                             if log_id and metrics_store:
                                 try:
-                                    metrics_store.update_faithfulness(log_id, eval_res.faithfulness_score, eval_res.faithfulness_reasoning)
+                                    await asyncio.to_thread(
+                                        metrics_store.update_faithfulness,
+                                        log_id, eval_res.faithfulness_score, eval_res.faithfulness_reasoning,
+                                    )
                                 except Exception as e:
                                     logger.error(f"Failed to update faithfulness score: {e}")
                                         
@@ -299,18 +308,13 @@ async def query_rag_stream(
 async def get_logs(request: Request, tenant_id: Optional[str] = Depends(get_current_tenant)):
     if not tenant_id:
         raise HTTPException(status_code=401, detail="Authentication required")
-        
-    registry = getattr(request.app.state, "registry", None)
-    if not registry:
+
+    metrics_store = getattr(request.app.state, "metrics_store", None)
+    if not metrics_store:
         return {"queries": [], "summary": {}}
-        
-    def _fetch_logs():
-        with registry._get_conn() as conn:
-            cursor = conn.execute("SELECT * FROM observability_logs WHERE tenant_id = ? ORDER BY log_id DESC LIMIT 100", (tenant_id,))
-            return [dict(row) for row in cursor.fetchall()]
-    
-    logs = await asyncio.to_thread(_fetch_logs)
-            
+
+    logs = await asyncio.to_thread(metrics_store.recent_queries, tenant_id)
+
     total_queries = len(logs)
     total_cost = sum(log.get("total_cost_usd") or 0.0 for log in logs)
     total_latency = sum(log.get("latency_ms") or 0.0 for log in logs)
