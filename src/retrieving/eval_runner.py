@@ -1,11 +1,14 @@
+import asyncio
+import hashlib
 import json
 import logging
 import random
 from pathlib import Path
 from collections import defaultdict
 
-from src.retrieving.vector_store import QdrantManager
-from src.retrieving.retriever import DenseRetriever, OptionalReranker, HybridRetriever
+from src.registry.engine import dispose_engines, get_async_engine, get_sync_engine
+from src.retrieving.chunk_store import ChunkStore
+from src.retrieving.retriever import DenseRetriever, OptionalReranker, HybridRetriever, SparseRetriever
 from src.retrieving.evaluation import Evaluator
 from src.retrieving.evaluation_models import EvaluationQuery
 from datetime import datetime, timezone
@@ -141,9 +144,16 @@ def generate_review_set(report, eval_dir: Path):
         json.dump(review_set, f, indent=2)
 
 
+async def _evaluate_then_close(evaluator: Evaluator, queries, top_k: int):
+    """Runs the whole evaluation in one event loop, then closes the pooled connections bound to it."""
+    try:
+        return await evaluator.evaluate(queries, top_k=top_k)
+    finally:
+        await dispose_engines()
+
+
 def run_evaluation_pipeline(
     dataset_path: str,
-    collection_name: str,
     top_k: int,
     output_dir_base: str,
     use_reranker: bool,
@@ -151,27 +161,15 @@ def run_evaluation_pipeline(
     use_sparse: bool = False,
     tenant_id: str = None,
 ):
-    distance_metric = "cosine"
-
-    db_manager = QdrantManager(
-        distance_metric=distance_metric
-    )
-
-    logger.info("Connected to QdrantManager")
-
-    dense_retriever = DenseRetriever(vector_store=db_manager)
+    chunk_store = ChunkStore(get_sync_engine(), get_async_engine())
+    dense_retriever = DenseRetriever(chunk_store)
 
     if use_sparse:
-        from src.retrieving.sparse import SparseRetriever
-        retriever = SparseRetriever()
-        logger.info("Using Sparse Search (SQLite FTS5) only for evaluation.")
+        retriever = SparseRetriever(chunk_store)
+        logger.info("Using Sparse Search (Postgres full-text) only for evaluation.")
     elif use_hybrid:
-        from src.registry.database import DocumentRegistry
-        registry = DocumentRegistry()
-        retriever = HybridRetriever(
-            dense_retriever=dense_retriever, registry=registry
-        )
-        logger.info("Using Hybrid Search (Dense + SQLite FTS5) for evaluation.")
+        retriever = HybridRetriever(dense_retriever, SparseRetriever(chunk_store))
+        logger.info("Using Hybrid Search (pgvector + Postgres full-text, RRF) for evaluation.")
     else:
         retriever = dense_retriever
         logger.info("Using Dense Search only for evaluation.")
@@ -194,16 +192,12 @@ def run_evaluation_pipeline(
     integrity_ok = validate_dataset_integrity(queries, eval_dir)
     logger.info(f"Dataset integrity validation passed: {integrity_ok}")
 
-    report = evaluator.evaluate(queries, top_k=top_k)
+    # Measured before the run so the fingerprint describes the index the queries ran against.
+    index_count = chunk_store.get_collection_size()
+    report = asyncio.run(_evaluate_then_close(evaluator, queries, top_k))
 
-    import hashlib
     with open(dataset_path_obj, "rb") as f:
         dataset_hash = hashlib.md5(f.read()).hexdigest()
-
-    try:
-        index_count = db_manager.get_collection_size()
-    except Exception:
-        index_count = "Unknown"
 
     report.reproducibility_fingerprint = {
         "dataset_path": str(dataset_path),
@@ -224,7 +218,7 @@ def run_evaluation_pipeline(
 
     eval_output = {
         "dataset_used": dataset_path,
-        "collection_used": collection_name,
+        "index_used": "postgres:chunks",
         "reproducibility_fingerprint": report.reproducibility_fingerprint,
         "total_queries": report.total_queries,
         "overall_metrics": {
@@ -283,19 +277,17 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Run RAG Retrieval Benchmarking Pipeline")
     parser.add_argument("--dataset", type=str, required=True, help="Path to golden dataset JSON file")
-    parser.add_argument("--collection", type=str, default="nexus_rag_collection", help="Qdrant collection name")
     parser.add_argument("--top-k", type=int, default=5, help="Number of documents to retrieve")
     parser.add_argument("--output-dir", type=str, default="retrieval/v1", help="Base output directory")
     parser.add_argument("--use-reranker", action="store_true", help="Enable Cross-Encoder reranking")
     parser.add_argument("--use-hybrid", action="store_true", help="Enable Hybrid RRF search")
-    parser.add_argument("--use-sparse", action="store_true", help="Enable Sparse FTS5 search only")
+    parser.add_argument("--use-sparse", action="store_true", help="Enable sparse full-text search only")
     parser.add_argument("--tenant-id", type=str, default=None, help="Optional tenant ID to isolate search")
 
     args = parser.parse_args()
 
     run_evaluation_pipeline(
         dataset_path=args.dataset,
-        collection_name=args.collection,
         top_k=args.top_k,
         output_dir_base=args.output_dir,
         use_reranker=args.use_reranker,

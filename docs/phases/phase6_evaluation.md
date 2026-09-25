@@ -63,5 +63,17 @@ python -m src.retrieving.baseline_check evaluation_datasets/baselines/dense_top5
 The check exits 1 on any metric drop and 2 when the runs are not comparable (different dataset, query count, configuration or index size). Rationale for the zero-drop default: retrieval over a fixed index is deterministic, and one changed query moves Recall@k by 0.026 on this benchmark. It is a stop-gap until per-query results are stored and significance tests replace it.
 
 **Caveats.**
-- `hybrid_top5.json` is valid only on the machine whose local SQLite full-text index produced it. That index held 1,162 rows against 2,284 points in the vector store, so hybrid search covered about half the corpus. The 38 benchmark queries did not expose it. CI uses the dense baseline because it needs no local state.
+
+- **Postgres migration (2026-09-23).** The migration copied the same 2,284 vectors instead of re-embedding them, and the comparator requires an identical index size, so the pre-migration baselines stay comparable. Vectors are stored as `halfvec` (float16). The migration measured a worst-case cosine of 0.99999998 between stored and original vectors over 25 samples, and 25/25 samples retrieved themselves.
+
+  | Top-5, 38 queries | Recall@1 | Recall@3 | Recall@5 | MRR |
+  |---|---|---|---|---|
+  | Dense, Qdrant (frozen baseline) | 0.9737 | 0.9737 | 1.0000 | 0.9803 |
+  | Dense, pgvector `halfvec` | 0.9737 | 0.9737 | 1.0000 | 0.9803 |
+  | Hybrid, Qdrant + half-sized FTS5, broken fusion | 0.9737 | 0.9737 | 0.9737 | 0.9737 |
+  | Hybrid, pgvector + Postgres full-text, fixed fusion | 0.9737 | 0.9737 | 0.9737 | 0.9737 |
+
+  `hybrid_top5.json` was re-frozen from the corrected run. The old one measured two defects: a keyword index covering about half the corpus (1,162 rows against 2,284 vectors), and RRF that never fused a chunk found by both retrievers (Phase 5). Both gates now run in CI (manual trigger), because the keyword index no longer lives on one machine's disk.
+- **The benchmark cannot see those defects.** Identical hybrid numbers do not mean the fixes changed nothing. Replaying the old fusion on the same 38 queries: dense and sparse top-5 shared a chunk in 27 queries, the old fusion spent 27 of 190 top-5 slots (14.2%) on duplicates, and 10 queries get a different top-1 chunk after the fix. Recall is unchanged because the benchmark scores by acceptable document and heading, not by chunk, and it is near its ceiling (0.97–1.00). It needs chunk-level relevance and harder queries to discriminate retrieval changes; that is the job of synthetic test sets (item 11).
+- The evaluation run executes every query inside one event loop. It used to call `asyncio.run()` per query, which is incompatible with pooled async database connections because they are bound to the loop that opened them.
 - The reranking trade-off cited in the ablation study comes from the 38-query runs in `retrieval/v1/`: hybrid + reranker gives Recall@1 0.816 against 0.974 without it, but Recall@5 1.000 against 0.974. Reranking trades top-1 precision for top-5 coverage. The runs in `retrieval/v1_dense`, `v1_hybrid` and `v1_rerank` used a 6-query sample and are too small to support conclusions.

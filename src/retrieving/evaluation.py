@@ -19,9 +19,13 @@ class Evaluator:
         self.reranker = reranker
         self.tenant_id = tenant_id
 
-    def evaluate(
+    async def evaluate(
         self, queries: List[EvaluationQuery], top_k: int = 5
     ) -> EvaluationReport:
+        """
+        Runs queries one at a time inside the caller's event loop. Sequential on purpose: the
+        report records per-query latency percentiles, which concurrent queries would distort.
+        """
         results = []
         latencies = []
         reranker_failures = []
@@ -30,15 +34,13 @@ class Evaluator:
         hits_at_5 = 0
         rr_sum = 0.0
 
-        import asyncio
-
         for q in queries:
             pre_rank = -1
             pre_exact_rank = -1
             dense_result = None
             pre_order = []
             if self.reranker:
-                dense_result = asyncio.run(self.retriever.retrieve(q.query, top_k=top_k * 4, tenant_id=self.tenant_id, allow_global=True))
+                dense_result = await self.retriever.retrieve(q.query, top_k=top_k * 4, tenant_id=self.tenant_id, allow_global=True)
                 pre_order = [
                     {"chunk_id": c.chunk_id, "source": c.source_document, "score": c.similarity_score}
                     for c in dense_result.chunks[:top_k]
@@ -46,12 +48,12 @@ class Evaluator:
                 for idx, c in enumerate(dense_result.chunks):
                     _, _, pre_rank, pre_exact_rank, _ = evaluate_chunk(c, q, idx, pre_rank, pre_exact_rank)
 
-                result = asyncio.run(self.reranker.rerank(q.query, dense_result.chunks, top_k=top_k))
+                result = await self.reranker.rerank(q.query, dense_result.chunks, top_k=top_k)
                 result.embedding_latency_ms = dense_result.embedding_latency_ms
                 result.search_latency_ms = dense_result.search_latency_ms
                 result.latency_ms += dense_result.latency_ms
             else:
-                result = asyncio.run(self.retriever.retrieve(q.query, top_k=top_k, tenant_id=self.tenant_id, allow_global=True))
+                result = await self.retriever.retrieve(q.query, top_k=top_k, tenant_id=self.tenant_id, allow_global=True)
             latencies.append(result.latency_ms)
 
             chunk_infos = []

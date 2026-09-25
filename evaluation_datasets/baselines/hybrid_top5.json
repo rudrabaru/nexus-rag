@@ -1,11 +1,11 @@
 {
   "dataset_used": "evaluation_datasets/benchmark.json",
-  "collection_used": "nexus_rag_collection",
+  "index_used": "postgres:chunks",
   "reproducibility_fingerprint": {
     "dataset_path": "evaluation_datasets/benchmark.json",
     "dataset_md5": "97737198fa770c8103771e095d047377",
     "index_count": 2284,
-    "timestamp": "20260923_044814",
+    "timestamp": "20260923_112224",
     "configuration": {
       "top_k": 5,
       "use_hybrid": true,
@@ -20,9 +20,9 @@
     "recall_at_3": 0.9736842105263158,
     "recall_at_5": 0.9736842105263158,
     "mrr": 0.9736842105263158,
-    "avg_latency_ms": 1903.864578196877,
-    "p50_latency_ms": 1838.9503955841064,
-    "p95_latency_ms": 2228.085994720459
+    "avg_latency_ms": 1798.2706584428486,
+    "p50_latency_ms": 1747.6153373718262,
+    "p95_latency_ms": 1971.4181423187256
   },
   "metrics_by_difficulty": {
     "Easy": {

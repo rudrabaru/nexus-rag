@@ -1,11 +1,13 @@
-import logging
-from fastapi import APIRouter, Request, HTTPException, Depends
-from pydantic import BaseModel
-from typing import List, Optional
 import asyncio
-from src.registry.database import DocumentRegistry
-from src.api.dependencies import get_registry, get_retriever
+import logging
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+
 from src.api.auth import get_current_tenant_from_admin_or_user
+from src.api.dependencies import get_registry
+from src.registry.database import DocumentRegistry
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -27,37 +29,28 @@ class WorkspaceStatsResponse(BaseModel):
     total_chunks: int
     total_tokens: int
 
+
 @router.get("/stats", response_model=WorkspaceStatsResponse)
 async def get_workspace_stats(
-    request: Request,
     registry: DocumentRegistry = Depends(get_registry),
     tenant_id: Optional[str] = Depends(get_current_tenant_from_admin_or_user),
 ):
     """Get aggregated workspace stats for the tenant."""
-    docs = registry.list_documents(tenant_id=tenant_id)
-    total_chunks = 0
-    total_tokens = 0
-    
-    for d in docs:
-        total_chunks += len(d.get("chunk_ids", []))
-        stats = d.get("stats", {}) or {}
-        total_tokens += stats.get("total_tokens", 0)
-
+    docs = await asyncio.to_thread(registry.list_documents, tenant_id)
     return WorkspaceStatsResponse(
         documents_count=len(docs),
-        total_chunks=total_chunks,
-        total_tokens=total_tokens
+        total_chunks=sum(d["chunk_count"] for d in docs),
+        total_tokens=sum((d.get("stats") or {}).get("total_tokens", 0) for d in docs),
     )
+
 
 @router.get("", response_model=List[DocumentResponse])
 async def list_documents(
-    request: Request,
     registry: DocumentRegistry = Depends(get_registry),
     tenant_id: Optional[str] = Depends(get_current_tenant_from_admin_or_user),
 ):
     """List documents for the current tenant."""
-    docs = registry.list_documents(tenant_id=tenant_id)
-
+    docs = await asyncio.to_thread(registry.list_documents, tenant_id)
     return [
         DocumentResponse(
             id=d["doc_id"],
@@ -65,9 +58,9 @@ async def list_documents(
             title=d["source"].split("/")[-1] if "/" in d["source"] else d["source"],
             status=d["status"],
             created_at=d["ingested_at"],
-            chunks=len(d["chunk_ids"]),
+            chunks=d["chunk_count"],
             error=d.get("error"),
-            stats=d.get("stats", {}) or {},
+            stats=d.get("stats") or {},
         )
         for d in docs
     ]
@@ -76,39 +69,21 @@ async def list_documents(
 @router.delete("/{doc_id}")
 async def delete_document(
     doc_id: str,
-    request: Request,
     registry: DocumentRegistry = Depends(get_registry),
-    retriever = Depends(get_retriever),
     tenant_id: Optional[str] = Depends(get_current_tenant_from_admin_or_user),
 ):
-    """
-    Deletes a document from:
-    1. Vector store
-    2. Document Registry
-    """
+    """Deletes a document. Its chunks, vectors and sparse index entries go with it in one transaction."""
     is_admin = tenant_id is None
-    
-    doc = registry.get_document(doc_id)
+
+    doc = await asyncio.to_thread(registry.get_document, doc_id)
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
     if not is_admin and doc.get("tenant_id") != tenant_id:
         raise HTTPException(status_code=403, detail="You do not own this document.")
 
-    try:
-        chunk_ids = doc.get("chunk_ids", [])
-        if chunk_ids:
-            db_manager = getattr(retriever, "vector_store", getattr(getattr(retriever, "dense_retriever", None), "vector_store", None))
-            if db_manager:
-                await asyncio.to_thread(db_manager.delete_chunks, chunk_ids=chunk_ids)
-
-        # Delete from Registry
-        registry.delete_document(doc_id)
-
-        return {
-            "status": "success",
-            "message": f"Deleted document {doc_id} and all related chunks.",
-        }
-    except Exception as e:
-        logger.error(f"Failed to delete document {doc_id}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    await asyncio.to_thread(registry.delete_document, doc_id)
+    return {
+        "status": "success",
+        "message": f"Deleted document {doc_id} and all related chunks.",
+    }

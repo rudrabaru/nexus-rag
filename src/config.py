@@ -6,8 +6,6 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
-MIN_SIGNING_SECRET_LENGTH = 16
-
 
 class Settings(BaseSettings):
     """
@@ -22,9 +20,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(extra="ignore", case_sensitive=False)
 
     admin_api_key: str = ""
-    api_key_signing_secret: str = ""
-    rag_api_key: str = ""  # legacy fallback for both secrets above
+    rag_api_key: str = ""  # legacy fallback for admin_api_key
 
+    # Postgres (Neon) is the system of record: chunks, vectors, sparse index, documents,
+    # jobs, keys and metrics. Use the direct (non-pooler) endpoint; see src/registry/engine.py.
+    database_url: str = ""
+    db_pool_size: int = 5
+
+    # Read only by `python -m scripts.migrate_legacy`, which copies the legacy collection.
     qdrant_url: str = ""
     qdrant_api_key: str = ""
     qdrant_collection_name: str = "nexus_rag_collection"
@@ -40,8 +43,10 @@ class Settings(BaseSettings):
 
     enable_reranker: bool = True
     enable_query_generalisation: bool = False
-    ingestion_concurrency: int = 3
     query_concurrency: int = 4
+    # How many ingestion jobs one worker process runs at once (Procrastinate Worker
+    # concurrency). Read only by the worker (src/jobs/worker.py); the API never runs jobs.
+    worker_concurrency: int = 2
 
     allowed_origins: str = ""
     trust_proxies: bool = False
@@ -49,10 +54,6 @@ class Settings(BaseSettings):
     @property
     def effective_admin_key(self) -> str:
         return self.admin_api_key or self.rag_api_key
-
-    @property
-    def effective_signing_secret(self) -> str:
-        return self.api_key_signing_secret or self.rag_api_key
 
     @property
     def cors_origins(self) -> List[str]:
@@ -63,12 +64,8 @@ class Settings(BaseSettings):
         problems = []
         if not self.effective_admin_key:
             problems.append("ADMIN_API_KEY")
-        if len(self.effective_signing_secret) < MIN_SIGNING_SECRET_LENGTH:
-            problems.append(f"API_KEY_SIGNING_SECRET (min {MIN_SIGNING_SECRET_LENGTH} chars)")
-        if not self.qdrant_url:
-            problems.append("QDRANT_URL")
-        if not self.qdrant_api_key:
-            problems.append("QDRANT_API_KEY")
+        if not self.database_url:
+            problems.append("DATABASE_URL")
         if not self.jina_api_key:
             problems.append("JINA_API_KEY")
 
@@ -80,13 +77,8 @@ class Settings(BaseSettings):
         return problems
 
     def warn_on_legacy_secrets(self) -> None:
-        if self.rag_api_key and not (self.admin_api_key and self.api_key_signing_secret):
-            logger.warning(
-                "RAG_API_KEY is being used as both the admin key and the signing secret. "
-                "Set ADMIN_API_KEY and API_KEY_SIGNING_SECRET separately."
-            )
-        if self.effective_admin_key and self.effective_admin_key == self.effective_signing_secret:
-            logger.warning("The admin key and the signing secret are identical; rotating one rotates both.")
+        if self.rag_api_key and not self.admin_api_key:
+            logger.warning("RAG_API_KEY is deprecated; set ADMIN_API_KEY instead.")
 
 
 @lru_cache

@@ -1,0 +1,10 @@
+# Shared by the API and the worker: configuration, storage (Postgres + pgvector) and the job queue.
+pydantic>=2.5,<3.0
+pydantic-settings>=2.14.1,<3.0  # litellm 1.102.0 requires >=2.14.1
+python-dotenv>=1.0.1,<2.0  # markitdown (via magika) requires >=1.0.1
+sqlalchemy[asyncio]>=2.0.36,<2.1
+psycopg[binary,pool]>=3.2
+pgvector>=0.4
+alembic>=1.14
+procrastinate==3.9.0  # pinned: migrations/sql/procrastinate_3.9.0.sql is this version's schema
+httpx>=0.27.0
