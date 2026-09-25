@@ -1,3 +1,4 @@
+import asyncio
 import secrets
 from typing import Optional
 
@@ -28,6 +29,9 @@ def get_rate_limit_key(request: Request) -> str:
     """
     Authenticated callers are limited per tenant when their API key validates.
     Anonymous or invalid callers fall back to the client IP bucket.
+
+    slowapi calls this synchronously on the event loop. The auth dependencies below run
+    first and validate the same key in a worker thread, so this lookup is a cache hit.
     """
     api_key = request.headers.get("x-api-key")
     app = request.scope.get("app")
@@ -69,7 +73,7 @@ async def get_current_tenant(
     if not api_key:
         return None
 
-    tenant_id = auth_store.validate_api_key(api_key)
+    tenant_id = await asyncio.to_thread(auth_store.validate_api_key, api_key)
     if not tenant_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -89,7 +93,7 @@ async def get_current_tenant_from_admin_or_user(
     if _is_admin_key(admin_key):
         return None
     if api_key:
-        tenant_id = auth_store.validate_api_key(api_key)
+        tenant_id = await asyncio.to_thread(auth_store.validate_api_key, api_key)
         if tenant_id:
             request.state.tenant_id = tenant_id
             return tenant_id
