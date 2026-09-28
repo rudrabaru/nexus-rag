@@ -1,18 +1,33 @@
-# The worker: fetches, parses, chunks and embeds documents (src/jobs/tasks.py). It never
-# serves HTTP traffic — it only claims jobs from the ingest queue. Deliberately a separate
-# image from the API: this is the only place document-parsing dependencies are installed
-# (requirements-worker.txt), and the one that grows heavy when Docling replaces MarkItDown.
+# The parse worker: parses, chunks and embeds documents (src/jobs/tasks.py). It never serves
+# HTTP traffic and never contacts a website: it only claims jobs from the ingest queue and reads
+# their sources from Postgres. Deliberately a separate image from the API: this is the only place
+# document-parsing dependencies (Docling, torch, PyMuPDF) are installed.
 FROM python:3.11-slim
 
 WORKDIR /app
 
+# libgl1 / libglib2.0-0 / libxcb1: shared libraries OpenCV (used by Docling's layout and OCR
+# models) loads at runtime and the slim base image lacks ("libxcb.so.1: cannot open").
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
+    libgl1 \
+    libglib2.0-0 \
+    libxcb1 \
     && rm -rf /var/lib/apt/lists/*
+
+# CPU-only torch first, so Docling's dependency resolves to it instead of the multi-gigabyte
+# CUDA build. The free hosts this runs on (a Hugging Face CPU Space) have no GPU.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch torchvision
 
 COPY requirements-base.txt requirements-worker.txt ./
 RUN pip install --no-cache-dir -r requirements-worker.txt
+
+# Bake Docling's models (layout, table structure, OCR) into the image with one warm-up
+# conversion, so a cold start does not download ~0.5 GB before its first document.
+RUN python -c "import pymupdf; d = pymupdf.open(); d.new_page().insert_text((72, 72), 'warm-up'); d.save('/tmp/w.pdf')" \
+    && python -c "from docling.document_converter import DocumentConverter; DocumentConverter().convert('/tmp/w.pdf')" \
+    && rm /tmp/w.pdf
 
 # alembic.ini and migrations/ are included: the worker verifies the schema revision at
 # startup, same as the API (src/registry/schema_version.py).
@@ -23,8 +38,9 @@ ENV PYTHONIOENCODING=utf-8
 # sys.path, so --app=src.jobs.worker.app would not be importable without this.
 ENV PYTHONPATH=/app
 
-# Shell form (with exec, so procrastinate is PID 1 and receives SIGTERM for graceful shutdown) so ${WORKER_CONCURRENCY} expands: WORKER_CONCURRENCY is our own validated setting
-# (src/config.py), kept as the single name for it rather than also relying on Procrastinate's
-# separate PROCRASTINATE_WORKER_CONCURRENCY variable. -w/--no-wait is intentionally absent:
-# the worker runs forever, listening for new jobs.
+# Shell form (with exec, so procrastinate is PID 1 and receives SIGTERM for graceful shutdown) so
+# ${WORKER_CONCURRENCY} expands: WORKER_CONCURRENCY is our own validated setting (src/config.py).
+# Docling itself runs one document at a time per process (src/parsing/files.py) whatever the
+# concurrency, so peak memory stays at one document's (~3.4 GB measured). -w/--no-wait is
+# intentionally absent: the worker runs forever, listening for new jobs.
 CMD exec procrastinate --app=src.jobs.worker.app worker --queues=ingest --concurrency=${WORKER_CONCURRENCY:-2}

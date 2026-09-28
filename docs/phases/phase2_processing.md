@@ -22,6 +22,8 @@ Each block is normalized and cryptographically hashed for deduplication:
 
 The system tracks how often each unique block appears across the ingested corpus. Blocks that appear repeatedly across a large proportion of documents are flagged as likely boilerplate.
 
+**PDF page furniture.** Running page headers and footers of uploaded PDFs are removed before this stage: Docling's layout model labels them as page furniture, and they are excluded from its Markdown export. The plain-text fallback (PDFs over the Docling page cap, or that Docling fails on) keeps them. An earlier filter meant to catch them here (short blocks repeated 3+ times within one PDF) never took effect: it flagged blocks that the cleaner then re-scored and kept, and it only inflated the "blocks removed" audit count. It was deleted (2026-09-28) rather than switched on, because switching it on would remove content with no measurement behind it; that needs a before/after comparison on fallback PDFs first.
+
 ### Block Metrics & Removal Thresholds
 Every block is evaluated using measurable signals:
 - **Link Density**: The ratio of link characters to total text characters.
@@ -33,6 +35,9 @@ A block is removed if it passes an objective, data-driven threshold:
 - High document frequency combined with low word count strongly indicates repetitive boilerplate (e.g., copyright notices or site-wide banners).
 
 > **Corpus-Independence Rule:** No specific text, heading title, or keyword (e.g., "Related Links") is ever hardcoded as a removal trigger. Removal is always driven by statistical evidence from the corpus itself.
+
+### Inspecting What Was Removed
+Every document logs its word count before and after cleaning and how many blocks were removed (`CLEAN | <url> | words 1200 -> 1105 | blocks removed 4/61`). At DEBUG level each removed block is logged with the signals that removed it and its first 80 characters, so a removal can always be traced to measured evidence. When cleaning leaves under 50 characters, the raw Markdown is chunked instead: that outcome is treated as a cleaner failure, not as an empty document.
 
 ### Content Preservation Philosophy
 The overarching principle is: **when in doubt, preserve**. A small amount of noise retained is far less costly than accidentally removing genuine content. The thresholds above are intentionally conservative and biased toward false negatives (keeping unimportant text) rather than false positives (removing important text).

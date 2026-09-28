@@ -24,7 +24,6 @@ async def ingest_document(
     url: Optional[str] = Form(None),
     file: UploadFile = File(None),
     tenant_id: Optional[str] = Depends(get_current_tenant),
-    extract_visuals: bool = Form(False),
     resume: bool = Form(False),
     registry: DocumentRegistry = Depends(get_registry),
     job_queue: procrastinate.App = Depends(get_job_queue),
@@ -36,7 +35,7 @@ async def ingest_document(
             detail="Authentication required. Please provide a valid API key via the X-API-Key header to upload documents.",
         )
 
-    response = await prepare_and_queue_ingestion(job_queue, registry, tenant_id, url, file, extract_visuals, resume)
+    response = await prepare_and_queue_ingestion(job_queue, registry, tenant_id, url, file, resume)
 
     if pipeline_logger:
         pipeline_logger.log_event(

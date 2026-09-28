@@ -9,13 +9,22 @@ from typing import Optional
 from pydantic import BaseModel, model_validator
 
 TASK_NAMESPACE = "nexus"
+
+# Parse, chunk and embed: the heavy worker (Dockerfile.worker). It never contacts a website.
 INGEST_TASK_NAME = "ingest_document"
 INGEST_TASK = f"{TASK_NAMESPACE}:{INGEST_TASK_NAME}"
 INGEST_QUEUE = "ingest"
 
-# Sweeps for ingestion jobs orphaned by a dead worker (src/jobs/recovery.py). Procrastinate cron
-# has one-minute granularity, so this is its finest setting.
+# Fetch web pages through reader APIs: the slim fetch worker (Dockerfile.api image). A URL
+# ingestion runs fetch first, which then defers the ingest task.
+FETCH_TASK_NAME = "fetch_source"
+FETCH_TASK = f"{TASK_NAMESPACE}:{FETCH_TASK_NAME}"
+FETCH_QUEUE = "fetch"
+
+# Each worker sweeps its own queue for jobs orphaned by a dead worker (src/jobs/recovery.py).
+# Procrastinate cron has one-minute granularity, so this is its finest setting.
 RECOVERY_TASK_NAME = "recover_stalled_ingestions"
+FETCH_RECOVERY_TASK_NAME = "recover_stalled_fetches"
 RECOVERY_CRON = "* * * * *"
 
 # An ingestion runs at most 1 + MAX_RETRIES times: transient failures (network, database,
@@ -25,7 +34,7 @@ MAX_RETRIES = 2
 
 
 class IngestionRequest(BaseModel):
-    """What the worker needs to run one ingestion. Uploaded bytes wait in ingest_sources."""
+    """What the workers need to run one ingestion. Uploaded bytes wait in ingest_sources, fetched pages in fetched_pages."""
 
     job_id: str
     doc_id: str
@@ -33,7 +42,6 @@ class IngestionRequest(BaseModel):
     url: Optional[str] = None
     filename: Optional[str] = None
     content_hash: Optional[str] = None  # uploads are hashed by the API before queueing
-    extract_visuals: bool = False
     resume: bool = False
 
     @model_validator(mode="after")

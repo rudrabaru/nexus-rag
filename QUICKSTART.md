@@ -16,7 +16,8 @@ GEMINI_API_KEY=your_gemini_api_key_here
 # Optional: GROQ_API_KEY=your_groq_api_key_here
 ADMIN_API_KEY=your_admin_api_key_here
 DATABASE_URL=postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?sslmode=require
-JINA_API_KEY=your_jina_api_key
+VOYAGE_API_KEY=pa-...     # embeddings
+JINA_API_KEY=your_jina_api_key       # reranker (optional)
 ```
 See `.env.example` for every variable.
 
@@ -25,17 +26,18 @@ Create the schema (once per database, and again after pulling new migrations):
 alembic upgrade head
 ```
 
-## 3. Quick Run (Docker: API + worker)
-Ingestion runs as two processes: the API (validates requests, serves queries) and a worker (fetches, parses, chunks and embeds documents). They are two separate images so the API stays free of document-parsing dependencies. Both need the same `.env`.
+## 3. Quick Run (Docker: API + two workers)
+Ingestion runs as three processes: the API (validates requests, serves queries), the fetch worker (reads web pages through reader APIs; same slim image as the API) and the parse worker (parses, chunks and embeds; its own heavy image with Docling). All need the same `.env`.
 ```bash
 docker build -f Dockerfile.api -t nexus-rag-api .
 docker build -f Dockerfile.worker -t nexus-rag-worker .
 docker run --env-file .env nexus-rag-api alembic upgrade head   # release step: migrate first
 
 docker run --env-file .env -p 8000:8000 nexus-rag-api
-docker run --env-file .env nexus-rag-worker   # in a second terminal
+docker run --env-file .env nexus-rag-worker                     # second terminal
+docker run --env-file .env nexus-rag-api procrastinate --app=src.jobs.fetch_worker.app worker --queues=fetch --concurrency=1   # third terminal
 ```
-The images deliberately contain no `.env`, so pass it at run time. Docker's `--env-file` keeps quotes literally, so write values unquoted. Uploading a document without a running worker leaves its job at `status: "queued"` indefinitely — start the worker before testing ingestion.
+The images deliberately contain no `.env`, so pass it at run time. Docker's `--env-file` keeps quotes literally, so write values unquoted. Without the parse worker every job stays at `status: "queued"`; without the fetch worker, URL jobs do.
 
 Issue a workspace key (there is no open sign-up):
 ```bash
@@ -68,14 +70,16 @@ uvicorn src.api.main:app --reload --port 8000
 ```
 Wait for `RAG Pipeline API ready` in the console.
 
-### Start the worker
-In a separate terminal — this is what actually processes uploads and URLs; the API only queues them:
+### Start the workers
+In two separate terminals. These are what actually process uploads and URLs; the API only queues them:
 ```powershell
-python -m src.jobs.worker
+python -m src.jobs.worker         # parse worker (uploads, and pages the fetch worker stored)
+python -m src.jobs.fetch_worker   # fetch worker (web pages and sitemaps, via reader APIs)
 ```
-Or with Procrastinate's own CLI, which supports more options (`--concurrency`, `--queues`, ...):
+Or with Procrastinate's own CLI, which supports more options:
 ```powershell
 procrastinate --app=src.jobs.worker.app worker --queues=ingest
+procrastinate --app=src.jobs.fetch_worker.app worker --queues=fetch --concurrency=1
 ```
 
 ### Start the Streamlit UI

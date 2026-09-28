@@ -3,8 +3,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 from src.config import get_settings
-from src.embedding.config import EmbeddingConfig
-from src.embedding.generator import EmbeddingGenerator
+from src.embedding.providers import build_embedder
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.generator import RAGGenerator
 from src.generating.models import GenerationConfig
@@ -33,17 +32,17 @@ class PipelineComponents:
     provider: str
     model_name: str
     rewriter: QueryRewriter
-    embedding_generator: EmbeddingGenerator
 
 
 def _init_components() -> PipelineComponents:
     """Shared factory function to initialize core pipeline components."""
     settings = get_settings()
 
-    chunk_store = ChunkStore(get_sync_engine(), get_async_engine())
+    embedder = build_embedder(settings)
+    chunk_store = ChunkStore(get_sync_engine(), get_async_engine(), embedder.index_id)
     registry = DocumentRegistry(get_sync_engine())
-    retriever = HybridRetriever(DenseRetriever(chunk_store), SparseRetriever(chunk_store))
-    logger.info("HybridRetriever loaded: pgvector HNSW + Postgres full-text search.")
+    retriever = HybridRetriever(DenseRetriever(chunk_store, embedder), SparseRetriever(chunk_store))
+    logger.info(f"HybridRetriever loaded: pgvector HNSW + Postgres full-text search on index {embedder.index_id}.")
 
     if settings.enable_reranker:
         reranker = OptionalReranker()
@@ -87,8 +86,6 @@ def _init_components() -> PipelineComponents:
     )
     rewriter = QueryRewriter(config=rewriter_config)
 
-    embedding_generator = EmbeddingGenerator(EmbeddingConfig())
-
     return PipelineComponents(
         chunk_store=chunk_store,
         registry=registry,
@@ -99,5 +96,4 @@ def _init_components() -> PipelineComponents:
         provider=provider,
         model_name=model_name,
         rewriter=rewriter,
-        embedding_generator=embedding_generator,
     )

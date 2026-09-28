@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from procrastinate import jobs as procrastinate_jobs
 from procrastinate.manager import JobManager
 
-from src.jobs.contract import INGEST_QUEUE, INGEST_TASK, MAX_RETRIES
+from src.jobs.contract import MAX_RETRIES
 from src.registry.database import DocumentRegistry
 
 logger = logging.getLogger(__name__)
@@ -35,10 +35,11 @@ class RecoveryReport:
     failed: int = 0
 
 
-async def recover_stalled_jobs(job_manager: JobManager, registry: DocumentRegistry) -> RecoveryReport:
+async def recover_stalled_jobs(job_manager: JobManager, registry: DocumentRegistry, queue: str, task_name: str) -> RecoveryReport:
+    """Sweeps one queue's task (ingest or fetch); each worker sweeps only the queue it runs."""
     report = RecoveryReport()
     stalled = await job_manager.get_stalled_jobs(
-        queue=INGEST_QUEUE, task_name=INGEST_TASK, seconds_since_heartbeat=STALLED_AFTER_SECONDS
+        queue=queue, task_name=task_name, seconds_since_heartbeat=STALLED_AFTER_SECONDS
     )
     for job in stalled:
         domain_job_id = job.task_kwargs.get("job_id")

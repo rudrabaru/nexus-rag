@@ -15,8 +15,10 @@ Nexus RAG takes your files (PDFs, URLs, text) and turns them into a searchable k
 - **Language**: Python 3.10+
 - **Frameworks**: FastAPI, Streamlit
 - **Database**: Postgres (Neon) with pgvector: vectors (HNSW), keyword search (full-text), documents, jobs, keys and metrics in one store; schema managed by Alembic
-- **Job queue**: [Procrastinate](https://procrastinate.readthedocs.io/) (Postgres-backed). The API validates a request and queues it; a separate **worker** process does the actual fetching, parsing, chunking and embedding, so it ships as its own image (`Dockerfile.worker`) with the document-parsing dependencies the API doesn't need
-- **APIs**: Groq / Gemini (Text Generation), Jina AI (Embeddings & Reranking)
+- **Job queue**: [Procrastinate](https://procrastinate.readthedocs.io/) (Postgres-backed). The API validates a request and queues it; a **fetch worker** reads web pages through reader APIs, and a **parse worker** parses, chunks and embeds. The parse worker ships as its own image (`Dockerfile.worker`) with the dependencies the API doesn't need
+- **Parsing**: [Docling](https://docling.org/) for PDF and DOCX (layout, tables, OCR of scanned pages)
+- **Web pages**: hosted reader APIs only (keyless Jina Reader, optional Firecrawl). No process we host contacts the target site
+- **APIs**: Gemini / Groq (generation), Voyage AI (embeddings; local Ollama optional), Jina AI (reranking)
 
 **2. Environment Setup**
 Create a `.env` file in the root directory and populate it with your API keys:
@@ -24,7 +26,8 @@ Create a `.env` file in the root directory and populate it with your API keys:
 # Required API Keys
 GEMINI_API_KEY="your_gemini_key"
 GROQ_API_KEY="your_groq_key"
-JINA_API_KEY="your_jina_key"
+VOYAGE_API_KEY="pa-..."   # embeddings (EMBEDDING_PROVIDER=voyage, the default)
+JINA_API_KEY="your_jina_key"       # reranker, and the legacy embedding index
 
 # Postgres (Neon) — the DIRECT endpoint, not the "-pooler" one
 DATABASE_URL="postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?sslmode=require"
@@ -53,12 +56,13 @@ uvicorn src.api.main:app --reload
 The API checks the schema revision at startup and refuses to run against a database that has not been migrated.
 *The API will be available at `http://localhost:8000/docs`*
 
-**4. Run the Worker**
-In a second terminal, with the same `.env` — the API only queues an ingestion job; this is what actually runs it:
+**4. Run the Workers**
+In two more terminals, with the same `.env`. The API only queues ingestion jobs; these run them:
 ```bash
-python -m src.jobs.worker
+python -m src.jobs.worker         # parse worker: uploads and fetched pages -> chunks and vectors
+python -m src.jobs.fetch_worker   # fetch worker: web pages and sitemaps, through reader APIs
 ```
-Without a running worker, an uploaded document's job stays at `status: "queued"` forever.
+Without the parse worker, every job stays at `status: "queued"`; without the fetch worker, URL jobs do. The first document the parse worker handles downloads Docling's models (~0.5 GB) once.
 
 **5. Run the Frontend (Streamlit)**
 In a new terminal window, activate the virtual environment and run:
@@ -70,9 +74,9 @@ streamlit run scripts/chat_ui.py
 ## Key Features
 
 ### Document Processing
-- **Reads Multiple Formats:** Easily processes website URLs, PDFs, DOCX, Markdown, and TXT files.
-- **Image Reading:** Built-in OCR (Optical Character Recognition) can extract and read text directly from images and scanned documents.
-- **Web Crawling:** You can drop in a URL or an XML Sitemap, and the system will automatically crawl and read the website for you.
+- **Reads Multiple Formats:** Processes web pages, sitemaps, PDFs, DOCX, Markdown and TXT files.
+- **Keeps Document Structure:** PDFs and Word files are parsed with a layout model (Docling), so headings, reading order and tables survive, and scanned pages are read with OCR, all locally.
+- **Polite Web Reading:** Give it a page or an XML sitemap (up to 50 pages). Pages are read through hosted reader APIs that respect `robots.txt`, paced per site, within a daily page quota, and every fetch is logged.
 
 ### Text Splitting
 - **Noise Removal:** Automatically detects and removes useless website menus, footers, and legal boilerplate so the AI focuses only on the real content.
@@ -131,10 +135,11 @@ sequenceDiagram
     User->>Ingest: Upload a PDF or URL
     Ingest->>Auth: Verify API Key
     Auth-->>Ingest: Validated Workspace ID
-    Ingest->>Queue: Defer ingestion job
+    Ingest->>Queue: Defer job (URL: fetch queue, file: ingest queue)
     Ingest-->>User: job_id, status: queued
     Worker->>Queue: Claim the job
-    Worker-->>Queue: Fetch, parse, chunk, embed, commit
+    Worker-->>Queue: (fetch worker) read pages via reader API, store them, defer ingest
+    Worker-->>Queue: (parse worker) parse, chunk, embed, commit
     User->>Ingest: GET /ingest/{job_id}
     Ingest-->>User: status: complete
     Note right of User: Data is securely locked<br/>to your Workspace
@@ -148,36 +153,41 @@ sequenceDiagram
 
 ## The Ingestion Pipeline (Internal Flow)
 
-This flowchart visualizes how your files are processed and saved. The API (left) only validates and queues; the worker (right) — a separate process, a separate Docker image — does everything else.
+This flowchart visualizes how your files are processed and saved. The API only validates and queues. The fetch worker (same slim image) talks only to reader APIs. The parse worker (its own heavy image) never contacts a website: it reads everything from Postgres.
 
 ```mermaid
 graph TD
-    subgraph API["API — validates & queues, no document parsers installed"]
-        A1[PDF / DOCX Upload] --> V{Validate: type, size, quota}
-        A2[URL] --> V
-        V --> Q[Register job + defer to queue]
+    subgraph API["API: validates & queues, nothing fetched or parsed"]
+        A1[PDF / DOCX / TXT / MD upload] --> V1{Type, size, quota}
+        A2[Page or sitemap URL] --> V2{https, public, domain lists,<br/>daily page quota}
     end
 
-    Q --> QT[(Postgres job queue<br/>Procrastinate)]
-    QT --> W
+    V2 --> FQ[(fetch queue)]
+    V1 --> IQ[(ingest queue)]
 
-    subgraph Worker["Worker — claims jobs, does the parsing"]
-        W(Format Routing) -->|Local File| C1[Extract Text]
-        W -->|Web Link| C2[Read Website]
-
-        C1 --> D[Convert to Markdown]
-        C2 --> D
-
-        D --> E[Clean up Noise & Menus]
-        E --> F[Split text smartly by Headings]
-
-        F --> G[Generate Searchable Vectors]
+    subgraph Fetch["Fetch worker: slim, reader APIs only"]
+        FQ --> R[Jina Reader, keyless<br/>robots.txt respected<br/>Firecrawl fallback]
+        R --> FP[(fetched_pages + fetch_log)]
     end
 
-    G --> H[(Postgres chunks table<br/>vector + keyword index + text<br/>one row, one transaction)]
+    FP --> IQ
+
+    subgraph Parse["Parse worker: heavy, compute only"]
+        IQ --> P{Source}
+        P -->|Upload| DL[Docling in a child process<br/>PyMuPDF text fallback]
+        P -->|Fetched pages| MD[Markdown from Postgres]
+        DL --> E[Clean up noise]
+        MD --> E
+        E --> F[Split by headings]
+        F --> G[Embed into the active index<br/>Voyage, paced]
+    end
+
+    G --> H[(Postgres chunks table<br/>vector + keyword index + text<br/>one row per index, one transaction)]
 
     style H fill:#bbf,stroke:#333,stroke-width:2px
-    style QT fill:#bbf,stroke:#333,stroke-width:2px
+    style FQ fill:#bbf,stroke:#333,stroke-width:2px
+    style IQ fill:#bbf,stroke:#333,stroke-width:2px
+    style FP fill:#bbf,stroke:#333,stroke-width:2px
 ```
 
 ## The Query Pipeline (Internal Flow)
@@ -230,18 +240,18 @@ graph LR
     style Y fill:#f96,stroke:#333,stroke-width:2px
 ```
 
-The worker follows the same rule on its own startup (config, then schema), independently of the API.
+Both workers follow the same rule on their own startup (config, then schema), and each refuses to start if it holds a task from another queue.
 
 ## Setup & Hosting Notes
 
 **Storage:**
 Everything durable lives in one Postgres database (Neon free tier): document text and vectors, the keyword index, jobs, the job queue itself, API keys and cost history. Deleting a document removes its chunks, vectors and keyword entries in the same transaction. Neon suspends an idle database after about five minutes, so the first request after a pause can take a few seconds longer.
 
-**Ingestion needs a running worker:**
-`POST /ingest` only validates and queues; a separate worker process (`Dockerfile.worker`, or `python -m src.jobs.worker` locally) does the actual fetching, parsing, chunking and embedding. A deployment that only runs the API image will accept uploads that never progress past `status: "queued"`.
+**Ingestion needs running workers:**
+`POST /ingest` only validates and queues. The parse worker (`Dockerfile.worker`) must run for anything to be indexed, and the fetch worker (the API image with `procrastinate --app=src.jobs.fetch_worker.app worker --queues=fetch --concurrency=1`) for URLs. A deployment that only runs the API accepts ingestions that never progress past `status: "queued"`.
 
-**Moving from the old Qdrant + SQLite storage:**
-`python -m scripts.migrate_legacy --dry-run` reads both old stores and prints what it would copy. Without `--dry-run` it writes everything in one transaction and then verifies it. Existing API keys keep working.
+**Embedding indexes:**
+Each embedding model has its own index (`provider:model`), and the API searches and ingests into the index of `EMBEDDING_PROVIDER` (default `voyage:voyage-4`). Vectors of two models are never mixed: switching the provider points the API at a different index, which starts empty until documents are ingested with it.
 
 **Workspace Access:**
 There is no open sign-up. An administrator issues your workspace key with `POST /admin/keys` and can revoke it with `POST /admin/keys/revoke` (both send the `RAG-API-KEY` header). Paste the key into the **"API Key"** box in the sidebar of the chat interface to unlock your workspace and the documents you previously uploaded. Chat history lives only in the browser session and is not restored after a refresh.

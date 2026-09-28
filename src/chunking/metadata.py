@@ -23,7 +23,6 @@ class ChunkMetadata(BaseModel):
     chunk_index: int = Field(..., description="Chunk position in document")
     total_chunks: int = Field(0, description="Total number of chunks in document")
     chunk_text: str = Field(..., description="Chunk content")
-    embedding_text: Optional[str] = Field(None, description="Injected context for embedding (not displayed)")
     token_count: int = Field(..., description="Token count (for budgeting)")
     char_start: int = Field(..., description="Start position in original doc")
     char_end: int = Field(..., description="End position in original doc")
@@ -38,13 +37,7 @@ class ChunkMetadata(BaseModel):
     contains_table: bool = Field(False, description="Chunk contains markdown tables")
     content_type: str = Field(
         "mixed",
-        description="Primary content type: text, code, table, mixed, visual_description",
-    )
-    visual_asset_ref: Optional[str] = Field(
-        None, description="Path to source image file"
-    )
-    visual_asset_type: Optional[str] = Field(
-        None, description="chart|flowchart|diagram|table_image|photo"
+        description="Primary content type: text, code, table, mixed",
     )
     document_version: str = Field(..., description="Version of the processed doc used")
     chunk_version: str = Field(..., description="Chunking version used")
@@ -75,7 +68,6 @@ class ChunkingConfig(BaseModel):
     chunk_size: int = Field(600, description="Target chunk size in tokens")
     overlap: int = Field(125, description="Overlap between chunks in tokens")
     embedding_hard_limit: int = Field(2000, description="Maximum tokens allowed before hard truncation to prevent embedding API failures")
-    preserve_markdown: bool = Field(True, description="Preserve markdown structure")
     min_chunk_tokens: int = Field(150, description="Minimum tokens per chunk")
     max_chunk_tokens: int = Field(800, description="Maximum tokens per chunk")
     source_version: str = Field("unknown", description="Version of input docs")

@@ -90,8 +90,6 @@ class DocumentCleaner:
                 signals_triggered.append("context_penalty")
                 reasons.append(f"Context Penalty (+{context_penalty})")
 
-            block.boilerplate_score = score
-            block.triggered_signals = signals_triggered
             is_removed = False
 
             if block.metrics.document_frequency > 0.95 and block.metrics.word_count < 15:

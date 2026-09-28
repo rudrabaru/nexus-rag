@@ -6,6 +6,8 @@ import random
 from pathlib import Path
 from collections import defaultdict
 
+from src.config import get_settings
+from src.embedding.providers import build_embedder
 from src.registry.engine import dispose_engines, get_async_engine, get_sync_engine
 from src.retrieving.chunk_store import ChunkStore
 from src.retrieving.retriever import DenseRetriever, OptionalReranker, HybridRetriever, SparseRetriever
@@ -160,9 +162,12 @@ def run_evaluation_pipeline(
     use_hybrid: bool,
     use_sparse: bool = False,
     tenant_id: str = None,
+    index_id: str = None,
 ):
-    chunk_store = ChunkStore(get_sync_engine(), get_async_engine())
-    dense_retriever = DenseRetriever(chunk_store)
+    embedder = build_embedder(get_settings(), index_id)
+    chunk_store = ChunkStore(get_sync_engine(), get_async_engine(), embedder.index_id)
+    dense_retriever = DenseRetriever(chunk_store, embedder)
+    logger.info(f"Evaluating index {embedder.index_id}.")
 
     if use_sparse:
         retriever = SparseRetriever(chunk_store)
@@ -202,6 +207,7 @@ def run_evaluation_pipeline(
     report.reproducibility_fingerprint = {
         "dataset_path": str(dataset_path),
         "dataset_md5": dataset_hash,
+        "index_id": embedder.index_id,
         "index_count": index_count,
         "timestamp": timestamp,
         "configuration": {
@@ -218,7 +224,7 @@ def run_evaluation_pipeline(
 
     eval_output = {
         "dataset_used": dataset_path,
-        "index_used": "postgres:chunks",
+        "index_used": f"postgres:chunks/{embedder.index_id}",
         "reproducibility_fingerprint": report.reproducibility_fingerprint,
         "total_queries": report.total_queries,
         "overall_metrics": {
@@ -283,6 +289,7 @@ if __name__ == "__main__":
     parser.add_argument("--use-hybrid", action="store_true", help="Enable Hybrid RRF search")
     parser.add_argument("--use-sparse", action="store_true", help="Enable sparse full-text search only")
     parser.add_argument("--tenant-id", type=str, default=None, help="Optional tenant ID to isolate search")
+    parser.add_argument("--index", type=str, default=None, help="Embedding index (provider:model); default: EMBEDDING_PROVIDER")
 
     args = parser.parse_args()
 
@@ -294,5 +301,6 @@ if __name__ == "__main__":
         use_hybrid=args.use_hybrid,
         use_sparse=args.use_sparse,
         tenant_id=args.tenant_id,
+        index_id=args.index,
     )
 

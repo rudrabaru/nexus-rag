@@ -1,9 +1,6 @@
-# Worker image: parsing, chunking and embedding. Heavy by design (Docling joins in item 8),
-# which is why it is a separate image from the API.
+# Parse worker image: parsing, chunking and embedding. Heavy by design (Docling brings torch
+# and layout models), which is why it is a separate image from the API.
 -r requirements-base.txt
-markitdown[pdf,docx]>=0.1.0  # the formats POST /ingest accepts: pdf, docx, txt, md
-pymupdf>=1.24.0
-Pillow>=10.0.0
-tiktoken>=0.7.0
-google-genai>=0.5.0  # VisualProcessor's image input (replaced by Docling in item 8)
-openai>=1.0.0  # MarkItDown's vision path (replaced by Docling in item 8)
+docling==2.130.0  # PDF/DOCX layout, tables and OCR (RapidOCR); the version the 2026-09-26 spike measured
+pymupdf>=1.24.0  # page counting, and the text fallback for PDFs Docling cannot handle
+tiktoken>=0.7.0  # the chunker's token counts

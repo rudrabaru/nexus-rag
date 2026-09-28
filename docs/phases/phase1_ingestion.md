@@ -5,37 +5,83 @@ The ingestion phase serves as the entry point for all raw data entering the Retr
 
 ## Core Implementation Logic
 
-### Format Routing
-An intelligent routing engine dynamically directs incoming sources to the appropriate processing pipeline:
-- **Web URLs**: The router first detects the actual content type. If the URL resolves to a binary document (like a PDF or Word file), it is downloaded and routed to the document extraction engine. Standard web pages are routed to a specialized external serverless web ingestion service.
-- **File Uploads**: Files are routed based on their format directly to the document extraction engine.
+### Two Sources, Two Workers
+Every source becomes Markdown before processing, but the two kinds of source take different routes, on different processes:
 
-### Multi-Format Extraction Engine
-A unified parsing system converts virtually any document format directly into clean Markdown.
+- **Web pages and sitemaps** go to the **fetch worker** (slim; the API image), which reads them through hosted reader APIs and stores the Markdown in Postgres (`fetched_pages`). It then queues the parse step.
+- **Uploaded files** (PDF, DOCX, TXT, MD) go straight to the **parse worker** (heavy; `Dockerfile.worker`), which converts them with Docling.
+- The **parse worker** then processes both the same way: clean, chunk, embed, commit. It never contacts a website: its only inputs are rows in Postgres.
 
-1. **Standard Extraction:** The engine reads text, tables, and lists natively from office documents and PDFs, converting them into structured Markdown.
-2. **Multimodal Vision Extraction (Optional):** When requested, a vision-capable AI model intercepts images and scanned pages within the documents. It interprets the visual content and injects text descriptions directly into the Markdown, expanding retrieval capabilities to scanned PDFs and image-heavy presentations.
-3. **Structural Post-processing:** The engine automatically recovers structural hierarchy from documents that use typographic conventions instead of native heading styles. It also sanitizes artifacts like tracked changes.
+### Web Fetching: Reader APIs Only
+**Rule: no process we host sends a request to a third-party website.** An earlier version ran a crawler (Crawl4AI) inside a Hugging Face Space, and the account was suspended for automated traffic. A crawler on shared hosting makes the host's network the thing target sites see. Fetching is therefore delegated to hosted reader APIs, which fetch from their own networks under their own terms:
 
-### Web & Sitemap Crawling Engine
-For dynamic HTML pages and site hierarchies, the system employs scalable web ingestion adapters:
-- **Serverless Web Reading Engine:** Dynamically converts web pages into structured Markdown, stripping unnecessary images and optimizing connection timeouts when visual extraction is disabled to minimize latency.
-- **Sitemap Ingestion & Selective Prefix Filtering:** Automatically parses XML sitemaps to discover site pages. To support targeted indexing without full-site deep crawling, the ingestion engine supports URL prefix filtering. When a prefix or subpath is specified, the sitemap parser isolates and ingests only the matching documentation subsections.
-- **Bounded Concurrent Crawling:** To maximize ingestion throughput while preventing server overload and API rate-limiting, sitemap URL fetching is executed with bounded asynchronous concurrency.
-- **Idempotent Resumption:** Before a sitemap crawl begins, the worker proactively queries Postgres for the source URLs already indexed under the current tenant and document. Previously indexed URLs are skipped entirely, allowing large-scale crawl jobs interrupted by network errors, timeouts, or a worker restart to be safely resumed without re-processing or duplicating content already in the index.
+1. **Jina Reader, keyless** (primary). About 20 requests/minute per IP, and keyless use does not draw on Jina's one-time token grant. It reads HTML and PDFs by URL, so a remote PDF is never downloaded by us.
+2. **Firecrawl** (fallback, only when `FIRECRAWL_API_KEY` is set). 1,000 free credits a month.
 
-### Durable Job Queue: the API Defers, a Separate Worker Runs
-Ingestion runs as two separate processes, each its own container image, connected only through Postgres:
-- **The API** validates a request (URL policy, file type, size, tenant quota), registers the job and — for an uploaded file — its raw bytes in the same database transaction, then defers a job onto a Postgres-backed queue ([Procrastinate](https://procrastinate.readthedocs.io/)) and returns immediately. It never parses a document and carries no document-parsing dependency (no MarkItDown, PyMuPDF, Pillow or vision client) — `POST /ingest` returning fast does not depend on how long parsing an 80-page PDF takes.
-- **The worker** claims jobs from the queue, fetches or reads the source, parses, chunks and embeds it, then commits the chunks, the job's final status and the tenant's token usage in **one transaction** — a crash between embedding and committing leaves the job "processing" rather than half-written, and re-running is safe because chunk writes are idempotent upserts.
+The previous code broke this rule in small ways that are now gone: the dispatcher requested `robots.txt` and `/sitemap.xml` from the target site directly, sent `HEAD` requests to detect content types, and downloaded remote PDFs itself.
 
-The two processes never share a filesystem, so an uploaded file's bytes travel through Postgres (a small `ingest_sources` table keyed by job ID), not a shared temp directory: the worker reads them back, writes them to its own OS temp directory for the duration of parsing, and the row (and the local file) are gone once the job commits or fails permanently.
+**robots.txt is always respected.** Jina is asked to check it (`X-Robots-Txt`) and answers HTTP 409 when a page is disallowed (verified 2026-09-26 against a disallowed URL). A disallowed page is recorded as `robots_blocked` and **never retried with another reader**: that would be routing around the site owner's decision. Firecrawl's scrape documentation does not state its robots.txt behaviour, which is why it is second, not first. Tavily Extract, listed in the redesign plan as a third reader, is not wired in for the same reason: its robots.txt behaviour is unverified.
+
+**A page must be readable.** Fewer than 30 words from a reader means a login wall, a bot block or an empty shell, not a short document, and the next reader is tried.
+
+### Sitemaps
+Only an explicit sitemap URL (ending in `.xml`, or containing "sitemap") triggers multi-page ingestion; any other URL is exactly one page. The previous dispatcher expanded any page URL into its whole site through `robots.txt` auto-discovery, which spent fetch quota and site traffic the user never asked for.
+
+The sitemap itself is read through Jina Reader, which renders a sitemap's `<loc>` entries as links (verified 2026-09-26); the page URLs are the links in that output. A sitemap index is followed one level deep (up to 10 child sitemaps). With a Firecrawl key, Firecrawl's `map` endpoint is the fallback. Media and archive links are skipped, a `?filter=/docs/` suffix keeps only matching URLs, and at most **50 pages** are taken per job.
+
+### Fetch Policy and Controls
+These controls stay in our code because they decide *what we are willing to fetch*, not what content is kept:
+
+- **https only**, and the host must resolve only to public addresses (the SSRF guard).
+- **Domain lists**, as configuration, not code: a denylist (default: major social networks and people-search sites) and an optional allowlist mode for a public demo.
+- **Per-domain pacing**: one request per domain every 3 seconds (`FETCH_MIN_INTERVAL_SECONDS`) per fetch worker, even through a reader, since the reader fetches from the site on our behalf. The fetch worker runs one job at a time, and 3 seconds also matches keyless Jina's ~20 requests/minute.
+- **Daily quota per tenant**: 200 successfully fetched pages per 24 hours (`FETCH_DAILY_PAGE_QUOTA`). The API rejects a URL with HTTP 429 once it is used up, and the fetch worker stops mid-sitemap when it runs out. This protects the shared free reader allowances.
+- **Audit trail**: every attempt (fetched, sitemap, robots_blocked, denied, failed, quota_exceeded) is written to `fetch_log` with tenant, job, URL, reader and reason. It has no foreign keys, so it outlives document deletion: abuse stays attributable, and a takedown is one document delete.
+- **Only authenticated tenants** can submit URLs (there is no open registration).
+
+The policy is checked twice: by the API when the URL is submitted, and again by the fetch worker before each page, because DNS can change in between.
+
+### Parsing Uploads: Docling
+Uploaded PDFs and DOCX files are parsed by [Docling](https://docling.org/): layout analysis, reading order, table structure, and OCR of scanned pages (RapidOCR, ONNX, on CPU). TXT and MD files are read as-is. This replaced MarkItDown, a PyMuPDF text fallback, and page-by-page Gemini vision OCR with a 2-second sleep, which spent the scarcest free resource (LLM requests per day) on a job a local layout model does better.
+
+**Why, with evidence.** The chunking audit (Phase 3) found 97.6% of PDF chunks had no heading path: the old extraction lost document structure. A spike on real documents (2026-09-26, CPU only, 2 threads, a fresh process per document):
+
+| Document | Pages | Docling time | Peak memory | Headings | Tables | Note |
+|---|---|---|---|---|---|---|
+| bitcoin.pdf | 9 | 79 s | 1.7 GB | 15 | 0 | |
+| Attention Is All You Need | 15 | 85 s | 2.3 GB | 28 | 4 | |
+| VPC Networking (slides) | 30 | 78 s | 2.6 GB | 11 | 1 | |
+| Financial statements | 3 | 54 s | 1.7 GB | 6 | 3 | 4x the text PyMuPDF found (5.5k to 22.6k chars) |
+| Scanned presentation | 14 | 119 s | 3.4 GB | 34 | 2 | PyMuPDF: 13 chars. Docling OCR: 6,147 chars, zero LLM calls |
+| DOCX files (3) | - | ~1 s | 0.4 GB | 0-17 | 0-5 | |
+
+Model loading adds ~16 s per process. Inside the worker image under Docker Desktop (WSL2) the scanned deck took ~14.6 s/page, so 50 pages is ~730 s plus model load, still inside the timeout. Peak memory was **1.7-3.4 GB**, far below the ~12 GB reported in Docling issue #366, so one-at-a-time parsing fits a 16 GB Hugging Face Space.
+
+**How it runs:**
+- **A fresh child process per document**, started by spawn. Docling's memory is not reliably released between documents; a child returns it to the OS on exit, can be killed on a timeout, and an out-of-memory kill takes down only the child.
+- **One document at a time per worker**, by a lock, so peak memory is one document's whatever `WORKER_CONCURRENCY` is.
+- **Caps**: PDFs over **50 pages** (`DOCLING_MAX_PAGES`) skip Docling, and each parse has a **900 s** timeout (`DOCLING_TIMEOUT_SECONDS`). Rationale: the worst measured rate was ~8.5 s/page, so 50 pages is ~425 s here and ~850 s on a CPU twice as slow.
+- **A fallback that keeps the content**: a PDF over the page cap, or one Docling fails on (timeout, crash, OOM), is read with PyMuPDF as plain text. Nothing is dropped, but headings are lost, and the job records `parser: pymupdf` so the loss is visible. A DOCX Docling cannot read fails as unprocessable.
+- **Export settings**: `&` and `_` are exported literally (Docling escapes them by default, which put "amp" into the keyword index and broke `snake_case` identifiers), image placeholders are omitted, and page headers and footers that the layout model labels as page furniture are excluded: structural evidence, not a keyword rule.
+- **Bold-only section titles** in DOCX files (a line that is entirely bold, does not end like a sentence, and is followed by a blank line) are promoted to headings. Many DOCX files style titles that way, and Docling correctly reports them as paragraphs. Measured: 0 to 4 headings on the n8n notes. The rule's punctuation check had a bug (it read the raw line, which always ends in `**`), now fixed.
+
+The optional "extract visuals" mode (LLM image descriptions) was removed with the vision path. Docling can describe pictures with a local vision model; that is not enabled.
+
+### Durable Job Queue: the API Defers, Workers Run
+Ingestion runs as three processes, connected only through Postgres:
+- **The API** validates a request (fetch policy and daily page quota for a URL; file type, size and pending-upload bytes for a file; the tenant's chunk quota), registers the job and, for an uploaded file, its raw bytes in the same transaction, then defers a job onto a Postgres-backed queue ([Procrastinate](https://procrastinate.readthedocs.io/)) and returns immediately. A URL goes to the `fetch` queue, a file to the `ingest` queue. The API never fetches or parses anything.
+- **The fetch worker** (`src/jobs/fetch_worker.py`, the API image) claims `fetch` jobs, stores each page's Markdown in `fetched_pages`, and defers the `ingest` job. It is an async task so the defer runs on the worker's own event loop.
+- **The parse worker** (`src/jobs/worker.py`, `Dockerfile.worker`) claims `ingest` jobs, reads the source rows, parses, chunks and embeds, then commits the chunks, the job's final status, the tenant's token usage and the deletion of the source rows in **one transaction**. A crash before the commit leaves the job "processing" rather than half-written, and re-running is safe because chunk writes are idempotent upserts.
+
+Each worker registers only its own queue's tasks and refuses to start otherwise, so the parse worker (which runs on hosting that must never contact third-party sites) cannot run a fetch task even by misconfiguration.
+
+The processes never share a filesystem, so sources travel through Postgres: an upload's bytes in `ingest_sources`, fetched pages in `fetched_pages`. The parse worker writes an upload to its own temp directory only while parsing, and both kinds of row are deleted with the commit, or when the job finally fails.
 
 **Retry and locking**, both enforced by the queue rather than application code:
 - A job that raises an unclassified exception is retried automatically with backoff, up to a fixed budget; a job whose source is fundamentally unprocessable (empty content, oversized) is not retried, since retrying would reproduce the same failure.
 - Two jobs for the same document (for example, an accidental double-submit, or a resume retried while the original run is still in flight) share a lock on the document ID, so the queue itself serialises them — the second never starts until the first finishes, instead of both writing that document's chunks at once.
 
-**Recovery from a killed worker.** Procrastinate records which worker holds each running job and that worker's heartbeat, but does not act on a stopped heartbeat. A periodic sweep (once a minute, on any worker) does: an ingestion job whose worker has been silent for 30 seconds goes back on the queue while its retry budget lasts, and is marked failed — in the queue and in the domain tables — once it is spent, so nothing stays "processing" forever. Requeuing is safe because nothing is half-written (the atomic commit above), the uploaded bytes stay in `ingest_sources` until that commit, and chunk writes are idempotent.
+**Recovery from a killed worker.** Procrastinate records which worker holds each running job and that worker's heartbeat, but does not act on a stopped heartbeat. A periodic sweep (once a minute; each worker sweeps its own queue) does: an ingestion job whose worker has been silent for 30 seconds goes back on the queue while its retry budget lasts, and is marked failed — in the queue and in the domain tables — once it is spent, so nothing stays "processing" forever. Requeuing is safe because nothing is half-written (the atomic commit above), the uploaded bytes stay in `ingest_sources` until that commit, and chunk writes are idempotent.
 
 A rerun never touches a job that already finished. The failure this prevents: a worker that dies *after* the atomic commit but *before* the queue records success gets requeued, finds its uploaded bytes already deleted, and would otherwise mark a complete document failed.
 
@@ -52,11 +98,12 @@ To ensure transparent operations, the ingestion pipeline maintains fine-grained 
 - **Root Cause Surfacing:** When rate limits, crawling blocks, or embedding timeouts occur on individual pages or batches, the system captures explicit, human-readable error reasons in metadata. These diagnostic messages are propagated directly to the UI, enabling users to inspect exact failure causes even when a job completes with partial success.
 
 ### Deduplication
-Before starting an extraction job, the system computes a cryptographic hash of the raw file content. If an identical hash already exists in the registry for the same tenant with a completed status, the ingestion is skipped. This prevents redundant reprocessing of identical documents.
+An upload is hashed by the API before queueing; a URL source is hashed by the parse worker over its fetched Markdown. If an identical hash already exists for the same tenant with a completed status, nothing is chunked or embedded: the job completes pointing at the existing document (its status shows that document's chunk count, and its metadata records `duplicate_of`). For a URL, the placeholder document registered at submission and its fetched pages are deleted in the same transaction, so a duplicate leaves no empty "pending" document behind.
 
 ## Design Philosophy & Tradeoffs
-- **Simplicity vs. Fidelity:** The unified extraction approach favors a fast, uniform conversion layer over highly specialized format parsers. While extremely complex academic layouts might lose some visual context, it significantly reduces pipeline maintenance overhead.
+- **Fidelity vs. cost:** Docling recovers structure the old text extraction lost, at 30-120 s and up to 3.4 GB per PDF instead of a few seconds. That cost is why it runs only in the parse worker, one document at a time, with a page cap and a text fallback.
+- **Reader APIs vs. control:** Delegating fetching gives up control over rendering and timing, and depends on free allowances (keyless Jina ~20 requests/min; Firecrawl 1,000 pages/month). In exchange no hosted process of ours ever touches a target site, which is what keeps the hosting accounts in good standing.
 - **Bounded Concurrency vs. Speed:** While unbounded parallel scraping could theoretically process sitemaps faster, enforcing a concurrency limit prevents remote server rate-limiting and ensures stable, predictable memory usage.
-- **Crawler Reliability:** JavaScript-heavy sites behind aggressive bot detection may fail to render fully. In these edge cases, explicit error propagation informs the user immediately, allowing manual fallback or selective re-ingestion.
+- **Crawler Reliability:** JavaScript-heavy sites behind aggressive bot detection may fail to render fully. In these edge cases, per-page outcomes in the job metadata and in `fetch_log` tell the user which pages failed and why.
 - **Two images instead of one:** Splitting the API and the worker costs an extra process to deploy and a database hand-off for uploaded bytes instead of a shared temp directory. The payoff is that `POST /ingest` cannot be slowed down by parsing, the API's dependency footprint stays small, and ingestion capacity scales independently of query capacity — a large evaluation sweep (item 13) can run more worker replicas without touching the API at all.
 - **Application-level locking removed, queue-level locking kept:** Nothing in the ingestion code itself now prevents two jobs for the same document from running at once; that guarantee comes entirely from the job queue's lock, which is simpler to reason about and cannot be bypassed by a code path that forgets to acquire it.

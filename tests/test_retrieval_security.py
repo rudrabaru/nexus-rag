@@ -5,6 +5,7 @@ import pytest
 from sqlalchemy.dialects import postgresql
 
 from src.retrieving.chunk_store import ChunkStore, resolve_tenant_scope
+from src.retrieving.chunk_writes import write_chunks
 from src.retrieving.hybrid import HybridRetriever
 from src.retrieving.models import RetrievalResult, RetrievedChunk
 from src.retrieving.sparse import SparseRetriever
@@ -48,7 +49,7 @@ def where_clause(stmt) -> str:
 
 def make_row(chunk_id="md5_chunk_000", **overrides):
     row = {
-        "chunk_id": chunk_id, "tenant_id": "tenant-1", "doc_id": "doc-1", "source_document": "Doc",
+        "chunk_id": chunk_id, "tenant_id": "tenant-1", "index_id": "voyage:voyage-4", "doc_id": "doc-1", "source_document": "Doc",
         "source_url": "https://a.example", "title": "Doc", "section_title": "S", "heading_path": ["H1", "H2"],
         "content_type": "text", "contains_code": False, "contains_table": False, "chunk_version": "v",
         "document_version": "v", "chunk_text": "hello world", "distance": 0.25, "score": 0.5,
@@ -60,7 +61,7 @@ def make_row(chunk_id="md5_chunk_000", **overrides):
 def make_store(rows=()):
     sync_engine = MagicMock()
     async_engine = RecordingAsyncEngine(rows)
-    return ChunkStore(sync_engine, async_engine), sync_engine, async_engine
+    return ChunkStore(sync_engine, async_engine, "voyage:voyage-4"), sync_engine, async_engine
 
 
 # ── Default-deny: no tenant means no results and no SQL ─────────────────────
@@ -94,10 +95,20 @@ async def test_tenant_search_filters_on_the_tenant():
     assert "chunks.tenant_id =" in where_clause(async_engine.statements[0])
 
 
-async def test_global_search_is_opt_in_and_unfiltered():
+async def test_global_search_is_opt_in_and_unfiltered_by_tenant():
     store, _, async_engine = make_store([make_row()])
     await store.search_dense(EMBEDDING, top_k=5, tenant_id=None, allow_global=True)
     assert "tenant_id" not in where_clause(async_engine.statements[0])
+
+
+async def test_both_searches_are_scoped_to_the_stores_index_even_when_global():
+    """Vectors of different models are not comparable, and sparse must search the same rows as dense."""
+    store, _, async_engine = make_store([make_row()])
+    await store.search_dense(EMBEDDING, top_k=5, tenant_id=None, allow_global=True)
+    await store.search_sparse("hello", tenant_id="tenant-1")
+    for stmt in async_engine.statements:
+        assert "chunks.index_id =" in where_clause(stmt)
+        assert stmt.compile().params["index_id_1"] == "voyage:voyage-4"
 
 
 async def test_dense_search_orders_by_cosine_distance_and_limits():
@@ -170,13 +181,13 @@ def test_a_chunk_without_tenant_or_document_is_never_stored(missing):
     fields = dict(
         chunk_id="c", source_url="u", source_document="d", title="t", chunk_index=0, chunk_text="x",
         token_count=1, char_start=0, char_end=1, document_version="v", chunk_version="v",
-        tenant_id="tenant-1", doc_id="doc-1", embedding=EMBEDDING, embedding_model="m",
+        tenant_id="tenant-1", doc_id="doc-1", embedding=EMBEDDING, embedding_model="m", index_id="test:m",
     )
     fields[missing] = None
-    store, sync_engine, _ = make_store()
-    with pytest.raises(ValueError):
-        store.load_chunks([EmbeddedChunk(**fields)])
-    sync_engine.begin.assert_not_called()
+    conn = MagicMock()
+    with pytest.raises(ValueError, match="refusing to store"):
+        write_chunks(conn, [EmbeddedChunk(**fields)])
+    conn.execute.assert_not_called()
 
 
 # ── Hybrid fusion ────────────────────────────────────────────────────────────

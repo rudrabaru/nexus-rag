@@ -20,8 +20,6 @@ class BlockParser:
             metrics.is_heading = True
         elif "|---|" in content or "|---" in content or "---|" in content:
             metrics.is_table = True
-        elif content.startswith("- ") or content.startswith("* ") or re.match(r"^\d+\.\s", content):
-            metrics.is_list = True
 
         words = re.findall(r"\b\w+\b", content.lower())
         metrics.word_count = len(words)

@@ -1,8 +1,9 @@
-"""Atomic commit: an ingestion's chunks, job status and tenant usage land in one transaction."""
+"""Atomic commit: an ingestion's chunks, job status, tenant usage and source cleanup land in one transaction."""
 from sqlalchemy.engine import Engine
 
 from src.ingestion.embedding_worker import EmbeddingOutcome
 from src.registry.database import add_tenant_tokens
+from src.registry.mixins.fetch_store import delete_fetched_pages
 from src.registry.mixins.job_store import complete_job, delete_ingest_source
 from src.retrieving.chunk_writes import write_chunks
 
@@ -20,3 +21,4 @@ def commit_ingestion(engine: Engine, job_id: str, tenant_id: str, outcome: Embed
         add_tenant_tokens(conn, tenant_id, outcome.total_tokens)
         complete_job(conn, job_id, outcome.stats, status=outcome.status, metadata=outcome.metadata, error=error)
         delete_ingest_source(conn, job_id)
+        delete_fetched_pages(conn, job_id)

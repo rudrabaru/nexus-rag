@@ -5,7 +5,8 @@ import pytest
 from fastapi import HTTPException
 
 from src.ingestion.url_policy import UnsafeUrlError, validate_public_url
-from src.jobs.contract import INGEST_QUEUE, INGEST_TASK
+from src.crawling.policy import check_fetchable
+from src.jobs.contract import FETCH_QUEUE, FETCH_TASK, INGEST_QUEUE, INGEST_TASK
 from src.services.ingestion_service import (
     MAX_PENDING_UPLOAD_BYTES,
     MAX_UPLOAD_BYTES,
@@ -27,7 +28,7 @@ class FakeUpload:
         return self._content
 
 
-def make_registry(quota=0, pending_bytes=0, existing_by_hash=None):
+def make_registry(quota=0, pending_bytes=0, existing_by_hash=None, pages_fetched_today=0):
     """
     registry.get_tenant_quota etc. are called through asyncio.to_thread, which expects a
     plain sync callable — MagicMock's auto-generated attributes already are one.
@@ -36,6 +37,7 @@ def make_registry(quota=0, pending_bytes=0, existing_by_hash=None):
     registry.get_tenant_quota.return_value = quota
     registry.pending_upload_bytes.return_value = pending_bytes
     registry.get_document_by_hash.return_value = existing_by_hash
+    registry.pages_fetched_today.return_value = pages_fetched_today
     return registry
 
 
@@ -111,7 +113,7 @@ def test_public_http_urls_are_accepted(url, monkeypatch):
 async def test_ingestion_rejects_a_local_path_in_the_url_field():
     registry = make_registry()
     with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", "/app/logs.txt", None, False, False)
+        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", "/app/logs.txt", None, False)
 
     assert exc.value.status_code == 400
     registry.get_tenant_quota.assert_not_called()
@@ -121,24 +123,83 @@ async def test_ingestion_rejects_a_local_path_in_the_url_field():
 async def test_ingestion_rejects_malformed_port_with_http_400():
     registry = make_registry()
     with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", "https://example.com:99999/", None, False, False)
+        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", "https://example.com:99999/", None, False)
 
     assert exc.value.status_code == 400
+
+
+# ── Fetch policy: what the fetch worker may ask a reader API for ────────────
+
+NO_DOMAIN_LISTS = ([], [])
+
+
+def test_plain_http_is_not_fetched(monkeypatch):
+    resolve_to(monkeypatch, "93.184.216.34")
+    with pytest.raises(UnsafeUrlError):
+        check_fetchable("http://example.com/docs", *NO_DOMAIN_LISTS)
+
+
+@pytest.mark.parametrize("url", ["https://facebook.com/someone", "https://m.facebook.com/someone"])
+def test_denied_domains_and_their_subdomains_are_not_fetched(url, monkeypatch):
+    resolve_to(monkeypatch, "93.184.216.34")
+    with pytest.raises(UnsafeUrlError):
+        check_fetchable(url, [], ["facebook.com"])
+
+
+def test_a_domain_that_merely_ends_with_a_denied_name_is_allowed(monkeypatch):
+    resolve_to(monkeypatch, "93.184.216.34")
+    check_fetchable("https://notfacebook.com/page", [], ["facebook.com"])
+
+
+def test_allowlist_mode_rejects_everything_else(monkeypatch):
+    resolve_to(monkeypatch, "93.184.216.34")
+    check_fetchable("https://docs.python.org/3/", ["docs.python.org"], [])
+    with pytest.raises(UnsafeUrlError):
+        check_fetchable("https://example.com/", ["docs.python.org"], [])
+
+
+def test_the_fetch_policy_still_blocks_private_addresses(monkeypatch):
+    resolve_to(monkeypatch, "10.0.0.5")
+    with pytest.raises(UnsafeUrlError):
+        check_fetchable("https://internal.example/", *NO_DOMAIN_LISTS)
+
+
+@pytest.mark.asyncio
+async def test_http_urls_are_rejected_by_the_api_before_any_job_exists(monkeypatch):
+    resolve_to(monkeypatch, "93.184.216.34")
+    registry = make_registry()
+    with pytest.raises(HTTPException) as exc:
+        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", "http://example.com/docs", None, False)
+    assert exc.value.status_code == 400
+    registry.register_job.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_tenant_over_its_daily_page_quota_gets_429(monkeypatch):
+    from src.config import get_settings
+
+    resolve_to(monkeypatch, "93.184.216.34")
+    registry = make_registry(pages_fetched_today=get_settings().fetch_daily_page_quota)
+    with pytest.raises(HTTPException) as exc:
+        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", "https://example.com/docs", None, False)
+    assert exc.value.status_code == 429
+    registry.register_job.assert_not_called()
 
 
 # ── Wiring: a valid request registers the job durably, then defers it once ──
 
 @pytest.mark.asyncio
-async def test_a_valid_url_registers_the_job_before_deferring_it(monkeypatch):
+async def test_a_valid_url_is_registered_then_deferred_to_the_fetch_queue(monkeypatch):
+    """The API never fetches: a URL goes to the fetch worker, which later defers ingest."""
     resolve_to(monkeypatch, "93.184.216.34")
     registry = make_registry()
     job_queue = MagicMock()
 
-    response = await prepare_and_queue_ingestion(job_queue, registry, "tenant-1", "https://example.com/docs", None, False, False)
+    response = await prepare_and_queue_ingestion(job_queue, registry, "tenant-1", "https://example.com/docs", None, False)
 
     assert response["status"] == "queued"
     registry.register_job.assert_called_once()
-    job_queue.configure_task.assert_called_once_with(INGEST_TASK, queue=INGEST_QUEUE, lock=registry.register_job.call_args[0][1])
+    job_queue.configure_task.assert_called_once_with(FETCH_TASK, queue=FETCH_QUEUE, lock=registry.register_job.call_args[0][1])
     job_queue.configure_task.return_value.defer.assert_called_once()
     deferred = job_queue.configure_task.return_value.defer.call_args.kwargs
     assert deferred["job_id"] == response["job_id"]
@@ -152,7 +213,7 @@ async def test_a_valid_url_registers_the_job_before_deferring_it(monkeypatch):
 async def test_unsupported_file_extension_is_rejected():
     registry = make_registry()
     with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", None, FakeUpload("a.exe", b"x"), False, False)
+        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", None, FakeUpload("a.exe", b"x"), False)
     assert exc.value.status_code == 400
 
 
@@ -161,7 +222,7 @@ async def test_oversized_upload_is_rejected():
     registry = make_registry()
     upload = FakeUpload("a.txt", b"x" * (MAX_UPLOAD_BYTES + 1))
     with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", None, upload, False, False)
+        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", None, upload, False)
     assert exc.value.status_code == 400
 
 
@@ -170,7 +231,7 @@ async def test_too_many_pending_uploads_are_rejected():
     """Bounds Neon's 0.5 GB storage against an offline or backlogged worker."""
     registry = make_registry(pending_bytes=MAX_PENDING_UPLOAD_BYTES)
     with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", None, FakeUpload("a.txt", b"x"), False, False)
+        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", None, FakeUpload("a.txt", b"x"), False)
     assert exc.value.status_code == 429
     registry.register_job.assert_not_called()
 
@@ -180,7 +241,7 @@ async def test_duplicate_upload_short_circuits_without_deferring_a_job():
     registry = make_registry(existing_by_hash={"doc_id": "doc-1", "status": "complete", "source": "u", "format": "txt"})
     job_queue = MagicMock()
 
-    response = await prepare_and_queue_ingestion(job_queue, registry, "tenant-1", None, FakeUpload("a.txt", b"same"), False, False)
+    response = await prepare_and_queue_ingestion(job_queue, registry, "tenant-1", None, FakeUpload("a.txt", b"same"), False)
 
     assert response["status"] == "complete"
     job_queue.configure_task.assert_not_called()
@@ -191,10 +252,11 @@ async def test_a_valid_upload_stores_its_bytes_with_the_job_not_on_local_disk():
     registry = make_registry()
     job_queue = MagicMock()
 
-    response = await prepare_and_queue_ingestion(job_queue, registry, "tenant-1", None, FakeUpload("a.txt", b"hello"), False, False)
+    response = await prepare_and_queue_ingestion(job_queue, registry, "tenant-1", None, FakeUpload("a.txt", b"hello"), False)
 
     assert response["status"] == "queued"
     assert registry.register_job.call_args.kwargs["upload"] == ("a.txt", b"hello")
+    job_queue.configure_task.assert_called_once_with(INGEST_TASK, queue=INGEST_QUEUE, lock=registry.register_job.call_args[0][1])
     deferred = job_queue.configure_task.return_value.defer.call_args.kwargs
     assert deferred["filename"] == "a.txt" and deferred["url"] is None
 

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from src.embedding.models import EmbeddedChunk
 from src.ingestion.embedding_worker import EmbeddingOutcome
 from src.jobs.commit import commit_ingestion
+from src.jobs.contract import INGEST_QUEUE, INGEST_TASK
 from src.registry.database import DocumentRegistry
 from src.registry.schema import tenants
 
@@ -25,7 +26,7 @@ def chunk(chunk_id, tenant="tenant-1", doc_id="doc-1", text="hello world"):
         chunk_id=chunk_id, source_url=f"https://example.com/{doc_id}", source_document=f"Doc {doc_id}", title="T",
         heading_path=[], chunk_index=0, chunk_text=text, token_count=3, char_start=0, char_end=len(text),
         document_version="v", chunk_version="v", tenant_id=tenant, doc_id=doc_id,
-        embedding=[0.1] * 1024, embedding_model="test-model",
+        embedding=[0.1] * 1024, embedding_model="test-model", index_id="test:test-model",
     )
 
 
@@ -75,6 +76,16 @@ def test_commit_ingestion_lands_everything_in_one_transaction(pg_engine, registr
     assert registry.get_ingest_source("job-1") is None  # the hand-off row is cleaned up
     with pg_engine.connect() as conn:
         assert conn.execute(select(tenants.c.total_embedding_tokens).where(tenants.c.tenant_id == "tenant-1")).scalar_one() == 6
+
+
+def test_commit_ingestion_discards_the_jobs_fetched_pages(pg_engine, registry):
+    registry.register_job("job-1", "doc-1", "https://example.com/doc-1", "web", "tenant-1")
+    registry.store_fetched_page("job-1", "https://example.com/doc-1", "T", "# Page", "jina")
+    outcome = EmbeddingOutcome(chunks=[chunk("c1")], failed_indices=[], total_chunks=1, error_reason=None)
+
+    commit_ingestion(pg_engine, "job-1", "tenant-1", outcome)
+
+    assert registry.get_fetched_pages("job-1") == []
 
 
 def test_commit_ingestion_records_partial_success_with_its_reason(pg_engine, registry):
@@ -139,8 +150,6 @@ async def test_a_locked_job_is_not_fetched_while_its_lock_is_held(procrastinate_
 
 async def _defer_ingestion_held_by_a_worker(app, registry, domain_job_id, attempts=0):
     """Registers a domain job, defers its ingestion, and leaves it 'doing' on a worker."""
-    from src.jobs.contract import INGEST_QUEUE, INGEST_TASK
-
     registry.register_job(domain_job_id, f"doc-{domain_job_id}", "https://example.com/x", "web", "tenant-1")
     await app.configure_task(INGEST_TASK, queue=INGEST_QUEUE, lock=f"doc-{domain_job_id}").defer_async(job_id=domain_job_id)
     worker_id = await app.job_manager.register_worker()
@@ -166,7 +175,7 @@ async def test_a_job_held_by_a_dead_worker_is_requeued(procrastinate_app, regist
     job, worker_id = await _defer_ingestion_held_by_a_worker(procrastinate_app, registry, "job-1")
     await _kill_worker(procrastinate_app, worker_id)
 
-    report = await recover_stalled_jobs(procrastinate_app.job_manager, registry)
+    report = await recover_stalled_jobs(procrastinate_app.job_manager, registry, INGEST_QUEUE, INGEST_TASK)
 
     assert (report.requeued, report.failed) == (1, 0)
     status = await procrastinate_app.job_manager.get_job_status_async(job.id)
@@ -178,7 +187,7 @@ async def test_a_job_held_by_a_live_worker_is_left_alone(procrastinate_app, regi
 
     job, _ = await _defer_ingestion_held_by_a_worker(procrastinate_app, registry, "job-1")  # heartbeat is fresh
 
-    report = await recover_stalled_jobs(procrastinate_app.job_manager, registry)
+    report = await recover_stalled_jobs(procrastinate_app.job_manager, registry, INGEST_QUEUE, INGEST_TASK)
 
     assert (report.requeued, report.failed) == (0, 0)
     assert await procrastinate_app.job_manager.get_job_status_async(job.id) == procrastinate_jobs.Status.DOING
@@ -191,7 +200,7 @@ async def test_a_job_that_has_used_its_retries_is_failed_everywhere_not_requeued
     job, worker_id = await _defer_ingestion_held_by_a_worker(procrastinate_app, registry, "job-1", attempts=MAX_RETRIES)
     await _kill_worker(procrastinate_app, worker_id)
 
-    report = await recover_stalled_jobs(procrastinate_app.job_manager, registry)
+    report = await recover_stalled_jobs(procrastinate_app.job_manager, registry, INGEST_QUEUE, INGEST_TASK)
 
     assert (report.requeued, report.failed) == (0, 1)
     assert await procrastinate_app.job_manager.get_job_status_async(job.id) == procrastinate_jobs.Status.FAILED
@@ -212,7 +221,7 @@ async def test_other_tasks_stalled_jobs_are_not_touched(procrastinate_app, regis
     other = await procrastinate_app.job_manager.fetch_job(queues=["ingest"], worker_id=worker_id)
     await _kill_worker(procrastinate_app, worker_id)
 
-    report = await recover_stalled_jobs(procrastinate_app.job_manager, registry)
+    report = await recover_stalled_jobs(procrastinate_app.job_manager, registry, INGEST_QUEUE, INGEST_TASK)
 
     assert (report.requeued, report.failed) == (0, 0)
     assert await procrastinate_app.job_manager.get_job_status_async(other.id) == procrastinate_jobs.Status.DOING

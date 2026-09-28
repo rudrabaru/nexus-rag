@@ -32,7 +32,7 @@ def test_source_ref_is_a_stable_upload_uri_for_files():
 
 def test_request_round_trips_through_defer_kwargs():
     """A defer() call passes **request.model_dump(); every field must survive that trip."""
-    request = IngestionRequest(job_id="j", doc_id="d", tenant_id="t", url="https://a.example", extract_visuals=True, resume=True)
+    request = IngestionRequest(job_id="j", doc_id="d", tenant_id="t", url="https://a.example", resume=True)
     assert IngestionRequest(**request.model_dump()) == request
 
 

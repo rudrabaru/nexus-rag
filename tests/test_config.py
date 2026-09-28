@@ -13,17 +13,30 @@ def test_complete_environment_has_no_missing_settings():
 
 
 def test_missing_settings_are_all_reported_at_once(monkeypatch):
-    for key in ("DATABASE_URL", "JINA_API_KEY", "GEMINI_API_KEY"):
+    for key in ("DATABASE_URL", "VOYAGE_API_KEY", "GEMINI_API_KEY"):
         monkeypatch.delenv(key)
     get_settings.cache_clear()
 
-    missing = get_settings().missing_required()
-    assert {"DATABASE_URL", "JINA_API_KEY", "GEMINI_API_KEY"} <= set(missing)
+    missing = " ".join(get_settings().missing_required())
+    assert all(name in missing for name in ("DATABASE_URL", "VOYAGE_API_KEY", "GEMINI_API_KEY"))
 
 
-def test_qdrant_is_no_longer_required_to_serve():
-    """Qdrant is read only by the one-off migration script."""
-    assert not any("QDRANT" in p for p in get_settings().missing_required())
+def test_embedding_key_requirement_follows_the_embedding_provider(monkeypatch):
+    """Jina is only needed to query the legacy index; a local Ollama index needs no key at all."""
+    assert not any("JINA" in p for p in get_settings().missing_required())
+
+    monkeypatch.delenv("VOYAGE_API_KEY")
+    assert any("JINA_API_KEY" in p for p in make_settings(monkeypatch, EMBEDDING_PROVIDER="jina").missing_required())
+    assert make_settings(monkeypatch, EMBEDDING_PROVIDER="ollama").missing_required() == []
+    assert any("EMBEDDING_PROVIDER" in p for p in make_settings(monkeypatch, EMBEDDING_PROVIDER="qdrant").missing_required())
+
+
+def test_fetch_domain_lists_are_parsed_and_lowercased(monkeypatch):
+    settings = make_settings(monkeypatch, FETCH_ALLOWED_DOMAINS=" Docs.Python.org, ", FETCH_DENIED_DOMAINS="")
+    assert settings.allowed_fetch_domains == ["docs.python.org"]
+    assert settings.denied_fetch_domains == []
+    assert "facebook.com" in Settings.model_fields["fetch_denied_domains"].default  # a denylist is on by default
+
 
 
 def test_provider_key_requirement_follows_llm_provider(monkeypatch):

@@ -1,145 +1,51 @@
 import logging
-import os
-import asyncio
-import httpx
-from typing import List
+from typing import List, Optional, Tuple
 
-from .config import EmbeddingConfig
-from .models import EmbeddedChunk
 from src.chunking.metadata import ChunkMetadata
+from src.embedding.models import EmbeddedChunk
+from src.embedding.providers import Embedder
 
 logger = logging.getLogger(__name__)
 
 
+def embedding_input(chunk: ChunkMetadata) -> str:
+    """
+    The text a chunk is embedded as: its document and heading path, then its text. The
+    prefix gives short chunks the context of where they sit.
+    """
+    return f"[{chunk.source_document} > {' > '.join(chunk.heading_path or [])}]\n{chunk.chunk_text}"
+
+
 class EmbeddingGenerator:
     """
-    Generates embeddings for text chunks using Jina API.
+    Embeds chunks as documents into one index. Keeps per-run state (last_error), so one
+    instance is used per ingestion run, never shared between concurrent runs.
     """
 
-    def __init__(
-        self, config: EmbeddingConfig = None
-    ):
-        self.config = config or EmbeddingConfig()
+    def __init__(self, embedder: Embedder):
+        self.embedder = embedder
+        self.last_error: Optional[str] = None
 
-        self.jina_api_key = os.environ.get("JINA_API_KEY")
-        if not self.jina_api_key:
-            logger.warning("JINA_API_KEY is not set. Embedding generation will fail.")
-
-        logger.info(f"Loaded JINA API for embeddings: {self.config.model_name}")
-
-        self.stats = {
-            "total_chunks_processed": 0,
-            "total_failures": 0,
-            "total_tokens": 0,
-            "start_time": None,
-            "end_time": None,
-        }
-        self.last_error = None
-        self.embed_semaphore = None
-
-    async def embed_batch(self, texts: list[str], task_type: str = "retrieval.passage") -> tuple[list[list[float]], list[int]]:
-        all_embeddings = []
-        failed_indices = []
-        batch_size = self.config.batch_size
-        self.last_error = None
-        
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            for i in range(0, len(texts), batch_size):
-                batch = texts[i:i + batch_size]
-                
-                max_retries = self.config.max_retries
-                for attempt in range(max_retries):
-                    try:
-                        if self.embed_semaphore:
-                            await self.embed_semaphore.acquire()
-                        try:
-                            response = await client.post(
-                                "https://api.jina.ai/v1/embeddings",
-                                headers={"Authorization": f"Bearer {self.jina_api_key}"},
-                                json={
-                                    "model": self.config.model_name,
-                                    "input": batch,
-                                    "task": task_type
-                                }
-                            )
-                            response.raise_for_status()
-                        finally:
-                            if self.embed_semaphore:
-                                self.embed_semaphore.release()
-                                
-                        data = response.json()
-                        all_embeddings.extend([item["embedding"] for item in data["data"]])
-                        break
-                    except Exception as e:
-                        if attempt == max_retries - 1:
-                            logger.error(f"Batch {i//batch_size} failed after {max_retries} attempts: {e}")
-                            err_msg = str(e)
-                            status_code = getattr(getattr(e, "response", None), "status_code", "")
-                            if status_code == 429 or "429" in err_msg:
-                                self.last_error = f"Jina Embedding API rate limit exceeded (HTTP 429). Batch failed after {max_retries} retries."
-                            else:
-                                self.last_error = f"Embedding API error ({status_code or 'error'}): {err_msg[:100]}"
-                            failed_indices.extend(range(i, i + len(batch)))
-                            all_embeddings.extend([None] * len(batch))
-                            break
-                        # exponential backoff 4s, 8s, 16s
-                        await asyncio.sleep(4 * (2 ** attempt))
-                        
-        return all_embeddings, failed_indices
-
-    def generate_embeddings(self, chunks: List[ChunkMetadata]) -> tuple[List[EmbeddedChunk], list[int]]:
-        """
-        Takes a list of ChunkMetadata and returns a list of EmbeddedChunk with vectors and failed indices.
-        """
-        return asyncio.run(self.generate_embeddings_async(chunks))
-        
-    async def generate_embeddings_async(self, chunks: List[ChunkMetadata]) -> tuple[List[EmbeddedChunk], list[int]]:
-        valid_chunks = [c for c in chunks if c.chunk_text.strip()]
-        if len(valid_chunks) < len(chunks):
-            logger.warning(
-                f"Skipped {len(chunks) - len(valid_chunks)} empty chunks before embedding."
-            )
-
-        if not valid_chunks:
+    def generate_embeddings(self, chunks: List[ChunkMetadata]) -> Tuple[List[EmbeddedChunk], List[int]]:
+        """Returns (embedded chunks, indices into `chunks` that failed). Empty chunks are skipped, not failed."""
+        positions = [i for i, c in enumerate(chunks) if c.chunk_text.strip()]
+        if len(positions) < len(chunks):
+            logger.warning(f"Skipped {len(chunks) - len(positions)} empty chunks before embedding.")
+        if not positions:
             return [], []
-            
-        if not self.jina_api_key:
-            raise ValueError("JINA Client not initialized. Check JINA_API_KEY.")
 
-        texts = []
-        for chunk in valid_chunks:
-            if getattr(chunk, "embedding_text", None):
-                texts.append(chunk.embedding_text)
-            else:
-                context = f"Document: {chunk.title}"
-                if chunk.heading_path:
-                    context += f" | Section: {' > '.join(chunk.heading_path)}"
-                text = f"{context}\n\n{chunk.chunk_text}"
-                texts.append(text)
-
-        embedded_chunks = []
-        failed_indices = []
         try:
-            logger.debug(f"Encoding {len(texts)} chunks via JINA API...")
-            embeddings, failed_indices = await self.embed_batch(texts, task_type="retrieval.passage")
-            
-            for i, (chunk, emb) in enumerate(zip(valid_chunks, embeddings)):
-                if emb is None:
-                    continue
-                embedded_chunk = EmbeddedChunk(
-                    **chunk.model_dump(),
-                    embedding=emb,
-                    embedding_model=self.config.model_name,
-                )
-                embedded_chunks.append(embedded_chunk)
-                self.stats["total_chunks_processed"] += 1
-                self.stats["total_tokens"] += chunk.token_count
-            
-            if failed_indices:
-                self.stats["total_failures"] += len(failed_indices)
-        except Exception as e:
-            logger.error(f"Failed to encode chunks: {e}")
-            self.stats["total_failures"] += len(texts)
-            failed_indices = list(range(len(texts)))
+            batch = self.embedder.embed([embedding_input(chunks[i]) for i in positions], "document")
+        except Exception as e:  # EmbeddingError, or a malformed response: the batch fails, the run continues
+            self.last_error = str(e)
+            logger.error(f"EMBED | {len(positions)} chunks failed: {e}")
+            return [], positions
 
-        return embedded_chunks, failed_indices
+        embedded = [
+            EmbeddedChunk(
+                **chunks[i].model_dump(), embedding=vector,
+                embedding_model=self.embedder.model, index_id=self.embedder.index_id,
+            )
+            for i, vector in zip(positions, batch.vectors)
+        ]
+        return embedded, []

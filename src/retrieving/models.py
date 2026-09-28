@@ -17,5 +17,6 @@ class RetrievalResult(BaseModel):
     search_latency_ms: float = 0.0
     rerank_latency_ms: float = 0.0
     embedding_tokens: int = 0
+    embedding_cost_usd: float = 0.0
     rerank_tokens: int = 0
     chunks: List[RetrievedChunk]

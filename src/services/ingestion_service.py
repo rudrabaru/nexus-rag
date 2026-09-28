@@ -16,8 +16,11 @@ from typing import Optional
 import procrastinate
 from fastapi import HTTPException, UploadFile
 
-from src.ingestion.url_policy import UnsafeUrlError, validate_public_url
-from src.jobs.contract import INGEST_QUEUE, INGEST_TASK, IngestionRequest
+from src.config import get_settings
+from src.crawling.policy import check_fetchable
+from src.crawling.sitemap import is_sitemap_url
+from src.ingestion.url_policy import UnsafeUrlError
+from src.jobs.contract import FETCH_QUEUE, FETCH_TASK, INGEST_QUEUE, INGEST_TASK, IngestionRequest
 from src.registry.database import DocumentRegistry
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
@@ -43,14 +46,30 @@ async def _check_quota(registry: DocumentRegistry, tenant_id: str) -> None:
         )
 
 
+async def _check_url(registry: DocumentRegistry, tenant_id: str, url: str) -> None:
+    """The fetch policy (https, public address, domain lists) and the tenant's daily page quota."""
+    settings = get_settings()
+    try:
+        await asyncio.to_thread(check_fetchable, url, settings.allowed_fetch_domains, settings.denied_fetch_domains)
+    except UnsafeUrlError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if await asyncio.to_thread(registry.pages_fetched_today, tenant_id) >= settings.fetch_daily_page_quota:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Daily web page quota reached ({settings.fetch_daily_page_quota} pages per 24 hours). Upload files instead, or try later.",
+        )
+
+
 async def _defer_job(job_queue: procrastinate.App, doc_id: str, request: IngestionRequest) -> None:
     """
-    lock=doc_id serialises concurrent jobs for the same document (e.g. a resume retried
-    while the original run is still in flight), so two workers never write the same
-    document's chunks at once.
+    A URL goes to the fetch queue first (the fetch worker then defers ingest); an upload goes
+    straight to ingest. lock=doc_id serialises concurrent jobs for the same document (e.g. a
+    resume retried while the original run is still in flight), so two workers never write
+    the same document's chunks at once.
     """
+    task, queue = (FETCH_TASK, FETCH_QUEUE) if request.url else (INGEST_TASK, INGEST_QUEUE)
     await asyncio.to_thread(
-        lambda: job_queue.configure_task(INGEST_TASK, queue=INGEST_QUEUE, lock=doc_id).defer(**request.model_dump())
+        lambda: job_queue.configure_task(task, queue=queue, lock=doc_id).defer(**request.model_dump())
     )
 
 
@@ -60,7 +79,6 @@ async def prepare_and_queue_ingestion(
     tenant_id: str,
     url: Optional[str],
     file: Optional[UploadFile],
-    extract_visuals: bool,
     resume: bool,
 ) -> dict:
     """Validates the request, registers the job durably, and defers it to the worker queue."""
@@ -68,10 +86,7 @@ async def prepare_and_queue_ingestion(
         raise HTTPException(status_code=400, detail="Must provide either url or file")
 
     if url:
-        try:
-            await asyncio.to_thread(validate_public_url, url)
-        except UnsafeUrlError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        await _check_url(registry, tenant_id, url)
 
     await _check_quota(registry, tenant_id)
 
@@ -82,7 +97,7 @@ async def prepare_and_queue_ingestion(
 
     if url:
         doc_id = _doc_id(tenant_id, url)
-        format_type = "sitemap" if (url.lower().endswith(".xml") or "sitemap" in url.lower()) else "web"
+        format_type = "sitemap" if is_sitemap_url(url) else "web"
     else:
         filename = os.path.basename(file.filename)
         ext = os.path.splitext(filename)[1].lower()
@@ -125,7 +140,7 @@ async def prepare_and_queue_ingestion(
     job_id = str(uuid.uuid4())
     request = IngestionRequest(
         job_id=job_id, doc_id=doc_id, tenant_id=tenant_id, url=url, filename=filename,
-        content_hash=content_hash, extract_visuals=extract_visuals, resume=resume,
+        content_hash=content_hash, resume=resume,
     )
     await asyncio.to_thread(
         registry.register_job, job_id, doc_id, request.source_ref, format_type, tenant_id, content_hash, upload=upload,
@@ -134,7 +149,7 @@ async def prepare_and_queue_ingestion(
 
     response = {"job_id": job_id, "status": "queued"}
     if format_type == "sitemap":
-        response["warning"] = "Sitemap detected. Pages will be crawled sequentially."
+        response["warning"] = "Sitemap detected. Up to 50 pages are fetched one at a time through a reader API."
     elif total_size and total_size / 2000 > MAX_SITEMAP_ESTIMATE_CHUNKS:
         response["warning"] = (
             f"Large document (~{int(total_size / 2000)} estimated chunks). "

@@ -8,10 +8,14 @@ search-facing side, used on the request event loop.
 
 Tenant isolation is default-deny: a missing or wildcard tenant returns nothing, and no SQL is
 issued, unless the caller explicitly opts into a global search (offline evaluation only).
+
+A store is bound to one embedding index (provider:model). Dense and sparse search are both
+scoped to it: a query vector is only comparable with vectors of the same model, and keeping
+sparse on the same rows means hybrid fusion never mixes two copies of one chunk.
 """
 import json
 import logging
-from typing import Iterable, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from pgvector.sqlalchemy import HALFVEC
 from sqlalchemy import Text, bindparam, cast, func, literal_column, select
@@ -19,9 +23,7 @@ from sqlalchemy.dialects.postgresql import TSQUERY
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from src.embedding.models import EmbeddedChunk
 from src.registry.schema import EMBEDDING_DIMENSION, TEXT_SEARCH_CONFIG, chunks
-from src.retrieving.chunk_writes import _chunk_row, existing_source_urls, write_rows
 from src.retrieving.models import RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -33,6 +35,7 @@ _TEXT_SEARCH_CONFIG = literal_column(f"'{TEXT_SEARCH_CONFIG}'::regconfig")
 _METADATA_COLUMNS = (
     chunks.c.chunk_id,
     chunks.c.tenant_id,
+    chunks.c.index_id,
     chunks.c.doc_id,
     chunks.c.source_document,
     chunks.c.source_url,
@@ -74,35 +77,17 @@ def _to_retrieved_chunk(row, score: float) -> RetrievedChunk:
 
 
 class ChunkStore:
-    def __init__(self, sync_engine: Engine, async_engine: AsyncEngine):
+    def __init__(self, sync_engine: Engine, async_engine: AsyncEngine, index_id: str):
         self._sync_engine = sync_engine
         self._async_engine = async_engine
+        self.index_id = index_id
         self.distance_metric = "cosine"
 
     def get_collection_size(self) -> int:
+        """Chunks in this store's index, across all tenants."""
+        stmt = select(func.count()).select_from(chunks).where(chunks.c.index_id == self.index_id)
         with self._sync_engine.connect() as conn:
-            return conn.execute(select(func.count()).select_from(chunks)).scalar_one()
-
-    def load_chunks(self, embedded_chunks: Iterable[EmbeddedChunk]) -> int:
-        """
-        Convenience wrapper around chunk_writes.write_chunks, opening its own transaction. For
-        a write that must commit atomically with other tables (an ingestion job's status),
-        call write_chunks(conn, ...) directly on that shared transaction instead
-        (src/jobs/commit.py).
-
-        Rows are built (and validated — see chunk_writes._chunk_row) before opening the
-        transaction, so invalid input never costs a database round trip.
-        """
-        rows = [_chunk_row(c) for c in embedded_chunks]
-        if not rows:
-            return 0
-        with self._sync_engine.begin() as conn:
-            return write_rows(conn, rows)
-
-    def get_existing_urls(self, tenant_id: str, doc_id: str) -> set:
-        """Convenience wrapper around chunk_writes.existing_source_urls, opening its own connection."""
-        with self._sync_engine.connect() as conn:
-            return existing_source_urls(conn, tenant_id, doc_id)
+            return conn.execute(stmt).scalar_one()
 
     # ── Searches (async, called on the request event loop) ──────────────────
 
@@ -115,7 +100,12 @@ class ChunkStore:
 
         query_vector = cast(bindparam("query_vector", vector_literal(query_embedding), type_=Text), HALFVEC(EMBEDDING_DIMENSION))
         distance = chunks.c.embedding.cosine_distance(query_vector)
-        stmt = select(*_METADATA_COLUMNS, chunks.c.chunk_text, distance.label("distance")).order_by(distance).limit(top_k)
+        stmt = (
+            select(*_METADATA_COLUMNS, chunks.c.chunk_text, distance.label("distance"))
+            .where(chunks.c.index_id == self.index_id)
+            .order_by(distance)
+            .limit(top_k)
+        )
         if tenant:
             stmt = stmt.where(chunks.c.tenant_id == tenant)
 
@@ -151,12 +141,11 @@ class ChunkStore:
                 fallback_used = True
         return [_to_retrieved_chunk(row, row["score"]) for row in rows], fallback_used
 
-    @staticmethod
-    async def _run_sparse(conn, tsquery, tenant: Optional[str], limit: int):
+    async def _run_sparse(self, conn, tsquery, tenant: Optional[str], limit: int):
         rank = func.ts_rank_cd(chunks.c.search_vector, tsquery)
         stmt = (
             select(*_METADATA_COLUMNS, chunks.c.chunk_text, rank.label("score"))
-            .where(chunks.c.search_vector.op("@@")(tsquery))
+            .where(chunks.c.index_id == self.index_id, chunks.c.search_vector.op("@@")(tsquery))
             .order_by(rank.desc())
             .limit(limit)
         )

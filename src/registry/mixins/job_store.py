@@ -4,8 +4,9 @@ from sqlalchemy import bindparam, case, delete, func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.engine import Connection
 
+from src.registry.mixins.fetch_store import delete_fetched_pages
 from src.registry.rows import row_to_dict, utcnow
-from src.registry.schema import documents, ingest_sources, jobs
+from src.registry.schema import chunks, documents, ingest_sources, jobs
 
 TERMINAL_STATUSES = ("complete", "failed")
 STATUSES_WITH_DOCUMENT_ERROR = ("failed", "partial_success")
@@ -131,20 +132,8 @@ class JobStoreMixin:
                     .values(status=status, error=error, updated_at=utcnow())
                 )
 
-    def complete_job(
-        self,
-        job_id: str,
-        stats: Dict[str, Any],
-        status: str = "complete",
-        metadata: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None,
-    ) -> None:
-        """Convenience wrapper around the module-level complete_job, opening its own transaction."""
-        with self._engine.begin() as conn:
-            complete_job(conn, job_id, stats, status=status, metadata=metadata, error=error)
-
     def fail_job(self, job_id: str, error: str) -> None:
-        """Final failure: marks the job and its document failed and discards the pending upload, atomically."""
+        """Final failure: marks the job and its document failed and discards its pending upload or fetched pages, atomically."""
         now = utcnow()
         with self._engine.begin() as conn:
             conn.execute(
@@ -156,6 +145,35 @@ class JobStoreMixin:
                 .values(status="failed", error=error, updated_at=now)
             )
             delete_ingest_source(conn, job_id)
+            delete_fetched_pages(conn, job_id)
+
+    def complete_as_duplicate(self, job_id: str, duplicate_of: str) -> None:
+        """
+        The job's content is already indexed as another document of the same tenant. Like the
+        API's upload dedup, the job is re-pointed at that document and completed, and its source
+        rows are discarded. The placeholder document it registered is deleted too, unless it
+        holds chunks or other jobs (a resumed document), all in one transaction.
+        """
+        with self._engine.begin() as conn:
+            placeholder = conn.execute(select(jobs.c.doc_id).where(jobs.c.job_id == job_id)).scalar_one_or_none()
+            conn.execute(
+                update(jobs)
+                .where(jobs.c.job_id == job_id)
+                .values(
+                    doc_id=duplicate_of, status="complete", progress_pct=100, finished_at=utcnow(),
+                    metadata=_merged_metadata({"duplicate_of": duplicate_of}),
+                )
+            )
+            delete_ingest_source(conn, job_id)
+            delete_fetched_pages(conn, job_id)
+            if placeholder and placeholder != duplicate_of:
+                conn.execute(
+                    delete(documents).where(
+                        documents.c.doc_id == placeholder,
+                        ~select(chunks.c.chunk_id).where(chunks.c.doc_id == placeholder).exists(),
+                        ~select(jobs.c.job_id).where(jobs.c.doc_id == placeholder).exists(),
+                    )
+                )
 
     def get_job(self, job_id: str) -> Optional[Dict[str, Any]]:
         with self._engine.connect() as conn:

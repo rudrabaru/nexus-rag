@@ -51,5 +51,6 @@ class HybridRetriever:
             embedding_latency_ms=dense_result.embedding_latency_ms,
             search_latency_ms=max(dense_result.search_latency_ms, sparse_result.search_latency_ms),
             embedding_tokens=dense_result.embedding_tokens,
+            embedding_cost_usd=dense_result.embedding_cost_usd,
             chunks=final_chunks,
         )

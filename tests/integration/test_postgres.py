@@ -13,11 +13,13 @@ from sqlalchemy import func, select, text
 from src.embedding.models import EmbeddedChunk
 from src.observability.logger import PipelineLogger
 from src.registry.auth_store import AuthStore
-from src.registry.database import DocumentRegistry
+from src.registry.database import DocumentRegistry, add_tenant_tokens
 from src.registry.metrics_store import MetricsStore
-from src.registry.schema import EMBEDDING_DIMENSION, chunks, pipeline_events, query_logs, tenants
+from src.registry.mixins.job_store import complete_job
+from src.registry.schema import EMBEDDING_DIMENSION, chunks, embedding_indexes, pipeline_events, query_logs, tenants
 from src.registry.schema_version import ALEMBIC_INI, assert_schema_current
 from src.retrieving.chunk_store import ChunkStore
+from src.retrieving.chunk_writes import existing_source_urls, write_chunks
 
 pytestmark = pytest.mark.usefixtures("clean_tables")
 
@@ -31,12 +33,15 @@ def unit_vector(i: int, j: int = None) -> list:
     return list(v / np.linalg.norm(v))
 
 
-def chunk(chunk_id, tenant="tenant-1", doc_id="doc-1", chunk_text="hello world", vector=None):
+TEST_INDEX = "test:test-model"
+
+
+def chunk(chunk_id, tenant="tenant-1", doc_id="doc-1", chunk_text="hello world", vector=None, index_id=TEST_INDEX):
     return EmbeddedChunk(
         chunk_id=chunk_id, source_url=f"https://example.com/{doc_id}", source_document=f"Doc {doc_id}", title="T",
         heading_path=["Guide", "Setup"], chunk_index=0, chunk_text=chunk_text, token_count=3, char_start=0, char_end=len(chunk_text),
         document_version="v", chunk_version="v", tenant_id=tenant, doc_id=doc_id,
-        embedding=vector or unit_vector(0), embedding_model="test-model",
+        embedding=vector or unit_vector(0), embedding_model=index_id.split(":")[1], index_id=index_id,
     )
 
 
@@ -47,7 +52,16 @@ def registry(pg_engine):
 
 @pytest.fixture
 def store(pg_engine, pg_async_engine):
-    return ChunkStore(pg_engine, pg_async_engine)
+    return ChunkStore(pg_engine, pg_async_engine, TEST_INDEX)
+
+
+@pytest.fixture
+def load(pg_engine):
+    """Writes chunks in their own transaction, the way src/jobs/commit.py does inside its own."""
+    def _load(embedded):
+        with pg_engine.begin() as conn:
+            write_chunks(conn, embedded)
+    return _load
 
 
 def add_document(registry, doc_id="doc-1", tenant="tenant-1", job_id=None):
@@ -93,10 +107,10 @@ async def test_search_connections_receive_the_hnsw_settings(pg_async_engine):
 
 # ── Chunk store ──────────────────────────────────────────────────────────────
 
-async def test_dense_search_returns_nearest_first_within_the_tenant(registry, store):
+async def test_dense_search_returns_nearest_first_within_the_tenant(load, registry, store):
     add_document(registry)
     add_document(registry, doc_id="doc-x", tenant="tenant-2")
-    store.load_chunks([
+    load([
         chunk("c-near", vector=unit_vector(0)),
         chunk("c-mid", vector=unit_vector(0, 1)),
         chunk("c-far", vector=unit_vector(5)),
@@ -111,12 +125,12 @@ async def test_dense_search_returns_nearest_first_within_the_tenant(registry, st
     assert json.loads(results[0].metadata["heading_path"]) == ["Guide", "Setup"]
 
 
-async def test_two_tenants_can_hold_the_same_chunk_id(registry, store):
+async def test_two_tenants_can_hold_the_same_chunk_id(load, registry, store):
     """Regression: Qdrant keyed points by chunk_id alone, so the second tenant overwrote the first."""
     add_document(registry, doc_id="doc-a", tenant="tenant-1")
     add_document(registry, doc_id="doc-b", tenant="tenant-2")
-    store.load_chunks([chunk("same-url_chunk_000", tenant="tenant-1", doc_id="doc-a", chunk_text="tenant one text")])
-    store.load_chunks([chunk("same-url_chunk_000", tenant="tenant-2", doc_id="doc-b", chunk_text="tenant two text")])
+    load([chunk("same-url_chunk_000", tenant="tenant-1", doc_id="doc-a", chunk_text="tenant one text")])
+    load([chunk("same-url_chunk_000", tenant="tenant-2", doc_id="doc-b", chunk_text="tenant two text")])
 
     one = await store.search_dense(unit_vector(0), top_k=5, tenant_id="tenant-1")
     two = await store.search_dense(unit_vector(0), top_k=5, tenant_id="tenant-2")
@@ -124,10 +138,10 @@ async def test_two_tenants_can_hold_the_same_chunk_id(registry, store):
     assert [c.text for c in two] == ["tenant two text"]
 
 
-async def test_reloading_a_chunk_replaces_it_in_both_indexes(registry, store):
+async def test_reloading_a_chunk_replaces_it_in_both_indexes(load, registry, store):
     add_document(registry)
-    store.load_chunks([chunk("c1", chunk_text="original wording")])
-    store.load_chunks([chunk("c1", chunk_text="replacement wording")])
+    load([chunk("c1", chunk_text="original wording")])
+    load([chunk("c1", chunk_text="replacement wording")])
 
     assert store.get_collection_size() == 1
     hits, _ = await store.search_sparse("replacement", tenant_id="tenant-1")
@@ -136,9 +150,52 @@ async def test_reloading_a_chunk_replaces_it_in_both_indexes(registry, store):
     assert stale == []
 
 
-async def test_sparse_search_stems_and_falls_back_from_and_to_or(registry, store):
+async def test_one_chunk_can_live_in_two_indexes_and_each_store_sees_only_its_own(load, registry, store, pg_engine, pg_async_engine):
+    """A corpus re-embedded with another model coexists with the original, for an A/B comparison."""
     add_document(registry)
-    store.load_chunks([
+    other = ChunkStore(pg_engine, pg_async_engine, "voyage:voyage-4")
+    load([chunk("c1", chunk_text="shared wording")])
+    load([chunk("c1", chunk_text="shared wording", index_id="voyage:voyage-4", vector=unit_vector(3))])
+
+    assert store.get_collection_size() == 1 and other.get_collection_size() == 1
+    [hit] = await other.search_dense(unit_vector(3), top_k=5, tenant_id="tenant-1")
+    assert hit.metadata["index_id"] == "voyage:voyage-4"
+    sparse, _ = await store.search_sparse("shared", tenant_id="tenant-1")
+    assert [h.metadata["index_id"] for h in sparse] == [TEST_INDEX]
+
+
+def test_writing_to_a_new_index_registers_it(load, registry, store, pg_engine):
+    add_document(registry)
+    load([chunk("c1")])
+    with pg_engine.connect() as conn:
+        row = conn.execute(select(embedding_indexes).where(embedding_indexes.c.index_id == TEST_INDEX)).mappings().one()
+    assert (row["provider"], row["model"], row["dimension"]) == ("test", "test-model", EMBEDDING_DIMENSION)
+
+
+def test_fetched_pages_round_trip_and_are_discarded_when_the_job_fails(registry):
+    add_document(registry, job_id="job-1")
+    registry.store_fetched_page("job-1", "https://example.com/b", "B", "# B", "jina")
+    registry.store_fetched_page("job-1", "https://example.com/a", "A", "# A", "jina")
+    registry.store_fetched_page("job-1", "https://example.com/a", "A2", "# A again", "firecrawl")  # a retried fetch
+
+    assert registry.fetched_urls("job-1") == {"https://example.com/a", "https://example.com/b"}
+    pages = {p["url"]: p for p in registry.get_fetched_pages("job-1")}
+    assert pages["https://example.com/a"]["markdown"] == "# A again"
+
+    registry.fail_job("job-1", "boom")
+    assert registry.get_fetched_pages("job-1") == []
+
+
+def test_the_daily_quota_counts_only_the_tenants_successful_fetches(registry):
+    for outcome in ("fetched", "fetched", "robots_blocked", "failed"):
+        registry.log_fetch("tenant-1", "job-1", "https://example.com/x", outcome, "jina")
+    registry.log_fetch("tenant-2", "job-2", "https://example.com/y", "fetched", "jina")
+    assert registry.pages_fetched_today("tenant-1") == 2
+
+
+async def test_sparse_search_stems_and_falls_back_from_and_to_or(load, registry, store):
+    add_document(registry)
+    load([
         chunk("c-both", chunk_text="Configure the firewall rules before running the deployment."),
         chunk("c-one", chunk_text="Firewall basics."),
     ])
@@ -150,38 +207,39 @@ async def test_sparse_search_stems_and_falls_back_from_and_to_or(registry, store
     assert {c.chunk_id for c in either} == {"c-both", "c-one"} and fallback is True
 
 
-async def test_sparse_search_treats_query_syntax_as_plain_text(registry, store):
+async def test_sparse_search_treats_query_syntax_as_plain_text(load, registry, store):
     add_document(registry)
-    store.load_chunks([chunk("c1", chunk_text="plain text")])
+    load([chunk("c1", chunk_text="plain text")])
     for hostile in ["a & | ! (", "'; DROP TABLE chunks; --", ":* <-> !!"]:
         await store.search_sparse(hostile, tenant_id="tenant-1")
     assert store.get_collection_size() == 1
 
 
-def test_halfvec_round_trip_preserves_direction(registry, store, pg_engine):
+def test_halfvec_round_trip_preserves_direction(load, registry, store, pg_engine):
     add_document(registry)
     original = np.random.default_rng(0).normal(size=EMBEDDING_DIMENSION)
     original /= np.linalg.norm(original)
-    store.load_chunks([chunk("c1", vector=list(original))])
+    load([chunk("c1", vector=list(original))])
 
     with pg_engine.connect() as conn:
         stored = np.asarray(conn.execute(select(chunks.c.embedding)).scalar_one(), dtype=np.float64)
     assert float(original @ stored / np.linalg.norm(stored)) > 0.9999
 
 
-def test_existing_urls_are_scoped_to_tenant_and_document(registry, store):
+def test_existing_urls_are_scoped_to_tenant_and_document(load, registry, pg_engine):
     add_document(registry, doc_id="doc-1")
     add_document(registry, doc_id="doc-2")
-    store.load_chunks([chunk("a", doc_id="doc-1"), chunk("b", doc_id="doc-2")])
-    assert store.get_existing_urls("tenant-1", "doc-1") == {"https://example.com/doc-1"}
-    assert store.get_existing_urls("tenant-2", "doc-1") == set()
+    load([chunk("a", doc_id="doc-1"), chunk("b", doc_id="doc-2")])
+    with pg_engine.connect() as conn:
+        assert existing_source_urls(conn, "tenant-1", TEST_INDEX, "doc-1") == {"https://example.com/doc-1"}
+        assert existing_source_urls(conn, "tenant-2", TEST_INDEX, "doc-1") == set()
 
 
 # ── Registry ─────────────────────────────────────────────────────────────────
 
-def test_deleting_a_document_cascades_to_its_chunks_and_jobs(registry, store):
+def test_deleting_a_document_cascades_to_its_chunks_and_jobs(load, registry, store):
     add_document(registry)
-    store.load_chunks([chunk("c1"), chunk("c2")])
+    load([chunk("c1"), chunk("c2")])
     assert registry.get_document("doc-1")["chunk_count"] == 2
 
     assert registry.delete_document("doc-1") is True
@@ -190,12 +248,13 @@ def test_deleting_a_document_cascades_to_its_chunks_and_jobs(registry, store):
     assert registry.delete_document("doc-1") is False
 
 
-def test_job_lifecycle_and_atomic_metadata_merge(registry, store):
+def test_job_lifecycle_and_atomic_metadata_merge(load, registry, pg_engine):
     add_document(registry)
     registry.update_job_status("job-doc-1", "processing", 10, metadata={"total_pages": 5})
     registry.update_job_status("job-doc-1", "processing", 50, metadata={"indexed_pages": 3})
-    store.load_chunks([chunk("c1")])
-    registry.complete_job("job-doc-1", {"total_tokens": 42}, status="partial_success")
+    load([chunk("c1")])
+    with pg_engine.begin() as conn:
+        complete_job(conn, "job-doc-1", {"total_tokens": 42}, status="partial_success")
 
     job = registry.get_job("job-doc-1")
     assert job["metadata"] == {"total_pages": 5, "indexed_pages": 3}
@@ -209,9 +268,10 @@ def test_job_lifecycle_and_atomic_metadata_merge(registry, store):
     assert isinstance(doc["ingested_at"], str)
 
 
-def test_re_registering_a_complete_document_keeps_it_complete(registry):
+def test_re_registering_a_complete_document_keeps_it_complete(registry, pg_engine):
     add_document(registry, job_id="j1")
-    registry.complete_job("j1", {})
+    with pg_engine.begin() as conn:
+        complete_job(conn, "j1", {})
     registry.register_job("j2", "doc-1", "https://example.com/doc-1", "web", "tenant-1")
     assert registry.get_document("doc-1")["status"] == "complete"
 
@@ -225,19 +285,51 @@ def test_fail_job_marks_the_job_and_document_failed_and_discards_any_pending_upl
     assert registry.get_document("doc-1")["status"] == "failed"
 
 
-def test_quota_and_counts_are_per_tenant(registry, store):
+def test_a_duplicate_url_ingestion_completes_against_the_existing_document(load, registry):
+    """
+    Regression: a fetched page whose content matched an indexed document was marked complete,
+    but its placeholder document stayed "pending" forever and its fetched pages were never deleted.
+    """
+    add_document(registry, doc_id="doc-orig", job_id="j-orig")
+    load([chunk("c1", doc_id="doc-orig")])
+    add_document(registry, doc_id="doc-dup", job_id="j-dup")
+    registry.store_fetched_page("j-dup", "https://example.com/mirror", "M", "# same text", "jina")
+
+    registry.complete_as_duplicate("j-dup", "doc-orig")
+
+    job = registry.get_job("j-dup")
+    assert (job["doc_id"], job["status"], job["progress_pct"]) == ("doc-orig", "complete", 100)
+    assert job["metadata"] == {"duplicate_of": "doc-orig"}
+    assert registry.get_document("doc-dup") is None
+    assert registry.get_fetched_pages("j-dup") == []
+    assert registry.get_document("doc-orig")["chunk_count"] == 1
+
+
+def test_a_duplicate_keeps_a_placeholder_that_already_holds_chunks(load, registry):
+    """A resumed document with chunks of its own is not deleted as a placeholder."""
+    add_document(registry, doc_id="doc-orig", job_id="j-orig")
+    add_document(registry, doc_id="doc-resumed", job_id="j-resume")
+    load([chunk("c1", doc_id="doc-resumed")])
+
+    registry.complete_as_duplicate("j-resume", "doc-orig")
+
+    assert registry.get_document("doc-resumed")["chunk_count"] == 1
+
+
+def test_quota_and_counts_are_per_tenant(load, registry, store):
     add_document(registry, doc_id="doc-1", tenant="tenant-1")
     add_document(registry, doc_id="doc-2", tenant="tenant-2")
-    store.load_chunks([chunk("a"), chunk("b"), chunk("c", tenant="tenant-2", doc_id="doc-2")])
+    load([chunk("a"), chunk("b"), chunk("c", tenant="tenant-2", doc_id="doc-2")])
     assert registry.get_tenant_quota("tenant-1") == 2
     assert registry.get_doc_count("tenant-2") == 1
     assert [d["doc_id"] for d in registry.list_documents("tenant-2")] == ["doc-2"]
     assert len(registry.list_documents(None)) == 2
 
 
-def test_tenant_token_usage_accumulates(registry, pg_engine):
-    registry.increment_tenant_embedding_tokens("tenant-1", 100)
-    registry.increment_tenant_embedding_tokens("tenant-1", 50)
+def test_tenant_token_usage_accumulates(pg_engine):
+    for tokens in (100, 50, 0):
+        with pg_engine.begin() as conn:
+            add_tenant_tokens(conn, "tenant-1", tokens)
     with pg_engine.connect() as conn:
         assert conn.execute(select(tenants.c.total_embedding_tokens)).scalar_one() == 150
 

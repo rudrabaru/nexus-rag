@@ -3,9 +3,13 @@ The Postgres schema. One MetaData object is shared by the sync engine (registry,
 keys, metrics), the async engine (query-time search) and Alembic (migrations).
 
 Design notes:
-- chunks is keyed by (tenant_id, chunk_id). chunk_id is md5(source_url)_chunk_NNN, so two
-  tenants ingesting the same URL produce the same chunk_id. The legacy Qdrant store keyed
-  points by chunk_id alone, which let the second tenant's upsert overwrite the first's.
+- chunks is keyed by (tenant_id, index_id, chunk_id). chunk_id is md5(source_url)_chunk_NNN,
+  so two tenants ingesting the same URL produce the same chunk_id (the legacy Qdrant store
+  keyed points by chunk_id alone, which let the second tenant's upsert overwrite the first's).
+  index_id is the embedding index (provider:model): the same chunk can exist once per index,
+  so a corpus can be re-embedded with another model and both compared on the same text.
+- embedding_indexes has one row per index. Vectors of different models are never compared;
+  every search is scoped to one index.
 - chunks.doc_id cascades from documents, so deleting a document removes its chunks, vectors
   and sparse index entries in one transaction. Nothing can diverge between them.
 - search_vector is a generated column: the sparse index cannot fall out of sync with the text.
@@ -34,8 +38,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from pgvector.sqlalchemy import HALFVEC
 
-# Matches jina-embeddings-v3, the model that built the current corpus. Item 8 makes the
-# embedding model a per-index choice; until then one fixed width is enforced by the column.
+# One width for every index: voyage-4 (output_dimension=1024), bge-m3 and jina-embeddings-v3
+# all produce it. A model with another width needs its own column; providers.py refuses
+# mismatched vectors instead of letting the insert fail.
 EMBEDDING_DIMENSION = 1024
 
 # 'english' stemming matches the porter tokenizer of the SQLite FTS5 index this replaces.
@@ -123,10 +128,52 @@ ingest_sources = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=_now()),
 )
 
+# Pages fetched by the fetch worker, waiting for the parse worker (the URL counterpart of
+# ingest_sources). The parse worker never contacts a website: it reads these rows. Deleted
+# with the commit that stores the document's chunks, or when the job finally fails.
+fetched_pages = Table(
+    "fetched_pages",
+    metadata,
+    Column("job_id", Text, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False),
+    Column("url", Text, nullable=False),
+    Column("title", Text),
+    Column("markdown", Text, nullable=False),
+    Column("provider", Text, nullable=False),
+    Column("fetched_at", DateTime(timezone=True), nullable=False, server_default=_now()),
+    PrimaryKeyConstraint("job_id", "url"),
+)
+
+# Audit trail of every URL a tenant asked us to fetch and what happened. No foreign keys, so
+# it outlives document deletion: abuse stays attributable, and it backs the daily page quota.
+fetch_log = Table(
+    "fetch_log",
+    metadata,
+    Column("log_id", BigInteger, Identity(), primary_key=True),
+    Column("tenant_id", Text, nullable=False),
+    Column("job_id", Text),
+    Column("url", Text, nullable=False),
+    Column("outcome", Text, nullable=False),  # fetched | sitemap | robots_blocked | denied | failed | quota_exceeded
+    Column("provider", Text),
+    Column("detail", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=_now()),
+    Index(None, "tenant_id", "created_at"),
+)
+
+embedding_indexes = Table(
+    "embedding_indexes",
+    metadata,
+    Column("index_id", Text, primary_key=True),  # provider:model
+    Column("provider", Text, nullable=False),
+    Column("model", Text, nullable=False),
+    Column("dimension", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=_now()),
+)
+
 chunks = Table(
     "chunks",
     metadata,
     Column("tenant_id", Text, nullable=False),
+    Column("index_id", Text, ForeignKey("embedding_indexes.index_id"), nullable=False),
     Column("chunk_id", Text, nullable=False),
     Column("doc_id", Text, ForeignKey("documents.doc_id", ondelete="CASCADE"), nullable=False, index=True),
     Column("source_document", Text, nullable=False),
@@ -149,8 +196,10 @@ chunks = Table(
         Computed(f"to_tsvector('{TEXT_SEARCH_CONFIG}', chunk_text)", persisted=True),
     ),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=_now()),
-    PrimaryKeyConstraint("tenant_id", "chunk_id"),
-    # m=16 / ef_construction=64 are pgvector's defaults, not tuned values.
+    PrimaryKeyConstraint("tenant_id", "index_id", "chunk_id"),
+    # m=16 / ef_construction=64 are pgvector's defaults, not tuned values. One graph holds every
+    # index; searches filter by index_id with iterative scans (src/registry/engine.py). With a
+    # second large index, a partial HNSW index per index_id would keep graphs model-pure.
     Index(
         "ix_chunks_embedding_hnsw",
         "embedding",

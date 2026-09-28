@@ -1,6 +1,8 @@
-# The API: serving, retrieval and generation. It queues ingestion jobs but never runs them
-# (src/jobs/worker.py, in Dockerfile.worker, does), so it installs no document-parsing
-# dependency (markitdown, pymupdf, Pillow, ...) — see requirements-api.txt.
+# The slim image: the API, and (same image, different command) the fetch worker. Neither parses
+# documents, so no parser is installed (requirements-api.txt; CI checks none is importable).
+#
+#   API:           default CMD below
+#   Fetch worker:  procrastinate --app=src.jobs.fetch_worker.app worker --queues=fetch --concurrency=1
 FROM python:3.11-slim
 
 WORKDIR /app
@@ -21,6 +23,8 @@ COPY . .
 EXPOSE 8000
 
 ENV PYTHONIOENCODING=utf-8
+# The `procrastinate` console script (fetch worker) does not put the working directory on sys.path.
+ENV PYTHONPATH=/app
 
 # Migrations are applied as a release step (`alembic upgrade head`), never on boot.
 CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]

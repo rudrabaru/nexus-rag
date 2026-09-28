@@ -9,9 +9,8 @@ def render_documents_tab(API_BASE_URL, api_headers):
     
     col_input1, col_input2 = st.columns(2)
     with col_input1:
-        ingest_url = st.text_input("Website URL to ingest")
-        sitemap_filter = st.text_input("URL Prefix Filter (optional, e.g. /docs/ or /blog/)")
-        extract_visuals = st.toggle("Extract Visuals (Images/Charts)", value=False)
+        ingest_url = st.text_input("Web page or sitemap URL (https)")
+        sitemap_filter = st.text_input("Sitemap URL filter (optional, e.g. /docs/ or /blog/)")
     with col_input2:
         ingest_files = st.file_uploader("Or upload files", type=["pdf", "docx", "md", "txt"], accept_multiple_files=True)
     
@@ -25,7 +24,7 @@ def render_documents_tab(API_BASE_URL, api_headers):
         else:
             with st.spinner("Queuing ingestion jobs..."):
                 try:
-                    data = {"extract_visuals": extract_visuals}
+                    data = {}
                     success = True
                     job_ids = []
                     if ingest_url:
@@ -70,7 +69,7 @@ def render_documents_tab(API_BASE_URL, api_headers):
                                     status = j_data.get("status", "processing")
                                     meta = j_data.get("metadata") or {}
                                     total_p = meta.get("total_pages")
-                                    idx_p = meta.get("indexed_pages")
+                                    idx_p = meta.get("fetched_pages")
                                     fail_p = meta.get("failed_pages")
 
                                     if total_p is not None:
@@ -97,7 +96,10 @@ def render_documents_tab(API_BASE_URL, api_headers):
                                 else:
                                     break
                             else:
-                                prog_ph.warning(f"⏳ [{src_name}] Still queued after {MAX_POLL_SECONDS}s — is a worker process running? (`python -m src.jobs.worker`)")
+                                prog_ph.warning(
+                                    f"⏳ [{src_name}] Still queued after {MAX_POLL_SECONDS}s — are the workers running? "
+                                    "(`python -m src.jobs.worker`; URLs also need `python -m src.jobs.fetch_worker`)"
+                                )
                 except Exception as e:
                     st.error(f"Ingestion error: {str(e)}")
                     

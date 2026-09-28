@@ -5,9 +5,6 @@ Why SHA-256 rather than bcrypt/argon2: keys are 256-bit random tokens, so offlin
 infeasible whatever the hash speed. Slow hashes exist to protect low-entropy passwords. This
 is the usual practice for API tokens.
 
-Keys issued before this store (sk_live_<tenant>_<hmac>) keep working when their hash is
-imported into api_keys by `python -m scripts.migrate_legacy`; they are then revocable too.
-
 Validation results are cached per process for CACHE_TTL_SECONDS, because every request
 validates its key twice (rate-limit key and auth dependency) and each miss is a database
 round trip. A revocation takes effect immediately in the process that performs it and within

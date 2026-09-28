@@ -45,3 +45,9 @@ To maintain context between adjacent chunks and avoid cutting off thoughts abrup
 **Conclusions.** The current chunker is not the problem. Two upstream causes are supported by evidence: (1) PDF text extraction loses heading structure; (2) boilerplate that repeats across documents is indexed. Neither justifies replacing the chunker. A generic, structural filter (block text repeated across many documents of one tenant) is the indicated fix for (2); it must be validated against the baselines in the evaluation phase before adoption.
 
 **Open questions (not yet measured):** whether the missing PDF headings affect any benchmark query; whether the 40-tenant pool lets near-identical chunks from different tenants occupy the top-k of an all-tenant evaluation (the evaluator searches with `allow_global=True`).
+
+## Follow-up (item 8, 2026-09-26)
+
+- **(1) PDF structure: addressed upstream, chunker unchanged.** Uploaded PDFs and DOCX files are now parsed by Docling (Phase 1), which emits Markdown headings the existing heading-aware chunker already consumes. On the spike documents every PDF produced headings (6 to 44 per document), where the audit found 97.6% of PDF chunks had no heading path. The chunk-level effect on the live corpus has to be re-measured after re-ingestion; PDFs over the Docling page cap still arrive as plain text without headings.
+- **(2) Cross-document boilerplate: still open.** Reader APIs now return the main page content (Jina Reader; Firecrawl with `onlyMainContent`), which may remove some navigation, but no cross-document filter was added. It needs the baseline comparison first, and that comparison needs the re-ingested corpus.
+- **The chunker was not replaced** (the plan's Docling HybridChunker / Chonkie option), because the audit found nothing wrong with chunk sizing or boundaries.

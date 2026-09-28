@@ -19,7 +19,7 @@ ADMIN_KEY = "test-admin-key-0123456789"
 STATE_KEYS = (
     "ready", "auth_store", "registry", "retriever", "reranker", "generator", "chunk_store",
     "evaluator", "rewriter", "metrics_store", "pipeline_logger", "query_semaphore",
-    "job_queue", "embedding_generator",
+    "job_queue",
 )
 
 
@@ -30,7 +30,7 @@ def settings_env(monkeypatch):
         monkeypatch.delenv(name.upper(), raising=False)
     monkeypatch.setenv("ADMIN_API_KEY", ADMIN_KEY)
     monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@db.invalid/test")
-    monkeypatch.setenv("JINA_API_KEY", "jina-key")
+    monkeypatch.setenv("VOYAGE_API_KEY", "voyage-key")
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
     get_settings.cache_clear()
     yield

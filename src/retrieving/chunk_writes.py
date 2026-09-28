@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.engine import Connection
 
 from src.embedding.models import EmbeddedChunk
-from src.registry.schema import chunks
+from src.registry.schema import EMBEDDING_DIMENSION, chunks, embedding_indexes
 
 WRITE_BATCH_SIZE = 100
 
@@ -24,6 +24,7 @@ def _chunk_row(chunk: EmbeddedChunk) -> dict:
         raise ValueError(f"Chunk {chunk.chunk_id} has no tenant_id or doc_id; refusing to store it.")
     return {
         "tenant_id": chunk.tenant_id,
+        "index_id": chunk.index_id,
         "chunk_id": chunk.chunk_id,
         "doc_id": chunk.doc_id,
         "source_document": chunk.source_document,
@@ -43,17 +44,32 @@ def _chunk_row(chunk: EmbeddedChunk) -> dict:
     }
 
 
+KEY_COLUMNS = ("tenant_id", "index_id", "chunk_id")
+
+
 def chunk_upsert_statement():
-    """Insert-or-replace keyed on (tenant_id, chunk_id); generated and defaulted columns are left to Postgres."""
+    """Insert-or-replace keyed on (tenant_id, index_id, chunk_id); generated and defaulted columns are left to Postgres."""
     stmt = insert(chunks)
-    updatable = [c.name for c in chunks.columns if c.name not in ("tenant_id", "chunk_id", "search_vector", "created_at")]
+    updatable = [c.name for c in chunks.columns if c.name not in (*KEY_COLUMNS, "search_vector", "created_at")]
     return stmt.on_conflict_do_update(
-        index_elements=[chunks.c.tenant_id, chunks.c.chunk_id],
+        index_elements=[chunks.c[name] for name in KEY_COLUMNS],
         set_={name: stmt.excluded[name] for name in updatable},
     )
 
 
+def register_indexes(conn: Connection, index_ids: Iterable[str]) -> None:
+    """Records each index (provider:model) on first use, on the caller's transaction."""
+    for index_id in sorted(set(index_ids)):
+        provider, _, model = index_id.partition(":")
+        conn.execute(
+            insert(embedding_indexes)
+            .values(index_id=index_id, provider=provider, model=model, dimension=EMBEDDING_DIMENSION)
+            .on_conflict_do_nothing(index_elements=[embedding_indexes.c.index_id])
+        )
+
+
 def write_rows(conn: Connection, rows: List[dict]) -> int:
+    register_indexes(conn, (row["index_id"] for row in rows))
     for start in range(0, len(rows), WRITE_BATCH_SIZE):
         conn.execute(chunk_upsert_statement(), rows[start:start + WRITE_BATCH_SIZE])
     return len(rows)
@@ -64,9 +80,10 @@ def write_chunks(conn: Connection, embedded_chunks: Iterable[EmbeddedChunk]) -> 
     return write_rows(conn, [_chunk_row(c) for c in embedded_chunks])
 
 
-def existing_source_urls(conn: Connection, tenant_id: str, doc_id: str) -> set:
-    """Source URLs already indexed for a document, so a partially failed sitemap can resume."""
+def existing_source_urls(conn: Connection, tenant_id: str, index_id: str, doc_id: str) -> set:
+    """Source URLs already indexed for a document in one index, so a partially failed sitemap can resume."""
     stmt = select(distinct(chunks.c.source_url)).where(
-        chunks.c.tenant_id == tenant_id, chunks.c.doc_id == doc_id, chunks.c.source_url.is_not(None)
+        chunks.c.tenant_id == tenant_id, chunks.c.index_id == index_id,
+        chunks.c.doc_id == doc_id, chunks.c.source_url.is_not(None),
     )
     return set(conn.execute(stmt).scalars())
