@@ -61,9 +61,9 @@ def health_check(request: Request):
 
 @app.get("/ready")
 def ready_check(request: Request):
-    # Readiness probe: returns OK only when models are loaded
+    # Readiness probe: 200 only once initialisation has finished; a failed one is not ready either.
     if hasattr(request.app.state, "init_error"):
-        return {"status": "error", "message": request.app.state.init_error}
+        return JSONResponse(status_code=503, content={"status": "error", "message": request.app.state.init_error})
 
     if getattr(request.app.state, "ready", False):
         generator = request.app.state.generator

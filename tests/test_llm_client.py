@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import litellm
 import pytest
 
-from src.generating.llm_client import LLMClient
+from src.generating.llm_client import LLMCall, LLMClient
 from src.generating.models import GenerationConfig
 
 
@@ -53,13 +53,12 @@ def test_successful_call_returns_content_tokens_and_cost(monkeypatch):
     monkeypatch.setattr("src.generating.llm_client.litellm.completion", lambda **kw: response())
     client = LLMClient(config())
 
-    answer, raw, prompt_tokens, completion_tokens = client.call_llm("hi")
+    call = client.call_llm("hi")
 
-    assert answer == "hello"
-    assert (prompt_tokens, completion_tokens) == (10, 5)
-    assert client.last_cost_usd == 0.0042
-    assert client.last_served_provider == "gemini"
-    assert client.last_served_model == "primary-model"
+    assert call.text == "hello" and not call.failed
+    assert (call.prompt_tokens, call.completion_tokens) == (10, 5)
+    assert call.cost_usd == 0.0042
+    assert (call.provider, call.model) == ("gemini", "primary-model")
 
 
 def test_model_string_is_provider_slash_model_name(monkeypatch):
@@ -103,11 +102,12 @@ def test_a_429_on_the_primary_reaches_the_fallback():
     mod.litellm.completion = fake_completion
     try:
         client = LLMClient(config(fallback={"provider": "groq", "model_name": "fallback-model"}))
-        answer, *_ = client.call_llm("hi", max_retries=2)
+        call = client.call_llm("hi", max_retries=2)
     finally:
         mod.litellm.completion = litellm.completion
 
-    assert answer == "from fallback"
+    assert call.text == "from fallback"
+    assert (call.provider, call.model) == ("groq", "fallback-model")  # the model that answered is what gets logged
     # 1 primary attempt + 2 retries, all against the primary, then exactly one fallback call.
     assert calls == ["gemini/primary-model"] * 3 + ["groq/fallback-model"]
 
@@ -116,10 +116,10 @@ def test_no_fallback_configured_returns_a_readable_error_after_retries(monkeypat
     monkeypatch.setattr("src.generating.llm_client.litellm.completion", MagicMock(side_effect=rate_limit_error()))
     client = LLMClient(config())
 
-    answer, raw, prompt_tokens, completion_tokens = client.call_llm("hi", max_retries=2)
+    call = client.call_llm("hi", max_retries=2)
 
-    assert answer.startswith("[Generation failed: RateLimitError")
-    assert (prompt_tokens, completion_tokens) == (0, 0)
+    assert call.text.startswith("[Generation failed: RateLimitError") and call.failed
+    assert (call.prompt_tokens, call.completion_tokens) == (0, 0)
 
 
 def test_a_dead_model_is_not_retried_locally_before_falling_back():
@@ -140,7 +140,7 @@ def test_a_dead_model_is_not_retried_locally_before_falling_back():
     mod.litellm.completion = fake_completion
     try:
         client = LLMClient(config(provider="groq", model_name="dead-model", fallback={"provider": "gemini", "model_name": "backup"}))
-        answer, *_ = client.call_llm("hi", max_retries=3)
+        answer = client.call_llm("hi", max_retries=3).text
     finally:
         mod.litellm.completion = litellm.completion
 
@@ -153,7 +153,7 @@ def test_a_dead_model_with_no_fallback_fails_after_exactly_one_attempt(monkeypat
     monkeypatch.setattr("src.generating.llm_client.litellm.completion", mock)
     client = LLMClient(config())
 
-    answer, *_ = client.call_llm("hi", max_retries=3)
+    answer = client.call_llm("hi", max_retries=3).text
 
     assert "NotFoundError" in answer
     assert mock.call_count == 1
@@ -174,7 +174,7 @@ def test_empty_content_on_a_200_is_treated_as_a_retryable_error(monkeypatch):
     monkeypatch.setattr("src.generating.llm_client.litellm.completion", fake_completion)
     client = LLMClient(config())
 
-    answer, *_ = client.call_llm("hi", max_retries=2)
+    answer = client.call_llm("hi", max_retries=2).text
 
     assert answer == "recovered"
     assert calls["n"] == 2
@@ -185,7 +185,7 @@ def test_an_unclassified_exception_fails_immediately_without_retry(monkeypatch):
     monkeypatch.setattr("src.generating.llm_client.litellm.completion", mock)
     client = LLMClient(config())
 
-    answer, *_ = client.call_llm("hi", max_retries=3)
+    answer = client.call_llm("hi", max_retries=3).text
 
     assert "ValueError" in answer
     assert mock.call_count == 1
@@ -199,10 +199,10 @@ def test_cost_lookup_failure_does_not_break_generation(monkeypatch):
     )
     client = LLMClient(config())
 
-    answer, *_ = client.call_llm("hi")
+    call = client.call_llm("hi")
 
-    assert answer == "hello"
-    assert client.last_cost_usd == 0.0
+    assert call.text == "hello"
+    assert call.cost_usd == 0.0
 
 
 def timeout_error(model="gemini/primary-model"):
@@ -231,7 +231,7 @@ def test_a_timeout_goes_straight_to_the_fallback_without_local_retries():
     mod.litellm.completion = fake_completion
     try:
         client = LLMClient(config(fallback={"provider": "groq", "model_name": "fallback-model"}))
-        answer, *_ = client.call_llm("hi", max_retries=3)
+        answer = client.call_llm("hi", max_retries=3).text
     finally:
         mod.litellm.completion = litellm.completion
 
@@ -255,7 +255,7 @@ async def test_stream_timeout_before_first_token_falls_back_without_retries(monk
     monkeypatch.setattr("src.generating.llm_client.litellm.acompletion", acompletion)
     client = LLMClient(config(fallback={"provider": "groq", "model_name": "fallback-model"}))
 
-    text = "".join([c async for c in client.call_llm_stream("hi", max_retries=3)])
+    text = "".join([c async for c in client.call_llm_stream("hi", LLMCall(), max_retries=3)])
 
     assert text == "fallback answer"
     assert calls == [("gemini/primary-model", 60.0), ("groq/fallback-model", 60.0)]
@@ -292,11 +292,13 @@ async def test_stream_falls_back_when_the_primary_fails_before_any_token(monkeyp
     monkeypatch.setattr("src.generating.llm_client.litellm.acompletion", acompletion)
     client = LLMClient(config(fallback={"provider": "groq", "model_name": "fallback-model"}))
 
-    text = "".join([c async for c in client.call_llm_stream("hi", max_retries=0)])
+    call = LLMCall()
+    text = "".join([c async for c in client.call_llm_stream("hi", call, max_retries=0)])
 
-    assert text == "fallback answer"
+    assert text == "fallback answer" == call.text
     assert calls["fallback"] == 1
-    assert client.last_prompt_tokens == 7 and client.last_completion_tokens == 3
+    assert (call.prompt_tokens, call.completion_tokens) == (7, 3)
+    assert (call.provider, call.model) == ("groq", "fallback-model")
 
 
 @pytest.mark.asyncio
@@ -315,7 +317,7 @@ async def test_stream_never_falls_back_after_the_first_token_is_yielded(monkeypa
     client = LLMClient(config(fallback={"provider": "groq", "model_name": "fallback-model"}))
     client._fallback_client.call_llm_stream = fallback_called
 
-    chunks = [c async for c in client.call_llm_stream("hi", max_retries=0)]
+    chunks = [c async for c in client.call_llm_stream("hi", LLMCall(), max_retries=0)]
 
     assert chunks[0] == "partial "
     assert "[Generation failed:" in chunks[1]
@@ -330,9 +332,40 @@ async def test_successful_stream_populates_usage_and_cost_from_the_final_chunk(m
     monkeypatch.setattr("src.generating.llm_client.litellm.acompletion", acompletion)
     client = LLMClient(config())
 
-    text = "".join([c async for c in client.call_llm_stream("hi")])
+    call = LLMCall()
+    text = "".join([c async for c in client.call_llm_stream("hi", call)])
 
-    assert text == "hello"
-    assert (client.last_prompt_tokens, client.last_completion_tokens) == (12, 6)
-    assert client.last_cost_usd == 0.0042
-    assert client.last_served_provider == "gemini"
+    assert text == "hello" == call.text
+    assert (call.prompt_tokens, call.completion_tokens) == (12, 6)
+    assert call.cost_usd == 0.0042
+    assert call.provider == "gemini"
+
+
+def test_concurrent_calls_on_one_client_keep_their_own_usage(monkeypatch):
+    """
+    Regression: usage, cost and the serving provider were stored on the shared client, so with
+    concurrent queries one request logged another's tokens and cost.
+    """
+    import threading
+
+    barrier = threading.Barrier(2)
+
+    def completion(**kw):
+        prompt = kw["messages"][0]["content"]
+        barrier.wait(timeout=5)  # both calls are in flight before either returns
+        return response(content=prompt, prompt_tokens=len(prompt), completion_tokens=len(prompt))
+
+    monkeypatch.setattr("src.generating.llm_client.litellm.completion", completion)
+    client = LLMClient(config())
+    results = {}
+
+    def run(prompt):
+        results[prompt] = client.call_llm(prompt)
+
+    threads = [threading.Thread(target=run, args=(p,)) for p in ("a", "bbbbbb")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert (results["a"].prompt_tokens, results["bbbbbb"].prompt_tokens) == (1, 6)

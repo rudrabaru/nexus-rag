@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.generating.evaluator import FaithfulnessEvaluator
+from src.generating.llm_client import LLMCall
 from src.generating.models import ContextWindow, GenerationConfig, GenerationResult
 from src.ingestion.embedding_worker import EmbeddingUnavailableError, EmbeddingWorker
 
@@ -11,7 +12,7 @@ from src.ingestion.embedding_worker import EmbeddingUnavailableError, EmbeddingW
 @pytest.fixture
 def judge_llm(monkeypatch):
     llm_client = MagicMock()
-    llm_client.call_llm.return_value = ('{"score": 1.0, "reasoning": "supported"}', 0, 0, 0)
+    llm_client.call_llm.return_value = LLMCall(text='{"score": 1.0, "reasoning": "supported"}')
     monkeypatch.setattr("src.generating.llm_client.LLMClient", lambda config: llm_client)
     return llm_client
 
@@ -28,7 +29,7 @@ def test_judge_uses_zero_temperature_without_touching_the_generators_config(judg
     seen = []
     judge_llm.call_llm.side_effect = lambda *a, **k: (
         seen.append((generator_config.temperature, evaluator.config.temperature))
-        or ('{"score": 1.0, "reasoning": "ok"}', 0, 0, 0)
+        or LLMCall(text='{"score": 1.0, "reasoning": "ok"}')
     )
     result = evaluator.evaluate(make_result())
 

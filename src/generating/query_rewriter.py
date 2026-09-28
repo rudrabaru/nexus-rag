@@ -36,9 +36,7 @@ Query: {query}
     def generalise(self, query: str) -> str:
         prompt = self.SEMANTIC_GENERALISE_PROMPT.format(query=query)
         try:
-            answer, _, _, _ = self.llm_client.call_llm(
-                prompt, response_schema=RewrittenQuery
-            )
+            answer = self.llm_client.call_llm(prompt, response_schema=RewrittenQuery).text
             try:
                 parsed = json.loads(answer.strip())
             except json.JSONDecodeError:
@@ -84,10 +82,7 @@ Standalone query:"""
 
         try:
             # Call LLM
-            answer, _, _, _ = self.llm_client.call_llm(
-                prompt, response_schema=RewrittenQuery
-            )
-            
+            answer = self.llm_client.call_llm(prompt, response_schema=RewrittenQuery).text
             clean_text = answer.strip()
             if clean_text.startswith("```json"):
                 clean_text = clean_text[7:]

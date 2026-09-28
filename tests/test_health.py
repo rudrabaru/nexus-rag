@@ -17,6 +17,15 @@ def test_health_fails_when_initialisation_failed(client, app_state):
         del app_state.init_error
 
 
+def test_ready_is_a_503_when_initialisation_failed(client, app_state):
+    """Regression: /ready answered HTTP 200 with an error body, so a probe counted it ready."""
+    app_state.init_error = "boom"
+    try:
+        assert client.get("/ready").status_code == 503
+    finally:
+        del app_state.init_error
+
+
 def test_overload_is_a_503_with_retry_after_not_a_200_answer(client, app_state, tenant_key):
     for name in ("generator", "retriever", "evaluator"):
         setattr(app_state, name, MagicMock())

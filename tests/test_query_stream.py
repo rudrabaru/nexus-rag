@@ -11,13 +11,14 @@ CAPACITY = 2
 
 
 class FakeGenerator:
-    def __init__(self):
-        self.llm_client = SimpleNamespace(last_prompt_tokens=10, last_completion_tokens=5)
-        self.context_builder = SimpleNamespace(build=lambda chunks: ContextWindow())
+    def prepare(self, query, retrieval_result, chat_history=None):
+        return SimpleNamespace(context_window=ContextWindow(), prompt="p", diagnostic=None)
 
-    async def generate(self, query, **kwargs):
+    async def stream(self, prepared, call):
         for piece in ("Hello", " world"):
+            call.text += piece
             yield piece
+        call.prompt_tokens, call.completion_tokens = 10, 5
 
 
 class FakeRetriever:

@@ -122,7 +122,6 @@ class GenerationResult(BaseModel):
     # Observability fields
     context_window: ContextWindow
     prompt_used: str = Field("", description="Full prompt sent to the LLM")
-    raw_llm_response: str = Field("", description="Unmodified LLM response text")
 
     # Latency breakdown
     retrieval_latency_ms: float = 0.0
@@ -148,10 +147,6 @@ class GenerationResult(BaseModel):
     )
     faithfulness_reasoning: Optional[str] = Field(
         None, description="LLM judge reasoning for the faithfulness score"
-    )
-    source_hit: Optional[bool] = Field(
-        None,
-        description="True if an acceptable document was included in the context window",
     )
 
     generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

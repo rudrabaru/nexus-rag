@@ -62,19 +62,14 @@ class FaithfulnessEvaluator:
             answer=result.answer,
         )
 
-        answer_text, _, _, _ = self.llm_client.call_llm(
-            prompt, response_schema=EvaluationResponse
-        )
+        call = self.llm_client.call_llm(prompt, response_schema=EvaluationResponse)
+        answer_text = call.text
+        if call.failed:
+            result.faithfulness_score = 0.0
+            result.faithfulness_reasoning = answer_text
+            return result
 
         try:
-            if not answer_text:
-                raise ValueError("LLM returned empty response")
-                
-            if answer_text.startswith("[Generation failed:"):
-                result.faithfulness_score = 0.0
-                result.faithfulness_reasoning = answer_text
-                return result
-                
             try:
                 evaluation = json.loads(answer_text.strip())
             except json.JSONDecodeError:
