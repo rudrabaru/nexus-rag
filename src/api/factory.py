@@ -1,17 +1,14 @@
 import logging
 from dataclasses import dataclass
-from typing import Optional
 
 from src.config import get_settings
-from src.embedding.providers import build_embedder
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.generator import RAGGenerator
 from src.generating.models import GenerationConfig
 from src.generating.query_rewriter import QueryRewriter
 from src.registry.database import DocumentRegistry
 from src.registry.engine import get_async_engine, get_sync_engine
-from src.retrieving.chunk_store import ChunkStore
-from src.retrieving.retriever import DenseRetriever, HybridRetriever, OptionalReranker, SparseRetriever
+from src.retrieving.pipeline import RetrievalResources
 
 DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 # llama-3.1-8b-instant was retired from Groq (404 NotFoundError, confirmed live
@@ -23,10 +20,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class PipelineComponents:
-    chunk_store: ChunkStore
+    retrieval: RetrievalResources
     registry: DocumentRegistry
-    retriever: HybridRetriever
-    reranker: Optional[OptionalReranker]
     generator: RAGGenerator
     evaluator: FaithfulnessEvaluator
     provider: str
@@ -38,17 +33,15 @@ def _init_components() -> PipelineComponents:
     """Shared factory function to initialize core pipeline components."""
     settings = get_settings()
 
-    embedder = build_embedder(settings)
-    chunk_store = ChunkStore(get_sync_engine(), get_async_engine(), embedder.index_id)
+    retrieval = RetrievalResources(settings, get_sync_engine(), get_async_engine())
     registry = DocumentRegistry(get_sync_engine())
-    retriever = HybridRetriever(DenseRetriever(chunk_store, embedder), SparseRetriever(chunk_store))
-    logger.info(f"HybridRetriever loaded: pgvector HNSW + Postgres full-text search on index {embedder.index_id}.")
-
-    if settings.enable_reranker:
-        reranker = OptionalReranker()
-    else:
-        reranker = None
-        logger.info("Reranker disabled via ENABLE_RERANKER env var.")
+    reranker = settings.effective_reranker
+    if reranker == "flashrank":
+        retrieval.reranker(reranker).load()  # model load (and first-run download) at startup, not on a query
+    logger.info(
+        f"Retrieval: index {retrieval.default_index_id}, default strategy {settings.retrieval_strategy}, "
+        f"reranker {reranker or 'off'}."
+    )
 
     provider = settings.llm_provider
     model_name = settings.llm_model_name or (
@@ -87,10 +80,8 @@ def _init_components() -> PipelineComponents:
     rewriter = QueryRewriter(config=rewriter_config)
 
     return PipelineComponents(
-        chunk_store=chunk_store,
+        retrieval=retrieval,
         registry=registry,
-        retriever=retriever,
-        reranker=reranker,
         generator=generator,
         evaluator=evaluator,
         provider=provider,

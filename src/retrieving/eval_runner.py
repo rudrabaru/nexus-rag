@@ -7,10 +7,9 @@ from pathlib import Path
 from collections import defaultdict
 
 from src.config import get_settings
-from src.embedding.providers import build_embedder
 from src.registry.engine import dispose_engines, get_async_engine, get_sync_engine
-from src.retrieving.chunk_store import ChunkStore
-from src.retrieving.retriever import DenseRetriever, OptionalReranker, HybridRetriever, SparseRetriever
+from src.retrieving.config import RetrievalConfig
+from src.retrieving.pipeline import RetrievalResources, build_pipeline
 from src.retrieving.evaluation import Evaluator
 from src.retrieving.evaluation_models import EvaluationQuery
 from datetime import datetime, timezone
@@ -146,41 +145,21 @@ def generate_review_set(report, eval_dir: Path):
         json.dump(review_set, f, indent=2)
 
 
-async def _evaluate_then_close(evaluator: Evaluator, queries, top_k: int):
+async def _evaluate_then_close(evaluator: Evaluator, queries):
     """Runs the whole evaluation in one event loop, then closes the pooled connections bound to it."""
     try:
-        return await evaluator.evaluate(queries, top_k=top_k)
+        return await evaluator.evaluate(queries)
     finally:
         await dispose_engines()
 
 
-def run_evaluation_pipeline(
-    dataset_path: str,
-    top_k: int,
-    output_dir_base: str,
-    use_reranker: bool,
-    use_hybrid: bool,
-    use_sparse: bool = False,
-    tenant_id: str = None,
-    index_id: str = None,
-):
-    embedder = build_embedder(get_settings(), index_id)
-    chunk_store = ChunkStore(get_sync_engine(), get_async_engine(), embedder.index_id)
-    dense_retriever = DenseRetriever(chunk_store, embedder)
-    logger.info(f"Evaluating index {embedder.index_id}.")
-
-    if use_sparse:
-        retriever = SparseRetriever(chunk_store)
-        logger.info("Using Sparse Search (Postgres full-text) only for evaluation.")
-    elif use_hybrid:
-        retriever = HybridRetriever(dense_retriever, SparseRetriever(chunk_store))
-        logger.info("Using Hybrid Search (pgvector + Postgres full-text, RRF) for evaluation.")
-    else:
-        retriever = dense_retriever
-        logger.info("Using Dense Search only for evaluation.")
-
-    reranker = OptionalReranker() if use_reranker else None
-    evaluator = Evaluator(retriever=retriever, reranker=reranker, tenant_id=tenant_id)
+def run_evaluation_pipeline(dataset_path: str, config: RetrievalConfig, output_dir_base: str, tenant_id: str = None):
+    resources = RetrievalResources(get_settings(), get_sync_engine(), get_async_engine())
+    pipeline = build_pipeline(config, resources)
+    chunk_store = resources.chunk_store(config.index_id)
+    index_id = chunk_store.index_id
+    logger.info(f"Evaluating index {index_id} with {config.model_dump()}.")
+    evaluator = Evaluator(pipeline=pipeline, tenant_id=tenant_id)
 
     dataset_path_obj = Path(dataset_path)
     if not dataset_path_obj.exists():
@@ -199,7 +178,7 @@ def run_evaluation_pipeline(
 
     # Measured before the run so the fingerprint describes the index the queries ran against.
     index_count = chunk_store.get_collection_size()
-    report = asyncio.run(_evaluate_then_close(evaluator, queries, top_k))
+    report = asyncio.run(_evaluate_then_close(evaluator, queries))
 
     with open(dataset_path_obj, "rb") as f:
         dataset_hash = hashlib.md5(f.read()).hexdigest()
@@ -207,16 +186,10 @@ def run_evaluation_pipeline(
     report.reproducibility_fingerprint = {
         "dataset_path": str(dataset_path),
         "dataset_md5": dataset_hash,
-        "index_id": embedder.index_id,
+        "index_id": index_id,
         "index_count": index_count,
         "timestamp": timestamp,
-        "configuration": {
-            "top_k": top_k,
-            "use_hybrid": use_hybrid,
-            "use_sparse": use_sparse,
-            "use_reranker": use_reranker,
-            "tenant_id": tenant_id or "ALL",
-        },
+        "configuration": {**config.model_dump(exclude={"index_id"}), "tenant_id": tenant_id or "ALL"},
     }
 
     difficulty_metrics = compute_group_metrics(report.results, lambda r: r.difficulty)
@@ -224,7 +197,7 @@ def run_evaluation_pipeline(
 
     eval_output = {
         "dataset_used": dataset_path,
-        "index_used": f"postgres:chunks/{embedder.index_id}",
+        "index_used": f"postgres:chunks/{index_id}",
         "reproducibility_fingerprint": report.reproducibility_fingerprint,
         "total_queries": report.total_queries,
         "overall_metrics": {
@@ -235,6 +208,7 @@ def run_evaluation_pipeline(
             "avg_latency_ms": report.avg_latency_ms,
             "p50_latency_ms": report.p50_latency_ms,
             "p95_latency_ms": report.p95_latency_ms,
+            "degraded_queries": sum(1 for r in report.results if r.degraded),
         },
         "metrics_by_difficulty": difficulty_metrics,
         "metrics_by_category": category_metrics,
@@ -283,24 +257,25 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Run RAG Retrieval Benchmarking Pipeline")
     parser.add_argument("--dataset", type=str, required=True, help="Path to golden dataset JSON file")
-    parser.add_argument("--top-k", type=int, default=5, help="Number of documents to retrieve")
     parser.add_argument("--output-dir", type=str, default="retrieval/v1", help="Base output directory")
-    parser.add_argument("--use-reranker", action="store_true", help="Enable Cross-Encoder reranking")
-    parser.add_argument("--use-hybrid", action="store_true", help="Enable Hybrid RRF search")
-    parser.add_argument("--use-sparse", action="store_true", help="Enable sparse full-text search only")
     parser.add_argument("--tenant-id", type=str, default=None, help="Optional tenant ID to isolate search")
     parser.add_argument("--index", type=str, default=None, help="Embedding index (provider:model); default: EMBEDDING_PROVIDER")
-
+    parser.add_argument("--strategy", choices=["dense", "sparse", "hybrid"], default="dense")
+    parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument("--reranker", choices=["flashrank", "jina"], default=None)
+    parser.add_argument("--rerank-candidates", type=int, default=20)
+    parser.add_argument("--rrf-k", type=int, default=60)
+    parser.add_argument("--dense-weight", type=float, default=1.0)
+    parser.add_argument("--sparse-weight", type=float, default=1.0)
     args = parser.parse_args()
 
     run_evaluation_pipeline(
         dataset_path=args.dataset,
-        top_k=args.top_k,
+        config=RetrievalConfig(
+            index_id=args.index, strategy=args.strategy, top_k=args.top_k, reranker=args.reranker,
+            rerank_candidates=args.rerank_candidates, rrf_k=args.rrf_k,
+            dense_weight=args.dense_weight, sparse_weight=args.sparse_weight,
+        ),
         output_dir_base=args.output_dir,
-        use_reranker=args.use_reranker,
-        use_hybrid=args.use_hybrid,
-        use_sparse=args.use_sparse,
         tenant_id=args.tenant_id,
-        index_id=args.index,
     )
-

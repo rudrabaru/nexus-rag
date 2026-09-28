@@ -1,5 +1,7 @@
-from typing import List, Dict, Any, Optional
-from pydantic import BaseModel
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
 
 class RetrievedChunk(BaseModel):
     chunk_id: str
@@ -8,6 +10,7 @@ class RetrievedChunk(BaseModel):
     text: str
     similarity_score: float
     metadata: Dict[str, Any]
+
 
 class RetrievalResult(BaseModel):
     query: str
@@ -18,5 +21,10 @@ class RetrievalResult(BaseModel):
     rerank_latency_ms: float = 0.0
     embedding_tokens: int = 0
     embedding_cost_usd: float = 0.0
-    rerank_tokens: int = 0
+    rerank_cost_usd: float = 0.0
     chunks: List[RetrievedChunk]
+    # The first-stage pool the reranker reordered (empty without a reranker), for rerank forensics.
+    candidates: List[RetrievedChunk] = Field(default_factory=list)
+    # Why this result is not what the configuration asked for, e.g. hybrid served sparse-only
+    # because the query could not be embedded. An evaluation treats such a run as invalid.
+    degraded: List[str] = Field(default_factory=list)

@@ -1,85 +1,65 @@
 import asyncio
-import datetime
 import logging
+import time
 from typing import Any, Optional
 
 from src.api.models.query_models import QueryRequest, SourceDocument
 from src.config import get_settings
-from src.retrieving.retriever import DenseRetriever, OptionalReranker
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.models import GenerationResult
 from src.generating.query_rewriter import QueryRewriter
+from src.retrieving.config import RetrievalConfig
+from src.retrieving.models import RetrievalResult
+from src.retrieving.pipeline import RetrievalResources, build_pipeline
 
 logger = logging.getLogger(__name__)
 
+# The reranker has always been handed four times the requested results to reorder.
+CHAT_RERANK_POOL_FACTOR = 4
+
+
+def chat_config(body: QueryRequest) -> RetrievalConfig:
+    """Chat's configuration: the configured defaults, plus the request's top_k and reranker toggle."""
+    settings = get_settings()
+    reranker = settings.effective_reranker if body.use_reranker else None
+    return RetrievalConfig(
+        strategy=settings.retrieval_strategy.lower(),
+        top_k=body.top_k,
+        reranker=reranker,
+        rerank_candidates=body.top_k * CHAT_RERANK_POOL_FACTOR,
+    )
+
+
 class QueryService:
+    @staticmethod
+    async def search_query(body: QueryRequest, rewriter: Optional[QueryRewriter]) -> str:
+        """The text actually searched: optionally generalised, and made standalone when there is history."""
+        query = body.query
+        if rewriter and get_settings().enable_query_generalisation:
+            query = await asyncio.to_thread(rewriter.generalise, query)
+        if rewriter and body.history:
+            query = await asyncio.to_thread(rewriter.rewrite, query, body.history)
+        return query
+
     @staticmethod
     async def run_retrieval(
         body: QueryRequest,
-        retriever: DenseRetriever,
-        reranker: OptionalReranker,
+        retrieval: RetrievalResources,
         rewriter: Optional[QueryRewriter],
         pipeline_logger: Any,
-        tenant_id: str
-    ):
-        search_query = body.query
-        if rewriter:
-            if get_settings().enable_query_generalisation:
-                search_query = await asyncio.to_thread(
-                    rewriter.generalise, search_query
-                )
-            if body.history:
-                search_query = await asyncio.to_thread(
-                    rewriter.rewrite, search_query, body.history
-                )
-
-        if body.use_reranker:
-            ret_start = datetime.datetime.now(datetime.timezone.utc).timestamp()
-            dense_result = await retriever.retrieve(
-                search_query,
-                top_k=body.top_k * 4,
-                tenant_id=tenant_id,
-                pipeline_logger=pipeline_logger,
+        tenant_id: str,
+    ) -> RetrievalResult:
+        config = chat_config(body)
+        query = await QueryService.search_query(body, rewriter)
+        start = time.time()
+        result = await build_pipeline(config, retrieval).run(query, tenant_id, pipeline_logger=pipeline_logger)
+        if pipeline_logger:
+            pipeline_logger.log_event(
+                "retrieval_complete", query_text=query, tenant_id=tenant_id, strategy=config.strategy,
+                reranker=config.reranker, chunk_count=len(result.chunks), degraded=result.degraded,
+                duration_ms=(time.time() - start) * 1000,
             )
-            if pipeline_logger:
-                pipeline_logger.log_event(
-                    "retrieval_complete", 
-                    query_text=search_query, 
-                    chunk_count=len(dense_result.chunks), 
-                    duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - ret_start) * 1000
-                )
-
-            rerank_start = datetime.datetime.now(datetime.timezone.utc).timestamp()
-            retrieval_result = await reranker.rerank(
-                search_query, dense_result.chunks, top_k=body.top_k
-            )
-            if pipeline_logger:
-                pipeline_logger.log_event(
-                    "reranking_complete", 
-                    query_text=search_query, 
-                    chunk_count=len(retrieval_result.chunks), 
-                    duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - rerank_start) * 1000
-                )
-                
-            retrieval_result.embedding_latency_ms = dense_result.embedding_latency_ms
-            retrieval_result.search_latency_ms = dense_result.search_latency_ms
-            retrieval_result.latency_ms += dense_result.latency_ms
-        else:
-            ret_start = datetime.datetime.now(datetime.timezone.utc).timestamp()
-            retrieval_result = await retriever.retrieve(
-                search_query,
-                top_k=body.top_k,
-                tenant_id=tenant_id,
-                pipeline_logger=pipeline_logger,
-            )
-            if pipeline_logger:
-                pipeline_logger.log_event(
-                    "retrieval_complete", 
-                    query_text=search_query, 
-                    chunk_count=len(retrieval_result.chunks), 
-                    duration_ms=(datetime.datetime.now(datetime.timezone.utc).timestamp() - ret_start) * 1000
-                )
-        return retrieval_result
+        return result
 
     @staticmethod
     def construct_sources(result) -> list[SourceDocument]:
@@ -117,7 +97,7 @@ class QueryService:
                 tokens_used=result.prompt_tokens + result.completion_tokens, faithfulness_score=None, details=details,
                 embedding_tokens=retrieval_result.embedding_tokens, embedding_cost_usd=retrieval_result.embedding_cost_usd,
                 generation_input_tokens=result.prompt_tokens, generation_output_tokens=result.completion_tokens,
-                rerank_tokens=retrieval_result.rerank_tokens, provider=result.provider,
+                rerank_cost_usd=retrieval_result.rerank_cost_usd, provider=result.provider,
                 generation_cost_usd=result.generation_cost_usd,
             )
         except Exception as e:

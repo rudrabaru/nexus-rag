@@ -7,3 +7,4 @@ fastapi==0.111.0
 uvicorn>=0.29.0
 slowapi>=0.1.9
 python-multipart>=0.0.9
+flashrank==0.2.10  # the default reranker: a small ONNX cross-encoder on CPU (onnxruntime, no torch)

@@ -4,7 +4,7 @@ import logging
 import hashlib
 from typing import List
 
-from src.retrieving.retriever import RetrievedChunk
+from src.retrieving.models import RetrievedChunk
 from .models import ContextChunk, ContextWindow, GenerationConfig
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,7 @@ class ContextBuilder:
         Build a token-budgeted context window from retrieved chunks.
 
         Args:
-            retrieved_chunks: Ordered list of chunks from DenseRetriever (highest score first).
+            retrieved_chunks: Ordered list of retrieved chunks (highest score first).
 
         Returns:
             ContextWindow with included/excluded chunk lists and assembled context_text.

@@ -23,10 +23,8 @@ def _initialize(app: FastAPI) -> None:
     assert_schema_current(sync_engine)
 
     components = _init_components()
-    app.state.chunk_store = components.chunk_store
+    app.state.retrieval = components.retrieval
     app.state.registry = components.registry
-    app.state.retriever = components.retriever
-    app.state.reranker = components.reranker
     app.state.generator = components.generator
     app.state.evaluator = components.evaluator
     app.state.rewriter = components.rewriter
@@ -39,14 +37,15 @@ def _initialize(app: FastAPI) -> None:
     # own stalled-job detection (heartbeats) is what recovers those.
     app.state.job_queue = api_queue(settings.database_url).open()
 
-    index_size = components.chunk_store.get_collection_size()
+    index_id = components.retrieval.default_index_id
+    index_size = components.retrieval.chunk_store().get_collection_size()
     logger.info(
         f"RAG Pipeline API ready. Provider: {components.provider}, Model: {components.model_name}, "
-        f"index: {components.chunk_store.index_id} ({index_size} chunks)"
+        f"index: {index_id} ({index_size} chunks)"
     )
     if index_size == 0:
         logger.warning(
-            f"Index {components.chunk_store.index_id} holds no chunks, so every search returns nothing. "
+            f"Index {index_id} holds no chunks, so every search returns nothing. "
             "Ingest documents with EMBEDDING_PROVIDER set to the model this index should use."
         )
 

@@ -5,26 +5,23 @@ from sqlalchemy import bindparam, func, insert, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Engine
 
-from src.observability.costs import JINA_RERANK_COST_PER_1K_TOKENS
 from src.registry.rows import row_to_dict
 from src.registry.schema import query_logs
 
 logger = logging.getLogger(__name__)
 
 
-def query_costs(embedding_cost_usd: float, generation_cost_usd: float, rerank_tokens: int) -> Dict[str, float]:
+def query_costs(embedding_cost_usd: float, generation_cost_usd: float, rerank_cost_usd: float) -> Dict[str, float]:
     """
-    Per-query cost breakdown. Generation and embedding costs are the caller's per-call figures
-    (litellm.completion_cost for the model that answered; the query embedder's list price for
-    the index that was searched). Rerank still uses Jina's fixed rate until item 9.
+    Per-query cost breakdown. Every figure is the caller's per-call value: litellm.completion_cost
+    for the model that answered, the query embedder's list price for the index searched, and the
+    reranker's own figure (0 for local FlashRank).
     """
-    embedding = embedding_cost_usd
-    rerank = (rerank_tokens / 1000.0) * JINA_RERANK_COST_PER_1K_TOKENS
     return {
-        "embedding_cost_usd": embedding,
+        "embedding_cost_usd": embedding_cost_usd,
         "generation_cost_usd": generation_cost_usd,
-        "rerank_cost_usd": rerank,
-        "total_cost_usd": embedding + generation_cost_usd + rerank,
+        "rerank_cost_usd": rerank_cost_usd,
+        "total_cost_usd": embedding_cost_usd + generation_cost_usd + rerank_cost_usd,
     }
 
 
@@ -45,7 +42,7 @@ class MetricsStore:
         embedding_tokens: int = 0,
         generation_input_tokens: int = 0,
         generation_output_tokens: int = 0,
-        rerank_tokens: int = 0,
+        rerank_cost_usd: float = 0.0,
         provider: str = "gemini",
         generation_cost_usd: float = 0.0,
         embedding_cost_usd: float = 0.0,
@@ -63,7 +60,7 @@ class MetricsStore:
                 embedding_tokens=embedding_tokens,
                 generation_input_tokens=generation_input_tokens,
                 generation_output_tokens=generation_output_tokens,
-                **query_costs(embedding_cost_usd, generation_cost_usd, rerank_tokens),
+                **query_costs(embedding_cost_usd, generation_cost_usd, rerank_cost_usd),
             )
             .returning(query_logs.c.log_id)
         )

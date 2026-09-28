@@ -5,3 +5,4 @@ pytest>=8.0
 pytest-asyncio>=0.23
 ruff>=0.5
 numpy>=1.24  # integration tests
+ranx>=0.3.21  # reference implementation the fusion tests check our RRF against

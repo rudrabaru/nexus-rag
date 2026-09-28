@@ -1,5 +1,4 @@
 import asyncio
-import copy
 import json
 import logging
 import time
@@ -11,16 +10,15 @@ from slowapi import Limiter
 from starlette.background import BackgroundTask
 
 from src.api.auth import get_current_tenant, get_rate_limit_key
-from src.api.dependencies import get_evaluator, get_generator, get_pipeline_logger, get_reranker, get_retriever, get_rewriter
+from src.api.dependencies import get_evaluator, get_generator, get_pipeline_logger, get_retrieval, get_rewriter
 from src.api.models.query_models import QueryRequest, QueryResponse
-from src.config import get_settings
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.generator import RAGGenerator
 from src.generating.llm_client import LLMCall
 from src.generating.models import GenerationResult
 from src.generating.query_rewriter import QueryRewriter
-from src.retrieving.retriever import HybridRetriever, OptionalReranker
-from src.services.query_service import QueryService
+from src.retrieving.pipeline import RetrievalResources, build_pipeline
+from src.services.query_service import QueryService, chat_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -72,8 +70,7 @@ async def query_rag(
     background_tasks: BackgroundTasks,
     tenant_id: Optional[str] = Depends(get_current_tenant),
     generator: RAGGenerator = Depends(get_generator),
-    retriever: HybridRetriever = Depends(get_retriever),
-    reranker: OptionalReranker = Depends(get_reranker),
+    retrieval: RetrievalResources = Depends(get_retrieval),
     evaluator: FaithfulnessEvaluator = Depends(get_evaluator),
     rewriter: Optional[QueryRewriter] = Depends(get_rewriter),
     pipeline_logger: Any = Depends(get_pipeline_logger),
@@ -98,7 +95,7 @@ async def query_rag(
             if await _workspace_is_empty(request, tenant_id):
                 return QueryResponse(answer=EMPTY_WORKSPACE_MESSAGE, sources=[], latency_ms=0)
 
-            retrieval_result = await QueryService.run_retrieval(body, retriever, reranker, rewriter, pipeline_logger, tenant_id)
+            retrieval_result = await QueryService.run_retrieval(body, retrieval, rewriter, pipeline_logger, tenant_id)
 
             gen_start = time.time()
             result = await asyncio.to_thread(generator.generate, body.query, retrieval_result, body.history)
@@ -141,8 +138,7 @@ async def query_rag_stream(
     body: QueryRequest,
     tenant_id: Optional[str] = Depends(get_current_tenant),
     generator: RAGGenerator = Depends(get_generator),
-    retriever: HybridRetriever = Depends(get_retriever),
-    reranker: OptionalReranker = Depends(get_reranker),
+    retrieval: RetrievalResources = Depends(get_retrieval),
     rewriter: Optional[QueryRewriter] = Depends(get_rewriter),
     evaluator: FaithfulnessEvaluator = Depends(get_evaluator),
     pipeline_logger: Any = Depends(get_pipeline_logger),
@@ -167,7 +163,7 @@ async def query_rag_stream(
             if await _workspace_is_empty(request, tenant_id):
                 return StreamingResponse(iter([_sse("token", EMPTY_WORKSPACE_MESSAGE)]), media_type="text/event-stream")
 
-            retrieval_result = await QueryService.run_retrieval(body, retriever, reranker, rewriter, pipeline_logger, tenant_id)
+            retrieval_result = await QueryService.run_retrieval(body, retrieval, rewriter, pipeline_logger, tenant_id)
             prepared = generator.prepare(body.query, retrieval_result, body.history)
             call = LLMCall()  # this request's own usage record; the generator is shared
             gen_start = time.time()
@@ -260,24 +256,19 @@ async def compare_retrieval(
     request: Request,
     body: QueryRequest,
     tenant_id: Optional[str] = Depends(get_current_tenant),
-    retriever: HybridRetriever = Depends(get_retriever),
-    reranker: OptionalReranker = Depends(get_reranker),
+    retrieval: RetrievalResources = Depends(get_retrieval),
     rewriter: Optional[QueryRewriter] = Depends(get_rewriter),
 ):
     if not tenant_id:
         raise HTTPException(status_code=401, detail="Authentication required")
 
-    search_query = body.query
-    if rewriter and get_settings().enable_query_generalisation:
-        search_query = await asyncio.to_thread(rewriter.generalise, search_query)
-
-    # One retrieval serves both columns, so the query is embedded once.
-    candidates = await retriever.retrieve(search_query, top_k=body.top_k * 4, tenant_id=tenant_id)
-    baseline_result = copy.copy(candidates)
-    baseline_result.chunks = candidates.chunks[:body.top_k]
-    baseline_result.top_k = body.top_k
-
-    reranked_result = await reranker.rerank(search_query, candidates.chunks, top_k=body.top_k) if reranker else baseline_result
+    # One run: "baseline" is the first-stage order of the pool the reranker reordered, so the
+    # two columns differ only by the reranking step.
+    search_query = await QueryService.search_query(body.model_copy(update={"history": []}), rewriter)
+    config = chat_config(body.model_copy(update={"use_reranker": True}))
+    reranked_result = await build_pipeline(config, retrieval).run(search_query, tenant_id)
+    baseline_chunks = (reranked_result.candidates or reranked_result.chunks)[: body.top_k]
+    baseline_latency_ms = reranked_result.latency_ms - reranked_result.rerank_latency_ms
 
     def construct_preview(chunks):
         previews = []
@@ -300,8 +291,10 @@ async def compare_retrieval(
         return previews
 
     return {
-        "baseline": construct_preview(baseline_result.chunks),
+        "baseline": construct_preview(baseline_chunks),
         "reranked": construct_preview(reranked_result.chunks),
-        "baseline_latency_ms": baseline_result.latency_ms,
-        "reranked_latency_ms": reranked_result.latency_ms + baseline_result.latency_ms,
+        "baseline_latency_ms": baseline_latency_ms,
+        "reranked_latency_ms": reranked_result.latency_ms,
+        "reranker": config.reranker,
+        "degraded": reranked_result.degraded,
     }

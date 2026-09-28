@@ -20,6 +20,11 @@ from src.registry.schema import EMBEDDING_DIMENSION, chunks, embedding_indexes, 
 from src.registry.schema_version import ALEMBIC_INI, assert_schema_current
 from src.retrieving.chunk_store import ChunkStore
 from src.retrieving.chunk_writes import existing_source_urls, write_chunks
+from src.retrieving.config import RetrievalConfig
+from src.retrieving.dense import DenseRetriever
+from src.retrieving.pipeline import RetrievalPipeline
+from src.retrieving.sparse import SparseRetriever
+from src.embedding.providers import EmbeddingBatch
 
 pytestmark = pytest.mark.usefixtures("clean_tables")
 
@@ -191,6 +196,39 @@ def test_the_daily_quota_counts_only_the_tenants_successful_fetches(registry):
         registry.log_fetch("tenant-1", "job-1", "https://example.com/x", outcome, "jina")
     registry.log_fetch("tenant-2", "job-2", "https://example.com/y", "fetched", "jina")
     assert registry.pages_fetched_today("tenant-1") == 2
+
+
+class AxisEmbedder:
+    """Embeds every query as unit_vector(0), in the test index; no network."""
+    index_id, model = TEST_INDEX, "test-model"
+
+    async def aembed(self, texts, input_type):
+        return EmbeddingBatch(vectors=[unit_vector(0) for _ in texts], tokens=len(texts))
+
+    def cost_usd(self, tokens):
+        return 0.0
+
+
+async def test_the_hybrid_pipeline_fuses_real_dense_and_sparse_search_within_one_tenant(load, registry, store):
+    add_document(registry)
+    add_document(registry, doc_id="doc-x", tenant="tenant-2")
+    load([
+        chunk("vector-hit", chunk_text="unrelated wording entirely", vector=unit_vector(0)),
+        chunk("keyword-hit", chunk_text="rotate the signing keys quarterly", vector=unit_vector(7)),
+        chunk("both", chunk_text="signing keys live here", vector=unit_vector(0, 1)),
+        chunk("other-tenant", tenant="tenant-2", doc_id="doc-x", chunk_text="signing keys", vector=unit_vector(0)),
+    ])
+    hybrid = RetrievalPipeline(
+        config=RetrievalConfig(strategy="hybrid", top_k=3),
+        dense=DenseRetriever(store, AxisEmbedder()), sparse=SparseRetriever(store),
+    )
+
+    result = await hybrid.run("signing keys", "tenant-1")
+
+    ids = [c.chunk_id for c in result.chunks]
+    assert "other-tenant" not in ids
+    assert ids[0] == "both"  # found by both rankings
+    assert set(ids) == {"both", "vector-hit", "keyword-hit"} and result.degraded == []
 
 
 async def test_sparse_search_stems_and_falls_back_from_and_to_or(load, registry, store):

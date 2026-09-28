@@ -45,6 +45,8 @@ In addition to end-to-end generation evaluation, the system implements a standal
 
 ## Frozen Regression Baselines (2026-09-22)
 
+> **Status (2026-09-29): these baselines are retired.** They were measured on the prototype corpus, which was deleted on 2026-09-28, and their fingerprints use the pre-`RetrievalConfig` flags (`use_hybrid`, `use_reranker`). Any new run is therefore reported as not comparable until baselines are re-frozen on a new corpus and benchmark. Run an evaluation with the configuration knobs, e.g. `python -m src.retrieving.eval_runner --dataset <file> --strategy hybrid --reranker flashrank --rerank-candidates 20`. The section below is kept as the record of what they measured.
+
 Retrieval changes are gated against frozen metric files in `evaluation_datasets/baselines/`. Each file is an `evaluation_metrics.json` from `src.retrieving.eval_runner` on the 38-query `benchmark.json` (md5 `4937a438...`), top_k 5, all tenants, against a 2,284-chunk index.
 
 | Baseline | Recall@1 | Recall@3 | Recall@5 | MRR |
@@ -60,7 +62,7 @@ Compare a new run with a baseline:
 python -m src.retrieving.baseline_check evaluation_datasets/baselines/dense_top5.json <candidate>/evaluation_metrics.json
 ```
 
-The check exits 1 on any metric drop and 2 when the runs are not comparable (different dataset, query count, configuration or index size). Rationale for the zero-drop default: retrieval over a fixed index is deterministic, and one changed query moves Recall@k by 0.026 on this benchmark. It is a stop-gap until per-query results are stored and significance tests replace it.
+The check exits 1 on any metric drop and 2 when the runs are not comparable: a different dataset, query count, embedding index, index size, or any knob of the retrieval configuration (every field of `RetrievalConfig`, Phase 5, is recorded in the run's fingerprint and compared). Rationale for the zero-drop default: retrieval over a fixed index is deterministic, and one changed query moves Recall@k by 0.026 on this benchmark. It is a stop-gap until per-query results are stored and significance tests replace it.
 
 **Caveats.**
 

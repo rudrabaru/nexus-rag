@@ -45,6 +45,7 @@ class EvaluationResult(BaseModel):
     embedding_latency_ms: float = 0.0
     search_latency_ms: float = 0.0
     rerank_latency_ms: float = 0.0
+    degraded: List[str] = []  # non-empty: this query did not run the configuration as specified
 
 
 class EvaluationReport(BaseModel):

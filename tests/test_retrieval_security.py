@@ -6,8 +6,7 @@ from sqlalchemy.dialects import postgresql
 
 from src.retrieving.chunk_store import ChunkStore, resolve_tenant_scope
 from src.retrieving.chunk_writes import write_chunks
-from src.retrieving.hybrid import HybridRetriever
-from src.retrieving.models import RetrievalResult, RetrievedChunk
+from src.retrieving.models import RetrievedChunk
 from src.retrieving.sparse import SparseRetriever
 
 EMBEDDING = [0.1] * 1024
@@ -188,30 +187,3 @@ def test_a_chunk_without_tenant_or_document_is_never_stored(missing):
     with pytest.raises(ValueError, match="refusing to store"):
         write_chunks(conn, [EmbeddedChunk(**fields)])
     conn.execute.assert_not_called()
-
-
-# ── Hybrid fusion ────────────────────────────────────────────────────────────
-
-class FixedRetriever:
-    def __init__(self, chunk_ids):
-        self.chunk_ids = chunk_ids
-
-    async def retrieve(self, query, top_k=5, tenant_id=None, pipeline_logger=None, allow_global=False):
-        chunks = [
-            RetrievedChunk(chunk_id=cid, source_document="d", text=cid, similarity_score=1.0, metadata={})
-            for cid in self.chunk_ids
-        ]
-        return RetrievalResult(query=query, top_k=top_k, latency_ms=1.0, chunks=chunks)
-
-
-async def test_a_chunk_found_by_both_retrievers_is_fused_not_duplicated():
-    """
-    Regression: dense results used Qdrant's UUID point id while sparse results used the real
-    chunk_id, so RRF never matched them and one chunk could fill two result slots.
-    """
-    hybrid = HybridRetriever(FixedRetriever(["shared", "dense-only"]), FixedRetriever(["sparse-only", "shared"]))
-    result = await hybrid.retrieve("q", top_k=5, tenant_id="tenant-1")
-
-    ids = [c.chunk_id for c in result.chunks]
-    assert sorted(ids) == ["dense-only", "shared", "sparse-only"]
-    assert ids[0] == "shared"  # ranks 1 + 2 outscore any single-list rank

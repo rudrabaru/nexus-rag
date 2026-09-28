@@ -82,12 +82,15 @@ jobs:
           done
       - name: The API image must be able to run the fetch worker's tasks
         run: docker run --rm --entrypoint python nexus-api:ci -c "import src.jobs.fetch_tasks"
+      - name: The API image must carry the default reranker's model (no download on a query)
+        run: docker run --rm --entrypoint sh nexus-api:ci -c "ls /opt/flashrank/ms-marco-TinyBERT-L-2-v2/*.onnx"
       - name: The worker image must be able to import its task module and Docling
         run: docker run --rm --entrypoint python nexus-worker:ci -c "import src.jobs.tasks, docling.document_converter"
 
   # Manual only: spends embedding quota and needs repository secrets DATABASE_URL and
-  # JINA_API_KEY. The frozen baselines were measured on the legacy Jina index, so the gate
-  # evaluates that index until they are re-frozen on the Voyage index.
+  # JINA_API_KEY. The frozen baselines were measured on the prototype Jina corpus, which was
+  # retired (2026-09-28); until baselines are re-frozen on a new corpus this job reports
+  # "not comparable" (exit 2) rather than a pass or a regression.
   retrieval-gate:
     if: github.event_name == 'workflow_dispatch'
     needs: test
@@ -112,5 +115,5 @@ jobs:
           python -m src.retrieving.baseline_check evaluation_datasets/baselines/dense_top5.json "$(ls -d retrieval/ci/dense/eval_*/ | tail -1)evaluation_metrics.json"
       - name: Hybrid — evaluate and gate
         run: |
-          python -m src.retrieving.eval_runner --dataset evaluation_datasets/benchmark.json --output-dir retrieval/ci/hybrid --use-hybrid
+          python -m src.retrieving.eval_runner --dataset evaluation_datasets/benchmark.json --output-dir retrieval/ci/hybrid --strategy hybrid
           python -m src.retrieving.baseline_check evaluation_datasets/baselines/hybrid_top5.json "$(ls -d retrieval/ci/hybrid/eval_*/ | tail -1)evaluation_metrics.json"

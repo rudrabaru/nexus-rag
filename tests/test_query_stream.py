@@ -31,6 +31,16 @@ class FakeRetriever:
         return RetrievalResult(query=query, top_k=top_k, latency_ms=1.0, chunks=[])
 
 
+class FakeResources:
+    """Stands in for RetrievalResources: the same fake answers as dense and as sparse retriever."""
+
+    def __init__(self, error=None):
+        self.retriever = FakeRetriever(error)
+
+    def retrievers(self, index_id=None):
+        return self.retriever, self.retriever
+
+
 def registry_with_docs(count):
     registry = MagicMock()
     registry.get_doc_count.return_value = count
@@ -40,8 +50,7 @@ def registry_with_docs(count):
 @pytest.fixture
 def wired(app_state):
     app_state.generator = FakeGenerator()
-    app_state.retriever = FakeRetriever()
-    app_state.reranker = None
+    app_state.retrieval = FakeResources()
     app_state.evaluator = MagicMock()
     app_state.registry = registry_with_docs(3)
     return app_state
@@ -96,7 +105,7 @@ def test_capacity_is_returned_for_an_empty_workspace(client, wired, tenant_key):
 
 
 def test_capacity_is_returned_when_retrieval_fails(client, wired, tenant_key):
-    wired.retriever = FakeRetriever(error=RuntimeError("vector store down"))
+    wired.retrieval = FakeResources(error=RuntimeError("vector store down"))
     response, _ = stream(client, tenant_key)
 
     assert response.status_code == 500

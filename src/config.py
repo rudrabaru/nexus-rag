@@ -1,6 +1,6 @@
 import logging
 from functools import lru_cache
-from typing import List
+from typing import List, Optional
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -11,10 +11,8 @@ class Settings(BaseSettings):
     """
     Single validated view of the environment.
 
-    .env is loaded into os.environ once, in src/api/main.py; this class only reads
-    the process environment. Modules scheduled for replacement still read os.environ
-    directly for their provider keys, so those keys are declared here for
-    fail-fast validation rather than as their only consumer.
+    .env is loaded into os.environ once, in src/api/main.py (and the worker entry points);
+    this class only reads the process environment.
     """
 
     model_config = SettingsConfigDict(extra="ignore", case_sensitive=False)
@@ -27,7 +25,7 @@ class Settings(BaseSettings):
     database_url: str = ""
     db_pool_size: int = 5
 
-    jina_api_key: str = ""  # legacy index queries and the reranker only; page fetching is keyless
+    jina_api_key: str = ""  # the jina reranker and the legacy jina index only; page fetching is keyless
     gemini_api_key: str = ""
     groq_api_key: str = ""
     openai_api_key: str = ""
@@ -63,7 +61,13 @@ class Settings(BaseSettings):
     docling_max_pages: int = 50
     docling_timeout_seconds: int = 900
 
-    enable_reranker: bool = True
+    # Chat's default retrieval (src/retrieving/config.py); an evaluation sets its own.
+    retrieval_strategy: str = "hybrid"  # dense | sparse | hybrid
+    # The reranker a query's use_reranker flag applies: flashrank | jina | none.
+    reranker: str = "flashrank"
+    enable_reranker: Optional[bool] = None  # legacy: false means RERANKER=none
+    flashrank_model: str = "ms-marco-TinyBERT-L-2-v2"
+    flashrank_cache_dir: str = ""  # empty = ~/.cache/flashrank
     enable_query_generalisation: bool = False
     query_concurrency: int = 4
     # How many ingestion jobs one worker process runs at once (Procrastinate Worker
@@ -76,6 +80,13 @@ class Settings(BaseSettings):
     @property
     def effective_admin_key(self) -> str:
         return self.admin_api_key or self.rag_api_key
+
+    @property
+    def effective_reranker(self) -> Optional[str]:
+        """The configured reranker's name, or None when reranking is off."""
+        if self.enable_reranker is False or self.reranker.lower() == "none":
+            return None
+        return self.reranker.lower()
 
     @property
     def cors_origins(self) -> List[str]:
@@ -103,6 +114,13 @@ class Settings(BaseSettings):
         elif embedding_key and not getattr(self, embedding_key):
             problems.append(f"{embedding_key.upper()} (EMBEDDING_PROVIDER={self.embedding_provider})")
 
+        if self.retrieval_strategy.lower() not in ("dense", "sparse", "hybrid"):
+            problems.append("RETRIEVAL_STRATEGY (dense | sparse | hybrid)")
+        if self.reranker.lower() not in ("flashrank", "jina", "none"):
+            problems.append("RERANKER (flashrank | jina | none)")
+        elif self.effective_reranker == "jina" and not self.jina_api_key:
+            problems.append("JINA_API_KEY (RERANKER=jina)")
+
         provider_key = {"gemini": "gemini_api_key", "groq": "groq_api_key", "openai": "openai_api_key"}.get(
             self.llm_provider.lower()
         )
@@ -113,6 +131,8 @@ class Settings(BaseSettings):
     def warn_on_legacy_secrets(self) -> None:
         if self.rag_api_key and not self.admin_api_key:
             logger.warning("RAG_API_KEY is deprecated; set ADMIN_API_KEY instead.")
+        if self.enable_reranker is not None:
+            logger.warning("ENABLE_RERANKER is deprecated; set RERANKER=flashrank | jina | none instead.")
 
 
 def _csv(value: str) -> List[str]:

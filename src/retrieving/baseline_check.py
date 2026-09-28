@@ -12,8 +12,9 @@ drop means at least one query got worse. Loosen it deliberately for configuratio
 non-deterministic service (for example reranking). This is a stop-gap: statistical significance
 testing replaces it once the evaluation engine stores per-query results.
 
-Runs are comparable only when dataset, query count, retrieval configuration and index size all match:
-metrics measured against a different corpus say nothing about a code change.
+Runs are comparable only when dataset, query count, embedding index, index size and every
+retrieval configuration knob (src/retrieving/config.py) match: metrics measured against a
+different corpus or configuration say nothing about a code change.
 
 Exit codes: 0 = no regression, 1 = regression, 2 = runs are not comparable.
 """
@@ -24,7 +25,6 @@ from pathlib import Path
 from typing import List
 
 GATED_METRICS = ("recall_at_1", "recall_at_3", "recall_at_5", "mrr")
-COMPARABLE_CONFIG_KEYS = ("top_k", "use_hybrid", "use_sparse", "use_reranker")
 
 
 def load_run(path: str) -> dict:
@@ -38,6 +38,8 @@ def not_comparable_reasons(baseline: dict, candidate: dict) -> List[str]:
 
     if base_fp.get("dataset_md5") != cand_fp.get("dataset_md5"):
         reasons.append(f"dataset differs (md5 {base_fp.get('dataset_md5')} vs {cand_fp.get('dataset_md5')})")
+    if base_fp.get("index_id") != cand_fp.get("index_id"):
+        reasons.append(f"embedding index differs ({base_fp.get('index_id')} vs {cand_fp.get('index_id')})")
     if base_fp.get("index_count") != cand_fp.get("index_count"):
         reasons.append(
             f"index size differs ({base_fp.get('index_count')} vs {cand_fp.get('index_count')} chunks); "
@@ -48,7 +50,7 @@ def not_comparable_reasons(baseline: dict, candidate: dict) -> List[str]:
 
     base_cfg = base_fp.get("configuration", {})
     cand_cfg = cand_fp.get("configuration", {})
-    for key in COMPARABLE_CONFIG_KEYS:
+    for key in sorted(set(base_cfg) | set(cand_cfg)):
         if base_cfg.get(key) != cand_cfg.get(key):
             reasons.append(f"configuration '{key}' differs ({base_cfg.get(key)} vs {cand_cfg.get(key)})")
     return reasons

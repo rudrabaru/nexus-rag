@@ -27,9 +27,8 @@ def test_ready_is_a_503_when_initialisation_failed(client, app_state):
 
 
 def test_overload_is_a_503_with_retry_after_not_a_200_answer(client, app_state, tenant_key):
-    for name in ("generator", "retriever", "evaluator"):
+    for name in ("generator", "retrieval", "evaluator"):
         setattr(app_state, name, MagicMock())
-    app_state.reranker = None
     app_state.query_semaphore = asyncio.Semaphore(0)
     key = tenant_key("tenant-1")
 

@@ -1,12 +1,12 @@
 from fastapi import HTTPException, Request
-from typing import Any, Optional
+from typing import Optional
 
 import procrastinate
 
 from src.generating.generator import RAGGenerator
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.query_rewriter import QueryRewriter
-from src.retrieving.retriever import OptionalReranker
+from src.retrieving.pipeline import RetrievalResources
 from src.registry.database import DocumentRegistry
 from src.registry.auth_store import AuthStore
 
@@ -25,13 +25,9 @@ def get_generator(request: Request) -> RAGGenerator:
     _check_ready(request)
     return request.app.state.generator
 
-def get_retriever(request: Request) -> Any:
+def get_retrieval(request: Request) -> RetrievalResources:
     _check_ready(request)
-    return request.app.state.retriever
-
-def get_reranker(request: Request) -> OptionalReranker:
-    _check_ready(request)
-    return request.app.state.reranker
+    return request.app.state.retrieval
 
 def get_evaluator(request: Request) -> FaithfulnessEvaluator:
     _check_ready(request)

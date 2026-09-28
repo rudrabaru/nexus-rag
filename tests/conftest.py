@@ -17,7 +17,7 @@ from src.registry.schema import api_keys  # noqa: E402
 ADMIN_KEY = "test-admin-key-0123456789"
 
 STATE_KEYS = (
-    "ready", "auth_store", "registry", "retriever", "reranker", "generator", "chunk_store",
+    "ready", "auth_store", "registry", "retrieval", "generator",
     "evaluator", "rewriter", "metrics_store", "pipeline_logger", "query_semaphore",
     "job_queue",
 )

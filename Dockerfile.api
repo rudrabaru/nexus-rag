@@ -16,6 +16,11 @@ RUN apt-get update && apt-get install -y \
 COPY requirements-base.txt requirements-api.txt ./
 RUN pip install --no-cache-dir -r requirements-api.txt
 
+# Bake the default reranker's model (~4 MB) into the image, so no query waits for a download.
+# Keep the model name in step with FLASHRANK_MODEL's default (src/config.py).
+ENV FLASHRANK_CACHE_DIR=/opt/flashrank
+RUN python -c "from flashrank import Ranker; Ranker(model_name='ms-marco-TinyBERT-L-2-v2', cache_dir='/opt/flashrank')"
+
 # Copy the application (.dockerignore keeps secrets and local state out).
 # alembic.ini and migrations/ are included: the API verifies the schema revision at startup.
 COPY . .

@@ -8,24 +8,23 @@ from .evaluation_models import (
     EvaluationResult,
     EvaluationReport,
 )
-from .retriever import DenseRetriever, OptionalReranker
 from .evaluation_helpers import evaluate_chunk
+from .pipeline import RetrievalPipeline
 
 logger = logging.getLogger(__name__)
 
 class Evaluator:
-    def __init__(self, retriever: DenseRetriever, reranker: OptionalReranker = None, tenant_id: str = None):
-        self.retriever = retriever
-        self.reranker = reranker
+    def __init__(self, pipeline: RetrievalPipeline, tenant_id: str = None):
+        self.pipeline = pipeline
         self.tenant_id = tenant_id
 
-    async def evaluate(
-        self, queries: List[EvaluationQuery], top_k: int = 5
-    ) -> EvaluationReport:
+    async def evaluate(self, queries: List[EvaluationQuery]) -> EvaluationReport:
         """
         Runs queries one at a time inside the caller's event loop. Sequential on purpose: the
         report records per-query latency percentiles, which concurrent queries would distort.
         """
+        top_k = self.pipeline.config.top_k
+        reranked = self.pipeline.reranker is not None
         results = []
         latencies = []
         reranker_failures = []
@@ -37,23 +36,15 @@ class Evaluator:
         for q in queries:
             pre_rank = -1
             pre_exact_rank = -1
-            dense_result = None
-            pre_order = []
-            if self.reranker:
-                dense_result = await self.retriever.retrieve(q.query, top_k=top_k * 4, tenant_id=self.tenant_id, allow_global=True)
-                pre_order = [
-                    {"chunk_id": c.chunk_id, "source": c.source_document, "score": c.similarity_score}
-                    for c in dense_result.chunks[:top_k]
-                ]
-                for idx, c in enumerate(dense_result.chunks):
-                    _, _, pre_rank, pre_exact_rank, _ = evaluate_chunk(c, q, idx, pre_rank, pre_exact_rank)
-
-                result = await self.reranker.rerank(q.query, dense_result.chunks, top_k=top_k)
-                result.embedding_latency_ms = dense_result.embedding_latency_ms
-                result.search_latency_ms = dense_result.search_latency_ms
-                result.latency_ms += dense_result.latency_ms
-            else:
-                result = await self.retriever.retrieve(q.query, top_k=top_k, tenant_id=self.tenant_id, allow_global=True)
+            result = await self.pipeline.run(q.query, tenant_id=self.tenant_id, allow_global=True)
+            if result.degraded:
+                logger.warning(f"Degraded retrieval for {q.query!r}: {result.degraded}")
+            pre_order = [
+                {"chunk_id": c.chunk_id, "source": c.source_document, "score": c.similarity_score}
+                for c in result.candidates[:top_k]
+            ]
+            for idx, c in enumerate(result.candidates):
+                _, _, pre_rank, pre_exact_rank, _ = evaluate_chunk(c, q, idx, pre_rank, pre_exact_rank)
             latencies.append(result.latency_ms)
 
             chunk_infos = []
@@ -81,7 +72,7 @@ class Evaluator:
                     hits_at_5 += 1
                 rr_sum += 1.0 / rank
 
-            if self.reranker and pre_rank != -1:
+            if reranked and pre_rank != -1:
                 # If it was ranked before reranking, and after reranking it is worse (or unranked -1)
                 if rank == -1 or rank > pre_rank:
                     post_order = [
@@ -124,9 +115,10 @@ class Evaluator:
                     hit_at_5=(1 <= rank <= 5),
                     best_match_type=best_match_type,
                     latency_ms=result.latency_ms,
-                    embedding_latency_ms=getattr(result, "embedding_latency_ms", 0.0),
-                    search_latency_ms=getattr(result, "search_latency_ms", 0.0),
-                    rerank_latency_ms=getattr(result, "rerank_latency_ms", 0.0),
+                    embedding_latency_ms=result.embedding_latency_ms,
+                    search_latency_ms=result.search_latency_ms,
+                    rerank_latency_ms=result.rerank_latency_ms,
+                    degraded=result.degraded,
                 )
             )
 
