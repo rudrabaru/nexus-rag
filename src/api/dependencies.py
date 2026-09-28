@@ -6,7 +6,6 @@ import procrastinate
 from src.generating.generator import RAGGenerator
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.query_rewriter import QueryRewriter
-from src.retrieving.chunk_store import ChunkStore
 from src.retrieving.retriever import OptionalReranker
 from src.registry.database import DocumentRegistry
 from src.registry.auth_store import AuthStore
@@ -29,10 +28,6 @@ def get_generator(request: Request) -> RAGGenerator:
 def get_retriever(request: Request) -> Any:
     _check_ready(request)
     return request.app.state.retriever
-
-def get_chunk_store(request: Request) -> ChunkStore:
-    _check_ready(request)
-    return request.app.state.chunk_store
 
 def get_reranker(request: Request) -> OptionalReranker:
     _check_ready(request)

@@ -14,7 +14,7 @@ import hashlib
 from typing import List
 
 from .metadata import ChunkMetadata, ChunkingConfig
-from .tokenizer import TokenCounter, TokenBudget
+from .tokenizer import TokenCounter
 from .parsers import parse_sections, extract_blocks
 from .merger import merge_tiny_chunks
 from .heuristics import get_overlap_blocks, build_chunk_metadata
@@ -32,18 +32,6 @@ class DocumentChunker:
     ):
         self.config = config or ChunkingConfig()
         self.token_counter = token_counter or TokenCounter()
-        self.token_budget = TokenBudget(
-            self.config.chunk_size, self.config.overlap, self.token_counter
-        )
-
-        self.stats = {
-            "total_documents_processed": 0,
-            "total_chunks_generated": 0,
-            "total_tokens_generated": 0,
-            "oversized_chunks": 0,
-            "tiny_chunks_merged": 0,
-            "content_types": {"text": 0, "code": 0, "table": 0, "mixed": 0},
-        }
 
         logger.info(
             f"DocumentChunker initialized: {self.config.chunk_size} tokens, "
@@ -79,25 +67,13 @@ class DocumentChunker:
                     c.token_count = self.config.embedding_hard_limit
 
                 c.total_chunks = total
-                self.stats["total_chunks_generated"] += 1
-                self.stats["total_tokens_generated"] += c.token_count
-                if c.oversized_chunk:
-                    self.stats["oversized_chunks"] += 1
-                if c.tiny_chunk_merged:
-                    self.stats["tiny_chunks_merged"] += 1
-                if c.content_type in self.stats["content_types"]:
-                    self.stats["content_types"][c.content_type] += 1
-                else:
-                    self.stats["content_types"][c.content_type] = 1
 
-            self.stats["total_documents_processed"] += 1
             logger.debug(f"Created {len(chunks)} chunks from {url}")
             return chunks
-        except Exception as e:
-            logger.error(f"Error chunking {url}: {e}")
-            import traceback
-
-            traceback.print_exc()
+        except Exception:
+            # One unchunkable page must not sink a whole sitemap job; the caller fails the job
+            # when no document produced a chunk.
+            logger.exception(f"Error chunking {url}; the document is skipped")
             return []
 
     def chunk_batch(self, docs: List[dict]) -> List[ChunkMetadata]:
@@ -111,7 +87,10 @@ class DocumentChunker:
                     f"{len(all_chunks)} chunks so far"
                 )
         logger.info(
-            f"Completed chunking {len(docs)} documents, total chunks: {len(all_chunks)}"
+            f"CHUNK | {len(docs)} documents -> {len(all_chunks)} chunks | "
+            f"tokens {sum(c.token_count for c in all_chunks)} | "
+            f"oversized {sum(c.oversized_chunk for c in all_chunks)} | "
+            f"merged from tiny {sum(c.tiny_chunk_merged for c in all_chunks)}"
         )
         return all_chunks
 

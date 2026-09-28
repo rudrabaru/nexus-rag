@@ -8,7 +8,6 @@ class Section:
         self.title = title
         self.level = level
         self.heading_path = heading_path
-        self.blocks = []  # List of Block
         self.text = ""
 
 

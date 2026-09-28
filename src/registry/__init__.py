@@ -1,7 +1,1 @@
-"""
-Document registry package.
-"""
-
-from .database import DocumentRegistry
-
-__all__ = ["DocumentRegistry"]
+"""The Postgres-backed registry: schema, engines, documents, jobs, keys and metrics."""
