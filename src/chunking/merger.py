@@ -87,7 +87,6 @@ def merge_tiny_chunks(
         if should_merge:
             current.chunk_text += "\n\n" + next_chunk.chunk_text
             current.token_count += next_chunk.token_count
-            current.char_end = next_chunk.char_end
             current.contains_code = current.contains_code or next_chunk.contains_code
             current.contains_table = current.contains_table or next_chunk.contains_table
             current.tiny_chunk_merged = True
@@ -105,9 +104,4 @@ def merge_tiny_chunks(
             current = next_chunk
 
     merged.append(current)
-
-    for i, c in enumerate(merged):
-        c.chunk_index = i
-        c.total_chunks = len(merged)
-
     return merged

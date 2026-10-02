@@ -3,8 +3,8 @@
 This document captures the explicit architectural tradeoffs and design decisions made to ensure the RAG system remains highly performant, resilient, and capable of operating as an efficient in-memory microservice.
 
 ## 1. API-First Model Architecture
-**Decision:** Rely entirely on external APIs for both dense embedding generation and LLM generation, rather than loading local open-weight models.
-**Rationale:** Loading modern LLMs and embedding models locally requires massive amounts of RAM and GPU resources. By delegating this compute to specialized external APIs, the core RAG microservice maintains a near-zero memory footprint for ML processing, allowing it to run on extremely resource-constrained infrastructure.
+**Decision:** Rely on external APIs for embeddings and LLM generation rather than loading local open-weight models. The one exception is the default reranker: a ~4 MB ONNX cross-encoder (FlashRank) that runs on CPU inside the API, with no torch and no GPU (Phase 5).
+**Rationale:** Loading modern LLMs and embedding models locally requires massive amounts of RAM and GPU resources. By delegating this compute to specialized external APIs, the core RAG microservice keeps a small memory footprint and runs on extremely resource-constrained infrastructure. The reranker is small enough to be the exception, and running it locally removes a per-query API cost and a one-time-grant dependency.
 **Tradeoff:** The system introduces a hard dependency on external network calls. Network partitions or API outages will degrade functionality. To mitigate this, the system implements robust exponential backoff and retry logic, and supports seamless fallback providers.
 
 ## 2. One Durable Store: Postgres (Neon) with pgvector
@@ -32,10 +32,9 @@ This document captures the explicit architectural tradeoffs and design decisions
 **Rationale:** The SQLite schema was created with `CREATE TABLE IF NOT EXISTS` and patched with `ALTER TABLE` inside `try/except`, so nothing recorded which shape a database had. Auto-migrating on boot races when several instances start at once. A failed startup check produces a clear message instead of a failure at the first query that touches a missing column.
 **Tradeoff:** Deploying a schema change is two steps (migrate, then roll out). CI runs `alembic check` against real Postgres, so `schema.py` and the migrations cannot drift apart unnoticed.
 
-## 4. Ingestion Concurrency (superseded — see item 13)
-**Decision (original):** Enforce strict, semaphore-based concurrency limits on document ingestion, inside the API process.
-**Rationale (original):** Ingestion involves memory-intensive tasks like extracting text from massive PDFs and rendering heavy web pages. Allowing unbounded concurrent ingestions would quickly lead to out-of-memory crashes on small servers.
-**Superseded by item 13.** Ingestion no longer runs in the API process at all, so an in-process semaphore cannot bound it. The equivalent limit is now the worker's own `Worker(concurrency=N)` (`WORKER_CONCURRENCY`, default 2), which bounds how many jobs one worker process runs at once; running more workers adds capacity without touching the API. The "asynchronous tracking identifier, poll for status" UX this section originally described is unchanged — only how the work behind it is scheduled changed.
+## 4. Ingestion Concurrency
+**Decision:** Bound ingestion by the worker's own concurrency (`WORKER_CONCURRENCY`, default 2, Procrastinate's `Worker(concurrency=N)`), not inside the API.
+**Rationale:** Ingestion is memory-intensive (Docling parses one document at a time per worker, Phase 1). It runs only in worker processes, so the limit lives there; more workers add capacity without touching the API. Callers get a job id at once and poll its status.
 
 ## 5. Serverless Web Reading API vs. Local Headless Browser
 **Decision:** Utilize an external serverless web reading API for web document crawling and conversion to clean markdown, rather than running a local headless browser or basic HTML scrapers.
@@ -61,7 +60,7 @@ A startup fail-fast guard validates the whole configuration (`src/config.py`) an
 
 ## 9. In-Memory Query Embedding Cache
 **Decision:** Cache recently computed query embeddings in a fixed-capacity, MD5-keyed in-memory dictionary.
-**Rationale:** Many conversational RAG interactions involve follow-up queries that are semantically similar or even identical to a prior query. Re-embedding the same text via the external Jina API is a wasteful, latency-adding network round-trip. A 500-entry LRU-style in-memory cache eliminates this redundancy for repeated queries at the cost of negligible RAM.
+**Rationale:** Many conversational RAG interactions involve follow-up queries that are semantically similar or even identical to a prior query. Re-embedding the same text via the hosted embedding API is a wasteful, latency-adding round-trip, and with Voyage's no-payment-method limit of 3 requests per minute it is also a scarce one. A 500-entry LRU-style in-memory cache per embedding index eliminates this for repeated queries at the cost of negligible RAM. The cache also remembers each query's token count, so an evaluation still charges every configuration what its embedding costs (Phase 6).
 **Tradeoff:** Cache entries do not survive server restarts, and the cache is shared across all tenants (keyed purely on the query string hash). This is acceptable — query text itself is not sensitive, and cache misses simply fall back to a live API call with no correctness impact.
 
 ## 10. Admin-Provisioned Workspace Keys

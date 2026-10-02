@@ -98,7 +98,7 @@ streamlit run scripts/chat_ui.py
 
 ### Testing & Monitoring
 - **Performance Tracking:** Built-in logs track exactly how long each step (searching, ranking, generating) takes.
-- **Automated Grading:** The system can automatically grade itself on how well it retrieved information and how accurate its final answers are.
+- **Evaluation with evidence:** `python -m src.evaluation run spec.json` runs several retrieval configurations over the same questions, stores every per-question result in Postgres, and reports whether each one is significantly better or worse than a baseline (or that the question set is too small to tell). Optionally it also generates answers and has a pinned judge model score their faithfulness, with answers and verdicts cached so identical work is never paid for twice.
 
 ## Pipeline Architecture
 

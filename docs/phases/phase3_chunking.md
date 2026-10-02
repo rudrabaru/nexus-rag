@@ -44,7 +44,7 @@ To maintain context between adjacent chunks and avoid cutting off thoughts abrup
 
 **Conclusions.** The current chunker is not the problem. Two upstream causes are supported by evidence: (1) PDF text extraction loses heading structure; (2) boilerplate that repeats across documents is indexed. Neither justifies replacing the chunker. A generic, structural filter (block text repeated across many documents of one tenant) is the indicated fix for (2); it must be validated against the baselines in the evaluation phase before adoption.
 
-**Open questions (not yet measured):** whether the missing PDF headings affect any benchmark query; whether the 40-tenant pool lets near-identical chunks from different tenants occupy the top-k of an all-tenant evaluation (the evaluator searches with `allow_global=True`).
+**Open questions (not yet measured):** whether the missing PDF headings affect any benchmark query; whether the 40-tenant pool let near-identical chunks from different tenants occupy the top-k of the then all-tenant evaluation. (Moot since 2026-10-01: evaluations are scoped to one tenant.)
 
 ## Follow-up (item 8, 2026-09-26)
 

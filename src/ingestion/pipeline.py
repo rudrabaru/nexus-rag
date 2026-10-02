@@ -94,7 +94,6 @@ def process_documents(
     if not all_chunks:
         raise UnprocessableSourceError("No chunk could be produced from the extracted content.")
     for c in all_chunks:
-        c.visibility = "private"
         c.tenant_id = tenant_id
         c.doc_id = doc_id
 

@@ -70,11 +70,9 @@ class RetrievalPipeline:
     sparse: SparseRetriever
     reranker: Optional[Reranker] = None
 
-    async def run(
-        self, query: str, tenant_id: Optional[str], allow_global: bool = False, pipeline_logger: Any = None
-    ) -> RetrievalResult:
+    async def run(self, query: str, tenant_id: Optional[str], pipeline_logger: Any = None) -> RetrievalResult:
         start = time.time()
-        result = await self._first_stage(query, tenant_id, allow_global, pipeline_logger)
+        result = await self._first_stage(query, tenant_id, pipeline_logger)
 
         if self.reranker:
             result.candidates = result.chunks
@@ -92,12 +90,10 @@ class RetrievalPipeline:
         result.latency_ms = (time.time() - start) * 1000
         return result
 
-    async def _first_stage(self, query, tenant_id, allow_global, pipeline_logger) -> RetrievalResult:
+    async def _first_stage(self, query, tenant_id, pipeline_logger) -> RetrievalResult:
         limit = self.config.candidate_count
-        dense = lambda: self.dense.retrieve(query, top_k=limit, tenant_id=tenant_id, allow_global=allow_global)  # noqa: E731
-        sparse = lambda: self.sparse.retrieve(  # noqa: E731
-            query, top_k=limit, tenant_id=tenant_id, pipeline_logger=pipeline_logger, allow_global=allow_global
-        )
+        dense = lambda: self.dense.retrieve(query, top_k=limit, tenant_id=tenant_id)  # noqa: E731
+        sparse = lambda: self.sparse.retrieve(query, top_k=limit, tenant_id=tenant_id, pipeline_logger=pipeline_logger)  # noqa: E731
         if self.config.strategy == "dense":
             return await dense()
         if self.config.strategy == "sparse":
@@ -123,6 +119,7 @@ class RetrievalPipeline:
             embedding_latency_ms=dense_result.embedding_latency_ms,
             search_latency_ms=max(dense_result.search_latency_ms, sparse_result.search_latency_ms),
             embedding_tokens=dense_result.embedding_tokens,
+            query_embedding_tokens=dense_result.query_embedding_tokens,
             embedding_cost_usd=dense_result.embedding_cost_usd,
             chunks=fuse(
                 [(dense_result.chunks, self.config.dense_weight), (sparse_result.chunks, self.config.sparse_weight)],

@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      spec:
+        description: "Experiment spec for the retrieval gate (empty = skip the gate)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -88,17 +93,18 @@ jobs:
         run: docker run --rm --entrypoint python nexus-worker:ci -c "import src.jobs.tasks, docling.document_converter"
 
   # Manual only: spends embedding quota and needs repository secrets DATABASE_URL and
-  # JINA_API_KEY. The frozen baselines were measured on the prototype Jina corpus, which was
-  # retired (2026-09-28); until baselines are re-frozen on a new corpus this job reports
-  # "not comparable" (exit 2) rather than a pass or a regression.
+  # VOYAGE_API_KEY. Runs an experiment spec (src/evaluation/spec.py) against the live index and
+  # fails when any trial is significantly worse than the spec's baseline trial. Needs an
+  # ingested corpus and a dataset for it (synthetic test sets, item 11).
   retrieval-gate:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.spec != ''
     needs: test
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
-      JINA_API_KEY: ${{ secrets.JINA_API_KEY }}
-      EMBEDDING_PROVIDER: jina
+      VOYAGE_API_KEY: ${{ secrets.VOYAGE_API_KEY }}
+      ADMIN_API_KEY: ci-gate-unused
+      GEMINI_API_KEY: ci-gate-unused  # retrieval-only specs call no LLM
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -109,11 +115,5 @@ jobs:
       - name: CPU-only torch (Docling's dependency; the CUDA build is several GB)
         run: pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
       - run: pip install -r requirements-dev.txt
-      - name: Dense — evaluate and gate
-        run: |
-          python -m src.retrieving.eval_runner --dataset evaluation_datasets/benchmark.json --output-dir retrieval/ci/dense
-          python -m src.retrieving.baseline_check evaluation_datasets/baselines/dense_top5.json "$(ls -d retrieval/ci/dense/eval_*/ | tail -1)evaluation_metrics.json"
-      - name: Hybrid — evaluate and gate
-        run: |
-          python -m src.retrieving.eval_runner --dataset evaluation_datasets/benchmark.json --output-dir retrieval/ci/hybrid --strategy hybrid
-          python -m src.retrieving.baseline_check evaluation_datasets/baselines/hybrid_top5.json "$(ls -d retrieval/ci/hybrid/eval_*/ | tail -1)evaluation_metrics.json"
+      - name: Run the experiment and gate on significant regressions
+        run: python -m src.evaluation run "${{ inputs.spec }}" --fail-on-regression

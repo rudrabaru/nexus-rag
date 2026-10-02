@@ -8,3 +8,4 @@ uvicorn>=0.29.0
 slowapi>=0.1.9
 python-multipart>=0.0.9
 flashrank==0.2.10  # the default reranker: a small ONNX cross-encoder on CPU (onnxruntime, no torch)
+numpy>=1.24  # the evaluation engine's significance tests (src/evaluation/significance.py)

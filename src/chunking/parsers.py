@@ -107,9 +107,7 @@ def parse_sections(content: str) -> List[Section]:
     return [s for s in sections if s.text.strip()]
 
 
-def extract_blocks(
-    text: str, char_offset_base: int, token_counter: TokenCounter
-) -> List[Block]:
+def extract_blocks(text: str, token_counter: TokenCounter) -> List[Block]:
     """Extract atomic blocks (Code, Table, Paragraph) from a section's text."""
     blocks = []
 
@@ -143,8 +141,6 @@ def extract_blocks(
                     split_paragraphs.append(chunk_text)
         else:
             split_paragraphs.append(p)
-
-    current_char = char_offset_base
 
     for para in split_paragraphs:
         if not para.strip():
@@ -181,7 +177,6 @@ def extract_blocks(
                 # Merge it
                 blocks[-1].text += "\n" + para
                 blocks[-1].token_count = token_counter.count_tokens(blocks[-1].text)
-                current_char += len(para) + 2
                 continue
                 
         token_count = token_counter.count_tokens(para)
@@ -190,11 +185,8 @@ def extract_blocks(
                 text=para,
                 block_type=block_type,
                 token_count=token_count,
-                char_start=current_char,
             )
         )
 
-        # Approximate char advance
-        current_char += len(para) + 2
 
     return blocks

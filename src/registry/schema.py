@@ -16,6 +16,10 @@ Design notes:
 - api_keys uses only portable column types and no foreign keys, so the auth store runs the
   same SQL against SQLite in unit tests. A tenant exists when it holds a key; the tenants
   table only carries usage counters and is populated on first use.
+- Evaluation (src/evaluation): an experiment freezes its query set; it has one trial per
+  retrieval configuration and one run per trial and query. Runs are the per-query evidence
+  the significance tests need, so they are stored, not only aggregated. The two caches
+  hold LLM answers and judge scores keyed by a hash of everything that determines them.
 """
 from sqlalchemy import (
     BigInteger,
@@ -33,6 +37,7 @@ from sqlalchemy import (
     PrimaryKeyConstraint,
     Table,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
@@ -242,4 +247,86 @@ pipeline_events = Table(
     Column("query_id", Text),
     Column("job_id", Text),
     Column("details", Json),
+)
+
+experiments = Table(
+    "experiments",
+    metadata,
+    Column("experiment_id", Text, primary_key=True),
+    Column("name", Text, nullable=False),
+    Column("tenant_id", Text, nullable=False),
+    Column("spec", Json, nullable=False),
+    Column("dataset_name", Text, nullable=False),
+    Column("dataset_hash", Text, nullable=False),
+    Column("queries", Json, nullable=False),  # the frozen query set: a dataset file edited later cannot change it
+    Column("status", Text, nullable=False),  # running | paused | complete | failed
+    Column("summary", Json),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=_now()),
+    Column("finished_at", DateTime(timezone=True)),
+    Index(None, "tenant_id", "created_at"),
+)
+
+trials = Table(
+    "trials",
+    metadata,
+    Column("trial_id", Text, primary_key=True),
+    Column("experiment_id", Text, ForeignKey("experiments.experiment_id", ondelete="CASCADE"), nullable=False),
+    Column("label", Text, nullable=False),
+    Column("config", Json, nullable=False),  # RetrievalConfig, every knob
+    Column("index_id", Text, nullable=False),
+    Column("index_count", Integer, nullable=False),  # chunks in the index when the trial started
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=_now()),
+    UniqueConstraint("experiment_id", "label"),
+)
+
+runs = Table(
+    "runs",
+    metadata,
+    Column("trial_id", Text, ForeignKey("trials.trial_id", ondelete="CASCADE"), nullable=False),
+    Column("query_index", Integer, nullable=False),
+    Column("rank", Integer),  # 1-based rank of the first relevant chunk; NULL = none retrieved
+    Column("exact_rank", Integer),  # same, counting only chunks whose heading also matched
+    Column("first_stage_rank", Integer),  # before reranking (reranked trials only)
+    Column("retrieved", Json, nullable=False),  # [{chunk_id, source, score, match}] in rank order
+    Column("latency_ms", Float, nullable=False),
+    Column("embedding_tokens", Integer, nullable=False, server_default="0"),  # as if uncached
+    Column("embedding_cost_usd", Float, nullable=False, server_default="0"),
+    Column("rerank_cost_usd", Float, nullable=False, server_default="0"),
+    Column("degraded", Json, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("answer", Text),
+    Column("generation_model", Text),
+    Column("generation_input_tokens", Integer),
+    Column("generation_output_tokens", Integer),
+    Column("generation_cost_usd", Float),
+    Column("generation_cached", Boolean),
+    Column("faithfulness", Float),
+    Column("faithfulness_reasoning", Text),
+    Column("judge_model", Text),
+    Column("judge_cached", Boolean),
+    Column("error", Text),  # set = this run is invalid (generation failed) and is retried on resume
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=_now()),
+    PrimaryKeyConstraint("trial_id", "query_index"),
+)
+
+generation_cache = Table(
+    "generation_cache",
+    metadata,
+    Column("cache_key", Text, primary_key=True),  # sha256(tenant, model, prompt)
+    Column("model", Text, nullable=False),
+    Column("answer", Text, nullable=False),
+    Column("input_tokens", Integer, nullable=False),
+    Column("output_tokens", Integer, nullable=False),
+    Column("cost_usd", Float, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=_now()),
+)
+
+judge_cache = Table(
+    "judge_cache",
+    metadata,
+    Column("cache_key", Text, primary_key=True),  # sha256(tenant, metric, judge model, question, answer, context ids)
+    Column("metric", Text, nullable=False),
+    Column("judge_model", Text, nullable=False),
+    Column("score", Float, nullable=False),
+    Column("reasoning", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=_now()),
 )

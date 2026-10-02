@@ -22,28 +22,31 @@ class DenseRetriever:
             )
         self.chunk_store = chunk_store
         self.embedder = embedder
-        self._cache: "OrderedDict[str, List[float]]" = OrderedDict()
+        self._cache: "OrderedDict[str, Tuple[List[float], int]]" = OrderedDict()
 
-    async def _embed_query(self, query: str) -> Tuple[List[float], int]:
+    async def _embed_query(self, query: str) -> Tuple[List[float], int, bool]:
+        """(vector, tokens the query costs to embed, whether it came from the cache)."""
         key = hashlib.md5(query.lower().strip().encode()).hexdigest()
         if key in self._cache:
-            return self._cache[key], 0
+            vector, tokens = self._cache[key]
+            return vector, tokens, True
         batch = await self.embedder.aembed([query], "query")
-        self._cache[key] = batch.vectors[0]
+        self._cache[key] = (batch.vectors[0], batch.tokens)
         if len(self._cache) > QUERY_CACHE_SIZE:
             self._cache.popitem(last=False)
-        return batch.vectors[0], batch.tokens
+        return batch.vectors[0], batch.tokens, False
 
     async def retrieve(
-        self, query: str, top_k: int = 5, tenant_id: Optional[str] = None, pipeline_logger: Optional[Any] = None, allow_global: bool = False
+        self, query: str, top_k: int = 5, tenant_id: Optional[str] = None, pipeline_logger: Optional[Any] = None
     ) -> RetrievalResult:
         start_time = time.time()
-        query_embedding, embedding_tokens = await self._embed_query(query)
+        query_embedding, query_tokens, cached = await self._embed_query(query)
+        embedding_tokens = 0 if cached else query_tokens
         embed_latency = (time.time() - start_time) * 1000
 
         search_start = time.time()
         candidates = await self.chunk_store.search_dense(
-            query_embedding=query_embedding, top_k=top_k, tenant_id=tenant_id, allow_global=allow_global
+            query_embedding=query_embedding, top_k=top_k, tenant_id=tenant_id
         )
         search_latency = (time.time() - search_start) * 1000
 
@@ -62,5 +65,6 @@ class DenseRetriever:
             search_latency_ms=search_latency,
             embedding_tokens=embedding_tokens,
             embedding_cost_usd=self.embedder.cost_usd(embedding_tokens),
+            query_embedding_tokens=query_tokens,
             chunks=candidates,
         )

@@ -4,9 +4,18 @@ Pydantic models for the generation phase.
 Separates data shapes from logic to keep all other modules lean and testable.
 """
 
-from datetime import datetime, timezone
 from typing import List, Optional
 from pydantic import BaseModel, Field
+
+
+DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
+# llama-3.1-8b-instant was retired from Groq (404 NotFoundError, confirmed live
+# 2026-09-22 against the project's key; the key's /models list no longer carries it).
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
+
+
+def default_model_name(provider: str) -> str:
+    return DEFAULT_GEMINI_MODEL if provider == "gemini" else DEFAULT_GROQ_MODEL
 
 
 class GenerationConfig(BaseModel):
@@ -149,7 +158,3 @@ class GenerationResult(BaseModel):
         None, description="LLM judge reasoning for the faithfulness score"
     )
 
-    generated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}

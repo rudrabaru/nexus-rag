@@ -12,11 +12,11 @@ class SparseRetriever:
         self.chunk_store = chunk_store
 
     async def retrieve(
-        self, query: str, top_k: int = 5, tenant_id: Optional[str] = None, pipeline_logger: Optional[Any] = None, allow_global: bool = False
+        self, query: str, top_k: int = 5, tenant_id: Optional[str] = None, pipeline_logger: Optional[Any] = None
     ) -> RetrievalResult:
         start_time = time.time()
         chunks, fallback_used = await self.chunk_store.search_sparse(
-            query, tenant_id=tenant_id, limit=top_k, allow_global=allow_global
+            query, tenant_id=tenant_id, limit=top_k
         )
         if fallback_used and pipeline_logger:
             pipeline_logger.log_event("fts_fallback_triggered", query=query, tenant_id=tenant_id)

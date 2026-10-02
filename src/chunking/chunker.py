@@ -51,7 +51,6 @@ class DocumentChunker:
 
         try:
             chunks = self._split_content(content, url, title, doc_name)
-            total = len(chunks)
             tokens_to_words_ratio = 1.3  # heuristic for English text
             for c in chunks:
                 if c.token_count > self.config.embedding_hard_limit:
@@ -65,8 +64,6 @@ class DocumentChunker:
                     max_words = int(self.config.embedding_hard_limit / tokens_to_words_ratio)
                     c.chunk_text = " ".join(words[:max_words]) + " [TRUNCATED]"
                     c.token_count = self.config.embedding_hard_limit
-
-                c.total_chunks = total
 
             logger.debug(f"Created {len(chunks)} chunks from {url}")
             return chunks
@@ -105,10 +102,9 @@ class DocumentChunker:
         sections = parse_sections(content)
         chunks = []
         chunk_index = 0
-        char_offset = 0
 
         for section in sections:
-            blocks = extract_blocks(section.text, char_offset, self.token_counter)
+            blocks = extract_blocks(section.text, self.token_counter)
 
             current_chunk_blocks = []
             current_tokens = 0
@@ -170,6 +166,5 @@ class DocumentChunker:
                     chunks.append(chunk)
                     chunk_index += 1
 
-            char_offset += len(section.text) + 1
 
         return merge_tiny_chunks(chunks, self.config)

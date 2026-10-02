@@ -2,8 +2,8 @@
 Pydantic schemas for chunk representation and metadata.
 """
 
-from datetime import datetime, timezone
-from typing import Optional, List
+from typing import List, Optional
+
 from pydantic import BaseModel, Field
 
 
@@ -19,21 +19,12 @@ class ChunkMetadata(BaseModel):
     )
     section_title: str = Field("", description="Title of the immediate section")
 
-    # Chunking metadata
-    chunk_index: int = Field(..., description="Chunk position in document")
-    total_chunks: int = Field(0, description="Total number of chunks in document")
     chunk_text: str = Field(..., description="Chunk content")
     token_count: int = Field(..., description="Token count (for budgeting)")
-    char_start: int = Field(..., description="Start position in original doc")
-    char_end: int = Field(..., description="End position in original doc")
 
     # Content flags
     starts_with_heading: bool = Field(False, description="Begins with heading?")
-    heading: Optional[str] = Field(None, description="Heading text if present")
     contains_code: bool = Field(False, description="Chunk contains code blocks")
-    code_languages: Optional[List[str]] = Field(
-        None, description="Languages of code blocks"
-    )
     contains_table: bool = Field(False, description="Chunk contains markdown tables")
     content_type: str = Field(
         "mixed",
@@ -41,7 +32,6 @@ class ChunkMetadata(BaseModel):
     )
     document_version: str = Field(..., description="Version of the processed doc used")
     chunk_version: str = Field(..., description="Chunking version used")
-    table_chunk: bool = Field(False, description="Is this an atomic table chunk")
     oversized_chunk: bool = Field(
         False, description="Is this chunk > max target size but allowed as exception"
     )
@@ -49,15 +39,8 @@ class ChunkMetadata(BaseModel):
         False, description="Was this chunk created by merging tiny chunks"
     )
 
-    # Multi-tenancy
-    visibility: str = Field("public", description="Public or private access")
-    tenant_id: Optional[str] = Field(None, description="Tenant ID for private docs")
+    tenant_id: Optional[str] = Field(None, description="Tenant that owns the chunk")
     doc_id: Optional[str] = Field(None, description="Registry document this chunk belongs to")
-
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat()}
 
 
 class ChunkingConfig(BaseModel):

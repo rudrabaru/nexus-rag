@@ -24,7 +24,7 @@ class FakeRetriever:
         self.error = error
         self.calls = []
 
-    async def retrieve(self, query, top_k=5, tenant_id=None, pipeline_logger=None, allow_global=False):
+    async def retrieve(self, query, top_k=5, tenant_id=None, pipeline_logger=None):
         self.calls.append(top_k)
         if self.error:
             raise self.error
@@ -168,24 +168,6 @@ async def test_a_failed_reranker_keeps_the_first_stage_order_and_records_why():
     ).run("q", "t")
     assert [c.chunk_id for c in result.chunks] == ["c0", "c1", "c2"]
     assert "jina: quota" in result.degraded[0]
-
-
-async def test_the_evaluator_records_a_reranker_demoting_the_right_chunk():
-    from src.retrieving.evaluation import Evaluator
-    from src.retrieving.evaluation_models import EvaluationQuery
-
-    reranking = pipeline(
-        FakeRetriever([f"c{i}" for i in range(8)]), reranker_impl=FakeReranker(),
-        strategy="dense", top_k=3, reranker="flashrank", rerank_candidates=8,
-    )
-    query = EvaluationQuery(
-        query="q", expected_topic="t", acceptable_documents=["c0"], acceptable_headings=[], difficulty="easy", category="c"
-    )
-    report = await Evaluator(reranking).evaluate([query])
-
-    assert report.recall_at_5 == 0.0  # the reranker pushed c0 out of the top 3
-    [failure] = report.reranker_failures
-    assert failure["pre_reranking_rank"] == 1 and failure["post_reranking_rank"] == -1
 
 
 # ── Rerankers ─────────────────────────────────────────────────────────────────

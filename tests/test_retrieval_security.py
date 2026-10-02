@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy.dialects import postgresql
 
-from src.retrieving.chunk_store import ChunkStore, resolve_tenant_scope
+from src.retrieving.chunk_store import ChunkStore, tenant_scope
 from src.retrieving.chunk_writes import write_chunks
 from src.retrieving.models import RetrievedChunk
 from src.retrieving.sparse import SparseRetriever
@@ -80,12 +80,11 @@ async def test_sparse_search_without_a_tenant_returns_nothing_and_runs_no_sql(te
     assert async_engine.statements == []
 
 
-def test_tenant_scope_resolution():
-    assert resolve_tenant_scope(None, False) == (False, None)
-    assert resolve_tenant_scope("ALL", False) == (False, None)
-    assert resolve_tenant_scope("ALL", True) == (True, None)
-    assert resolve_tenant_scope("tenant-1", False) == (True, "tenant-1")
-    assert resolve_tenant_scope("tenant-1", True) == (True, "tenant-1")
+def test_tenant_scope_has_no_global_bypass():
+    """There is no opt-in to an all-tenant search any more: evaluations are tenant-scoped too."""
+    for tenant in (None, "", "ALL", "*"):
+        assert tenant_scope(tenant) is None
+    assert tenant_scope("tenant-1") == "tenant-1"
 
 
 async def test_tenant_search_filters_on_the_tenant():
@@ -94,16 +93,10 @@ async def test_tenant_search_filters_on_the_tenant():
     assert "chunks.tenant_id =" in where_clause(async_engine.statements[0])
 
 
-async def test_global_search_is_opt_in_and_unfiltered_by_tenant():
-    store, _, async_engine = make_store([make_row()])
-    await store.search_dense(EMBEDDING, top_k=5, tenant_id=None, allow_global=True)
-    assert "tenant_id" not in where_clause(async_engine.statements[0])
-
-
-async def test_both_searches_are_scoped_to_the_stores_index_even_when_global():
+async def test_both_searches_are_scoped_to_the_stores_index():
     """Vectors of different models are not comparable, and sparse must search the same rows as dense."""
     store, _, async_engine = make_store([make_row()])
-    await store.search_dense(EMBEDDING, top_k=5, tenant_id=None, allow_global=True)
+    await store.search_dense(EMBEDDING, top_k=5, tenant_id="tenant-1")
     await store.search_sparse("hello", tenant_id="tenant-1")
     for stmt in async_engine.statements:
         assert "chunks.index_id =" in where_clause(stmt)
@@ -178,8 +171,8 @@ def test_a_chunk_without_tenant_or_document_is_never_stored(missing):
     from src.embedding.models import EmbeddedChunk
 
     fields = dict(
-        chunk_id="c", source_url="u", source_document="d", title="t", chunk_index=0, chunk_text="x",
-        token_count=1, char_start=0, char_end=1, document_version="v", chunk_version="v",
+        chunk_id="c", source_url="u", source_document="d", title="t", chunk_text="x",
+        token_count=1, document_version="v", chunk_version="v",
         tenant_id="tenant-1", doc_id="doc-1", embedding=EMBEDDING, embedding_model="m", index_id="test:m",
     )
     fields[missing] = None

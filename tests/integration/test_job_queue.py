@@ -24,7 +24,7 @@ pytestmark = pytest.mark.usefixtures("clean_tables")
 def chunk(chunk_id, tenant="tenant-1", doc_id="doc-1", text="hello world"):
     return EmbeddedChunk(
         chunk_id=chunk_id, source_url=f"https://example.com/{doc_id}", source_document=f"Doc {doc_id}", title="T",
-        heading_path=[], chunk_index=0, chunk_text=text, token_count=3, char_start=0, char_end=len(text),
+        heading_path=[], chunk_text=text, token_count=3, 
         document_version="v", chunk_version="v", tenant_id=tenant, doc_id=doc_id,
         embedding=[0.1] * 1024, embedding_model="test-model", index_id="test:test-model",
     )

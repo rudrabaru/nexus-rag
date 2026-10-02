@@ -4,16 +4,12 @@ from dataclasses import dataclass
 from src.config import get_settings
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.generator import RAGGenerator
-from src.generating.models import GenerationConfig
+from src.generating.models import DEFAULT_GROQ_MODEL, GenerationConfig, default_model_name
 from src.generating.query_rewriter import QueryRewriter
 from src.registry.database import DocumentRegistry
 from src.registry.engine import get_async_engine, get_sync_engine
 from src.retrieving.pipeline import RetrievalResources
 
-DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
-# llama-3.1-8b-instant was retired from Groq (404 NotFoundError, confirmed live
-# 2026-09-22 against the project's key; the key's /models list no longer carries it).
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +40,7 @@ def _init_components() -> PipelineComponents:
     )
 
     provider = settings.llm_provider
-    model_name = settings.llm_model_name or (
-        DEFAULT_GEMINI_MODEL if provider == "gemini" else DEFAULT_GROQ_MODEL
-    )
+    model_name = settings.llm_model_name or default_model_name(provider)
 
     fallback_config = None
     if provider == "gemini" and settings.groq_api_key:

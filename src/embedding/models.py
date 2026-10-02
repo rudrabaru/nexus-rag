@@ -1,4 +1,3 @@
-from datetime import datetime, timezone
 from typing import List
 
 from pydantic import Field
@@ -12,6 +11,3 @@ class EmbeddedChunk(ChunkMetadata):
     embedding: List[float] = Field(..., description="The embedding vector for this chunk")
     embedding_model: str = Field(..., description="The model used to generate this embedding")
     index_id: str = Field(..., description="The embedding index this vector belongs to (provider:model)")
-    embedded_at: datetime = Field(
-        default_factory=lambda: datetime.now(timezone.utc), description="When the embedding was generated"
-    )

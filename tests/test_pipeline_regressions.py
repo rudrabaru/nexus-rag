@@ -13,7 +13,7 @@ from src.ingestion.embedding_worker import EmbeddingUnavailableError, EmbeddingW
 def judge_llm(monkeypatch):
     llm_client = MagicMock()
     llm_client.call_llm.return_value = LLMCall(text='{"score": 1.0, "reasoning": "supported"}')
-    monkeypatch.setattr("src.generating.llm_client.LLMClient", lambda config: llm_client)
+    monkeypatch.setattr("src.generating.evaluator.LLMClient", lambda config: llm_client)
     return llm_client
 
 

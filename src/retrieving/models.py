@@ -19,8 +19,11 @@ class RetrievalResult(BaseModel):
     embedding_latency_ms: float = 0.0
     search_latency_ms: float = 0.0
     rerank_latency_ms: float = 0.0
-    embedding_tokens: int = 0
+    embedding_tokens: int = 0  # spent by this search (0 when the query embedding was cached)
     embedding_cost_usd: float = 0.0
+    # What embedding this query costs, cached or not: an evaluation compares configurations
+    # on this, or every trial after the first would look cheaper for reusing the cache.
+    query_embedding_tokens: int = 0
     rerank_cost_usd: float = 0.0
     chunks: List[RetrievedChunk]
     # The first-stage pool the reranker reordered (empty without a reranker), for rerank forensics.

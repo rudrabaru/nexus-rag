@@ -1,6 +1,5 @@
 import re
 from typing import List, Optional
-from datetime import datetime, timezone
 
 from .metadata import ChunkMetadata, ChunkingConfig
 from .models import Section, Block
@@ -45,9 +44,7 @@ def build_chunk_metadata(
 
     token_count = sum(b.token_count for b in blocks)
 
-    heading_match = re.match(r"^#+\s+(.+?)(?:\n|$)", text)
-    starts_with_heading = heading_match is not None
-    heading = heading_match.group(1) if heading_match else None
+    starts_with_heading = re.match(r"^#+\s+\S", text) is not None
 
     contains_code = any(b.block_type == "code" for b in blocks)
     contains_table = any(b.block_type == "table" for b in blocks)
@@ -60,16 +57,6 @@ def build_chunk_metadata(
     elif all(b.block_type == "table" for b in blocks):
         content_type = "table"
 
-    code_languages = []
-    if contains_code:
-        for b in blocks:
-            if b.block_type == "code":
-                lang_match = re.search(r"```(\w+)", b.text)
-                if lang_match:
-                    lang = lang_match.group(1)
-                    if lang not in code_languages:
-                        code_languages.append(lang)
-
     chunk_id = f"{doc_name}_chunk_{chunk_index:03d}"
 
     return ChunkMetadata(
@@ -79,22 +66,14 @@ def build_chunk_metadata(
         title=title,
         heading_path=section.heading_path,
         section_title=section.title,
-        chunk_index=chunk_index,
-        total_chunks=0,
         chunk_text=text,
         token_count=token_count,
-        char_start=blocks[0].char_start,
-        char_end=blocks[-1].char_start + len(blocks[-1].text),
         starts_with_heading=starts_with_heading,
-        heading=heading,
         contains_code=contains_code,
-        code_languages=code_languages if code_languages else None,
         contains_table=contains_table,
         content_type=content_type,
         document_version=config.source_version,
         chunk_version=config.output_version,
-        table_chunk=(content_type == "table"),
         oversized_chunk=(token_count > config.max_chunk_tokens),
         tiny_chunk_merged=False,
-        created_at=datetime.now(timezone.utc),
     )

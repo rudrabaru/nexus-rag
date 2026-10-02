@@ -127,7 +127,7 @@ def make_chunk(text="hello", heading_path=("Guide", "Setup")):
 
     return ChunkMetadata(
         chunk_id="c0", source_url="u", source_document="Doc", title="T", heading_path=list(heading_path),
-        chunk_index=0, chunk_text=text, token_count=1, char_start=0, char_end=len(text),
+        chunk_text=text, token_count=1, 
         document_version="v", chunk_version="v", tenant_id="t", doc_id="d",
     )
 

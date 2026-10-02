@@ -6,8 +6,8 @@ are columns of the same rows (src/registry/schema.py), so one write updates both
 cannot diverge. Writing those rows is src/retrieving/chunk_writes.py; this module is the
 search-facing side, used on the request event loop.
 
-Tenant isolation is default-deny: a missing or wildcard tenant returns nothing, and no SQL is
-issued, unless the caller explicitly opts into a global search (offline evaluation only).
+Tenant isolation is default-deny, without exception: a missing or wildcard tenant returns
+nothing, and no SQL is issued. Evaluations are scoped to one tenant like any other search.
 
 A store is bound to one embedding index (provider:model). Dense and sparse search are both
 scoped to it: a query vector is only comparable with vectors of the same model, and keeping
@@ -50,11 +50,11 @@ _METADATA_COLUMNS = (
 )
 
 
-def resolve_tenant_scope(tenant_id: Optional[str], allow_global: bool) -> Tuple[bool, Optional[str]]:
-    """Returns (allowed, tenant filter). allowed=False means the caller must return nothing."""
+def tenant_scope(tenant_id: Optional[str]) -> Optional[str]:
+    """The tenant to filter on, or None when the caller must return nothing."""
     if not tenant_id or tenant_id in GLOBAL_TENANT_MARKERS:
-        return allow_global, None
-    return True, tenant_id
+        return None
+    return tenant_id
 
 
 def vector_literal(values: Sequence[float]) -> str:
@@ -63,7 +63,7 @@ def vector_literal(values: Sequence[float]) -> str:
 
 def _to_retrieved_chunk(row, score: float) -> RetrievedChunk:
     metadata = {column.name: row[column.name] for column in _METADATA_COLUMNS}
-    # context_builder and evaluation_helpers parse heading_path as a JSON string, the shape
+    # context_builder and src/evaluation/relevance.py parse heading_path as a JSON string, the shape
     # the legacy Qdrant payload used. Changing it would silently break heading matching.
     metadata["heading_path"] = json.dumps(row["heading_path"] or [])
     return RetrievedChunk(
@@ -92,22 +92,20 @@ class ChunkStore:
     # ── Searches (async, called on the request event loop) ──────────────────
 
     async def search_dense(
-        self, query_embedding: Sequence[float], top_k: int, tenant_id: Optional[str] = None, allow_global: bool = False
+        self, query_embedding: Sequence[float], top_k: int, tenant_id: Optional[str] = None
     ) -> List[RetrievedChunk]:
-        allowed, tenant = resolve_tenant_scope(tenant_id, allow_global)
-        if not allowed or top_k <= 0:
+        tenant = tenant_scope(tenant_id)
+        if not tenant or top_k <= 0:
             return []
 
         query_vector = cast(bindparam("query_vector", vector_literal(query_embedding), type_=Text), HALFVEC(EMBEDDING_DIMENSION))
         distance = chunks.c.embedding.cosine_distance(query_vector)
         stmt = (
             select(*_METADATA_COLUMNS, chunks.c.chunk_text, distance.label("distance"))
-            .where(chunks.c.index_id == self.index_id)
+            .where(chunks.c.index_id == self.index_id, chunks.c.tenant_id == tenant)
             .order_by(distance)
             .limit(top_k)
         )
-        if tenant:
-            stmt = stmt.where(chunks.c.tenant_id == tenant)
 
         async with self._async_engine.connect() as conn:
             rows = (await conn.execute(stmt)).mappings().all()
@@ -118,14 +116,14 @@ class ChunkStore:
         return results
 
     async def search_sparse(
-        self, query: str, tenant_id: Optional[str] = None, limit: int = 20, allow_global: bool = False
+        self, query: str, tenant_id: Optional[str] = None, limit: int = 20
     ) -> Tuple[List[RetrievedChunk], bool]:
         """
         Full-text search. Tries all terms (AND) first for precision, then any term (OR) when
         nothing matches. Returns (chunks, or_fallback_used).
         """
-        allowed, tenant = resolve_tenant_scope(tenant_id, allow_global)
-        if not allowed or limit <= 0 or not query.strip():
+        tenant = tenant_scope(tenant_id)
+        if not tenant or limit <= 0 or not query.strip():
             return [], False
 
         # plainto_tsquery parses free text safely (no query-syntax injection). Its AND form
@@ -141,14 +139,12 @@ class ChunkStore:
                 fallback_used = True
         return [_to_retrieved_chunk(row, row["score"]) for row in rows], fallback_used
 
-    async def _run_sparse(self, conn, tsquery, tenant: Optional[str], limit: int):
+    async def _run_sparse(self, conn, tsquery, tenant: str, limit: int):
         rank = func.ts_rank_cd(chunks.c.search_vector, tsquery)
         stmt = (
             select(*_METADATA_COLUMNS, chunks.c.chunk_text, rank.label("score"))
-            .where(chunks.c.index_id == self.index_id, chunks.c.search_vector.op("@@")(tsquery))
+            .where(chunks.c.index_id == self.index_id, chunks.c.tenant_id == tenant, chunks.c.search_vector.op("@@")(tsquery))
             .order_by(rank.desc())
             .limit(limit)
         )
-        if tenant:
-            stmt = stmt.where(chunks.c.tenant_id == tenant)
         return (await conn.execute(stmt)).mappings().all()

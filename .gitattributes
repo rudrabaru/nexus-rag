@@ -1,10 +1,9 @@
 # Force LF line endings in the repository AND on checkout, on every platform. Without
 # this, a Windows dev machine with core.autocrlf=true checks files out with CRLF while
 # Linux CI checks out the LF blob unchanged — same file, different bytes, different
-# hash. That silently broke the retrieval-regression baselines in evaluation_datasets/
-# baselines/, whose dataset_md5 is computed from the file's raw bytes: the baseline was
-# frozen from a CRLF working copy, so CI's LF checkout could never match it, regardless
-# of any real retrieval-quality change.
+# hash. Evaluation experiments identify their dataset by the SHA-256 of the file's raw
+# bytes (src/evaluation/dataset.py), so a CRLF checkout would make the same dataset look
+# different on Windows and in CI. (This once silently broke the old frozen baselines.)
 * text=auto eol=lf
 
 *.json text eol=lf
