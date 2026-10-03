@@ -28,7 +28,7 @@ from src.evaluation.spec import GenerationSpec, ModelSpec
 from src.generating.evaluator import FaithfulnessEvaluator, JudgeOutputError
 from src.generating.generator import RAGGenerator
 from src.generating.models import GenerationConfig, GenerationResult, default_model_name
-from src.registry.schema import generation_cache, judge_cache
+from src.db.schema import generation_cache, judge_cache
 from src.retrieving.models import RetrievalResult
 
 logger = logging.getLogger(__name__)

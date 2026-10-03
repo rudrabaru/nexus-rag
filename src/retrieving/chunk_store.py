@@ -2,7 +2,7 @@
 Chunk search on Postgres, replacing Qdrant and the SQLite FTS5 index.
 
 The dense index (pgvector HNSW) and the sparse index (a generated tsvector with a GIN index)
-are columns of the same rows (src/registry/schema.py), so one write updates both and they
+are columns of the same rows (src/db/schema/), so one write updates both and they
 cannot diverge. Writing those rows is src/retrieving/chunk_writes.py; this module is the
 search-facing side, used on the request event loop.
 
@@ -23,7 +23,7 @@ from sqlalchemy.dialects.postgresql import TSQUERY
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.asyncio import AsyncEngine
 
-from src.registry.schema import EMBEDDING_DIMENSION, TEXT_SEARCH_CONFIG, chunks
+from src.db.schema import EMBEDDING_DIMENSION, TEXT_SEARCH_CONFIG, chunks
 from src.retrieving.models import RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -103,7 +103,7 @@ class ChunkStore:
         stmt = (
             select(*_METADATA_COLUMNS, chunks.c.chunk_text, distance.label("distance"))
             .where(chunks.c.index_id == self.index_id, chunks.c.tenant_id == tenant)
-            .order_by(distance)
+            .order_by(distance, chunks.c.chunk_id)  # chunk_id breaks ties, so a rerun ranks identically
             .limit(top_k)
         )
 
@@ -144,7 +144,7 @@ class ChunkStore:
         stmt = (
             select(*_METADATA_COLUMNS, chunks.c.chunk_text, rank.label("score"))
             .where(chunks.c.index_id == self.index_id, chunks.c.tenant_id == tenant, chunks.c.search_vector.op("@@")(tsquery))
-            .order_by(rank.desc())
+            .order_by(rank.desc(), chunks.c.chunk_id)  # ts_rank_cd ties constantly: chunk_id makes the order reproducible
             .limit(limit)
         )
         return (await conn.execute(stmt)).mappings().all()

@@ -20,7 +20,7 @@ from fastapi.security import APIKeyHeader
 from src.api.dependencies import get_auth_store
 from src.api.rate_limit import auth_failures, client_ip
 from src.config import get_settings
-from src.registry.auth_store import AuthStore
+from src.stores.api_keys import AuthStore
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 admin_key_header = APIKeyHeader(name="X-Admin-Key", auto_error=False)

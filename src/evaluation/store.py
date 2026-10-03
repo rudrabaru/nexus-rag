@@ -13,8 +13,8 @@ from sqlalchemy.engine import Engine
 
 from src.evaluation.dataset import Dataset
 from src.evaluation.spec import ExperimentSpec
-from src.registry.rows import row_to_dict, utcnow
-from src.registry.schema import experiments, runs, trials
+from src.db.rows import row_to_dict, utcnow
+from src.db.schema import experiments, runs, trials
 
 
 def create_experiment(engine: Engine, spec: ExperimentSpec, dataset: Dataset) -> str:

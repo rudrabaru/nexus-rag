@@ -23,6 +23,7 @@ from src.ingestion.url_policy import UnsafeUrlError, redact_url
 logger = logging.getLogger(__name__)
 
 MAX_CHILD_SITEMAPS = 10
+MAX_SITEMAP_PAGES = 50  # bounds one job's reader calls, fetch quota and memory
 # Media and archives are not documents a reader can turn into text.
 _NON_DOCUMENT_EXTENSIONS = (
     ".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".ico", ".zip", ".tar", ".gz", ".json", ".csv",

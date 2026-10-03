@@ -4,13 +4,14 @@ import json
 import pytest
 
 from src.config import Settings
-from src.evaluation.dataset import SYNTHETIC, load_dataset
+from src.evaluation.dataset import SYNTHETIC, load_dataset, write_dataset
 from src.generating.llm_client import FAILURE_PREFIX, LLMCall
 from src.generating.structured import extract_json_object
-from src.testsets.drafts import accepted_queries, read_draft, write_dataset, write_draft
 from src.testsets.generator import MAX_CONSECUTIVE_FAILURES, GenerationAborted, generate
-from src.testsets.models import ACCEPTED, PENDING, REJECTED, Draft, DraftItem
+from src.stores.testsets import ACCEPTED, PENDING, REJECTED
+from src.testsets.models import Draft, DraftItem
 from src.testsets.prompt import DIFFICULTY_INSTRUCTIONS, build_prompt, parse_generated
+from src.testsets.repository import accepted_queries
 from src.testsets.quality import lexical_overlap, overlap_by_difficulty, tier_warnings
 from src.testsets.review import review
 from src.testsets.sampling import ChunkGroup, SourceChunk, group_identical, interleave_by_document
@@ -219,16 +220,7 @@ def test_review_asks_again_after_an_unknown_choice_and_only_reviews_pending_item
     assert "Choose a, e, r, s or q." in shown
 
 
-# ── Drafts and datasets ───────────────────────────────────────────────────────
-
-def test_a_draft_round_trips_through_its_file(tmp_path):
-    draft = pending_draft(2)
-    draft.meta, draft.abstained = {"tenant_id": "demo"}, ["nav"]
-    path = str(tmp_path / "sub" / "draft.json")
-    write_draft(path, draft)
-    assert read_draft(path) == draft
-    assert not (tmp_path / "sub" / "draft.json.tmp").exists()
-
+# ── Datasets ──────────────────────────────────────────────────────────────────
 
 def test_only_accepted_questions_become_a_dataset_the_engine_loads_in_chunk_mode(tmp_path):
     draft = pending_draft(3)
@@ -251,5 +243,5 @@ def test_an_empty_dataset_is_refused(tmp_path):
 # ── Configuration ─────────────────────────────────────────────────────────────
 
 def test_llm_keys_are_checked_per_provider():
-    settings = Settings(_env_file=None, mistral_api_key="m", groq_api_key="")
-    assert settings.has_llm_key("mistral") and not settings.has_llm_key("groq") and settings.has_llm_key("some-local-provider")
+    settings = Settings(_env_file=None, gemini_api_key="g", groq_api_key="")
+    assert settings.has_llm_key("gemini") and not settings.has_llm_key("groq") and settings.has_llm_key("some-local-provider")

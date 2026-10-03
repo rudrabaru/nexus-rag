@@ -8,12 +8,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from src.api.errors import unhandled_exception_handler
+from src.api.errors import service_error_handler, unhandled_exception_handler
 from src.api.middleware import BodyLimitMiddleware
 from src.api.rate_limit import limiter
 from src.api.routes import admin, documents, health, ingest, query
 from src.api.startup import lifespan
 from src.config import get_settings
+from src.services.errors import ServiceError
 from src.services.ingestion_service import MAX_UPLOAD_BYTES
 
 # 256 KB covers the largest valid JSON request (a 2,000-character query plus 20 chat turns); an
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
 
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_exception_handler(ServiceError, service_error_handler)
     app.add_exception_handler(Exception, unhandled_exception_handler)
 
     app.include_router(health.router)

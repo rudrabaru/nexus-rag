@@ -5,8 +5,8 @@ from sqlalchemy import bindparam, func, insert, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.engine import Engine
 
-from src.registry.rows import row_to_dict
-from src.registry.schema import query_logs
+from src.db.rows import row_to_dict
+from src.db.schema import query_logs
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ def query_costs(embedding_cost_usd: float, generation_cost_usd: float, rerank_co
     }
 
 
-class MetricsStore:
+class QueryLogStore:
     """Per-query analytics and cost, stored in Postgres."""
 
     def __init__(self, engine: Engine):

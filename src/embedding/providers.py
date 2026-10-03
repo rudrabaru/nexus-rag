@@ -23,7 +23,7 @@ import httpx
 
 from src.config import Settings
 from src.embedding.pacing import RateWindow
-from src.registry.schema import EMBEDDING_DIMENSION
+from src.db.schema import EMBEDDING_DIMENSION
 
 logger = logging.getLogger(__name__)
 

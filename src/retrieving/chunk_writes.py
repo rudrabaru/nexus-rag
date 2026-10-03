@@ -9,12 +9,13 @@ compose a chunk write into the same transaction as its job-status update
 """
 from typing import Iterable, List
 
-from sqlalchemy import distinct, select
-from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy import Text, bindparam, delete, distinct, select
+from sqlalchemy.dialects.postgresql import ARRAY, insert
 from sqlalchemy.engine import Connection
+from sqlalchemy.sql.expression import all_
 
+from src.db.schema import EMBEDDING_DIMENSION, chunks, embedding_indexes
 from src.embedding.models import EmbeddedChunk
-from src.registry.schema import EMBEDDING_DIMENSION, chunks, embedding_indexes
 
 WRITE_BATCH_SIZE = 100
 
@@ -78,6 +79,24 @@ def write_rows(conn: Connection, rows: List[dict]) -> int:
 def write_chunks(conn: Connection, embedded_chunks: Iterable[EmbeddedChunk]) -> int:
     """Upserts chunks with their vectors on the caller's transaction. Idempotent: rewriting replaces rows in place."""
     return write_rows(conn, [_chunk_row(c) for c in embedded_chunks])
+
+
+def delete_stale_chunks(
+    conn: Connection, tenant_id: str, index_id: str, doc_id: str, keep_ids: Iterable[str], source_urls: Iterable[str]
+) -> int:
+    """
+    Removes chunks of a document's re-ingested pages that a fresh run did not produce, on the
+    caller's transaction. This is how a re-ingested page replaces its old chunks atomically: the
+    new ones are upserted first, then whatever they did not overwrite goes. Only pages this run
+    actually read are touched: a sitemap page that was skipped (daily quota) or has left the
+    sitemap keeps its chunks.
+    """
+    stmt = delete(chunks).where(
+        chunks.c.tenant_id == tenant_id, chunks.c.index_id == index_id, chunks.c.doc_id == doc_id,
+        chunks.c.source_url.in_(list(source_urls)),
+        chunks.c.chunk_id != all_(bindparam("keep_ids", list(keep_ids), type_=ARRAY(Text))),
+    )
+    return conn.execute(stmt).rowcount
 
 
 def existing_source_urls(conn: Connection, tenant_id: str, index_id: str, doc_id: str) -> set:

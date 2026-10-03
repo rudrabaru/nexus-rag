@@ -77,10 +77,10 @@ class QueryService:
 
     @staticmethod
     async def log_query(
-        metrics_store, tenant_id: str, body: QueryRequest, retrieval_result, result: GenerationResult, latency_ms: float
+        query_log, tenant_id: str, body: QueryRequest, retrieval_result, result: GenerationResult, latency_ms: float
     ) -> Optional[int]:
         """Persists the query's latency, tokens, serving provider and cost. Never fails the request."""
-        if not metrics_store:
+        if not query_log:
             return None
         details = {
             "top_k_requested": body.top_k,
@@ -92,7 +92,7 @@ class QueryService:
         }
         try:
             return await asyncio.to_thread(
-                metrics_store.log_query,
+                query_log.log_query,
                 tenant_id=tenant_id, query=body.query, latency_ms=latency_ms,
                 tokens_used=result.prompt_tokens + result.completion_tokens, faithfulness_score=None, details=details,
                 embedding_tokens=retrieval_result.embedding_tokens, embedding_cost_usd=retrieval_result.embedding_cost_usd,
@@ -106,7 +106,7 @@ class QueryService:
 
     @staticmethod
     def evaluate_faithfulness(
-        evaluator: FaithfulnessEvaluator, result: GenerationResult, log_id: Optional[int], metrics_store, pipeline_logger
+        evaluator: FaithfulnessEvaluator, result: GenerationResult, log_id: Optional[int], query_log, pipeline_logger
     ) -> Optional[GenerationResult]:
         """Judges the answer against its context and records the score on the query's log row."""
         try:
@@ -114,9 +114,9 @@ class QueryService:
         except Exception as e:
             logger.error(f"Faithfulness evaluation failed: {e}")
             return None
-        if log_id and metrics_store:
+        if log_id and query_log:
             try:
-                metrics_store.update_faithfulness(log_id, evaluated.faithfulness_score, evaluated.faithfulness_reasoning)
+                query_log.update_faithfulness(log_id, evaluated.faithfulness_score, evaluated.faithfulness_reasoning)
             except Exception as e:
                 logger.error(f"Failed to update faithfulness score: {e}")
         if pipeline_logger:

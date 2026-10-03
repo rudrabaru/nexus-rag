@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 Strategy = Literal["dense", "sparse", "hybrid"]
 RerankerName = Literal["flashrank", "jina", "voyage"]
 
-# hnsw.ef_search is 100 (src/registry/engine.py) and must be at least the largest LIMIT a
+# hnsw.ef_search is 100 (src/db/engine.py) and must be at least the largest LIMIT a
 # dense search issues, so the candidate depth is capped below it.
 MAX_CANDIDATES = 80
 

@@ -97,6 +97,11 @@ To ensure transparent operations, the ingestion pipeline maintains fine-grained 
 - **Job Status Tracking:** Jobs transition through lifecycle states indicating queuing, active processing, complete success, partial success, or failure.
 - **Root Cause Surfacing:** When rate limits, crawling blocks, or embedding timeouts occur on individual pages or batches, the system captures explicit, human-readable error reasons in metadata. These diagnostic messages are propagated directly to the UI, enabling users to inspect exact failure causes even when a job completes with partial success.
 
+### Re-ingesting replaces a document atomically
+Submitting a source again does not delete the existing document. The old chunks keep serving queries while the new job waits for a worker, which matters because workers run on demand and may be off for days. When the new run commits, the pages it read have their old chunks replaced in the same transaction that writes the new ones: chunks it did not rewrite are deleted, but only for pages it actually read, so a sitemap page skipped by the daily quota keeps its chunks. A run with failed chunks (`partial_success`) deletes nothing, so it can never leave a document smaller than it was, and a job that fails outright leaves the document searchable with the error recorded as a note. A resume (`resume=true`) only adds.
+
+Chunk ids begin with the document's id, so two documents never share an id: a page ingested alone and again through a sitemap are different documents with different chunks. The API refuses new work for a tenant that already has 10 jobs queued or running, which bounds what one tenant can pile up while no worker is running.
+
 ### Deduplication
 An upload is hashed by the API before queueing; a URL source is hashed by the parse worker over its fetched Markdown. If an identical hash already exists for the same tenant with a completed status, nothing is chunked or embedded: the job completes pointing at the existing document (its status shows that document's chunk count, and its metadata records `duplicate_of`). For a URL, the placeholder document registered at submission and its fetched pages are deleted in the same transaction, so a duplicate leaves no empty "pending" document behind.
 

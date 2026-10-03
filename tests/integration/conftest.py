@@ -27,9 +27,9 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
-from src.registry.engine import async_connect_args, async_url, libpq_url, session_options, sync_url
-from src.registry.schema import metadata
-from src.registry.schema_version import ALEMBIC_INI
+from src.db.engine import async_connect_args, async_url, libpq_url, session_options, sync_url
+from src.db.schema import metadata
+from src.db.schema_version import ALEMBIC_INI
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -121,7 +121,7 @@ def pg_async_engine(test_schema, pg_engine):
 async def procrastinate_app(test_schema, pg_engine):
     """
     A real Procrastinate App against the test schema (its own tables, from migration 0002,
-    are not part of src.registry.schema.metadata and so are not truncated between tests).
+    are not part of src.db.schema.metadata and so are not truncated between tests).
     Tests register their own task via @app.task(...) rather than importing src.jobs.ingest_tasks's
     blueprint, which can only be namespaced into an App once per process (see tests/test_jobs.py).
 
@@ -140,7 +140,7 @@ async def procrastinate_app(test_schema, pg_engine):
     )
     app = procrastinate.App(connector=connector)
     async with app.open_async():
-        # Procrastinate's tables are outside src.registry.schema.metadata, so clean_tables does
+        # Procrastinate's tables are outside src.db.schema.metadata, so clean_tables does
         # not empty them: without this, an earlier test's job (and the lock it holds) blocks a
         # later test's. search_path is the test schema alone, so this cannot reach `public`.
         await app.connector.execute_query_async(

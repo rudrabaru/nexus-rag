@@ -6,14 +6,14 @@ from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
 from src.config import Settings, get_settings  # noqa: E402
-from src.registry.auth_store import AuthStore  # noqa: E402
-from src.registry.schema import api_keys  # noqa: E402
+from src.stores.api_keys import AuthStore  # noqa: E402
+from src.db.schema import api_keys  # noqa: E402
 
 ADMIN_KEY = "test-admin-key-0123456789-abcdefghijklmnop"
 
 STATE_KEYS = (
-    "ready", "auth_store", "registry", "retrieval", "generator",
-    "evaluator", "rewriter", "metrics_store", "pipeline_logger", "query_semaphore",
+    "ready", "auth_store", "documents", "jobs", "ingestion", "retrieval", "generator",
+    "evaluator", "rewriter", "query_log", "pipeline_logger", "query_semaphore",
     "job_queue",
 )
 

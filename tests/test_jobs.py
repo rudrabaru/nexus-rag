@@ -125,7 +125,7 @@ def test_importing_the_launcher_or_a_task_module_does_no_start_up_work(monkeypat
     import importlib
 
     import src.jobs.workers as workers
-    from src.registry import engine
+    from src.db import engine
 
     monkeypatch.setattr(engine, "get_sync_engine", lambda: (_ for _ in ()).throw(AssertionError("touched the database")))
     importlib.reload(workers)
@@ -165,3 +165,13 @@ def test_drain_makes_a_worker_exit_when_the_queue_is_empty():
     assert seen["wait"] is False and seen["queues"] == ["ingest"] and seen["delete_jobs"] == "successful"
     asyncio.run(workers.run(FakeApp(), "ingest", 2, drain=False))
     assert seen["wait"] is True
+
+
+def test_housekeeping_failures_never_stop_a_worker(monkeypatch):
+    import asyncio
+
+    from src.jobs import workers
+
+    monkeypatch.setattr(workers, "prune", lambda engine: (_ for _ in ()).throw(RuntimeError("db asleep")))
+    monkeypatch.setattr(workers, "get_sync_engine", lambda: None)
+    asyncio.run(workers.housekeeping(object()))  # returns normally

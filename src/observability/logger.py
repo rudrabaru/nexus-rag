@@ -17,7 +17,7 @@ from typing import Optional
 from sqlalchemy import insert
 from sqlalchemy.engine import Engine
 
-from src.registry.schema import pipeline_events
+from src.db.schema import pipeline_events
 
 MAX_BATCH_SIZE = 100
 _STOP = object()
@@ -50,7 +50,6 @@ class PipelineLogger:
                     "event": event,
                     "timestamp": timestamp,
                     "tenant_id": details.get("tenant_id"),
-                    "query_id": details.get("query_id"),
                     "job_id": details.get("job_id"),
                     "details": details,
                 }

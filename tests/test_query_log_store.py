@@ -5,7 +5,7 @@ tests/integration/test_postgres.py.
 """
 import pytest
 
-from src.registry.metrics_store import query_costs
+from src.stores.query_log import query_costs
 
 
 def test_generation_cost_is_the_caller_supplied_value_not_recomputed():

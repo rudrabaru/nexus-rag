@@ -7,8 +7,10 @@ from src.generating.generator import RAGGenerator
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.query_rewriter import QueryRewriter
 from src.retrieving.pipeline import RetrievalResources
-from src.registry.database import DocumentRegistry
-from src.registry.auth_store import AuthStore
+from src.services.ingestion_service import IngestionService
+from src.stores.api_keys import AuthStore
+from src.stores.documents import DocumentStore
+from src.stores.jobs import JobStore
 
 
 def _check_ready(request: Request):
@@ -37,9 +39,19 @@ def get_rewriter(request: Request) -> Optional[QueryRewriter]:
     _check_ready(request)
     return getattr(request.app.state, "rewriter", None)
 
-def get_registry(request: Request) -> DocumentRegistry:
+def get_documents(request: Request) -> DocumentStore:
     _check_ready(request)
-    return request.app.state.registry
+    return request.app.state.documents
+
+
+def get_jobs(request: Request) -> JobStore:
+    _check_ready(request)
+    return request.app.state.jobs
+
+
+def get_ingestion_service(request: Request) -> IngestionService:
+    _check_ready(request)
+    return request.app.state.ingestion
 
 def get_auth_store(request: Request) -> AuthStore:
     _check_ready(request)

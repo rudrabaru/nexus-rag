@@ -9,7 +9,7 @@ from typing import Iterable, List
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
-from src.registry.schema import chunks
+from src.db.schema import chunks
 
 
 def missing_chunk_ids(engine: Engine, tenant_id: str, chunk_ids: Iterable[str]) -> List[str]:

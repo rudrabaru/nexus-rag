@@ -11,8 +11,12 @@ from pathlib import Path
 from typing import List, Optional
 
 from pydantic import BaseModel, Field
+from sqlalchemy.engine import Engine
+
+from src.stores.testsets import FROZEN, TestSetStore
 
 SYNTHETIC = "synthetic"
+TEST_SET_PREFIX = "testset:"
 
 
 class EvaluationQuery(BaseModel):
@@ -41,6 +45,39 @@ def load_dataset(path: str, relevance: str = "document") -> Dataset:
     if problems:
         raise ValueError("The dataset is not usable:\n  " + "\n  ".join(problems))
     return Dataset(name=Path(path).name, content_hash=hashlib.sha256(raw).hexdigest(), queries=queries)
+
+
+def resolve_dataset(engine: Engine, tenant_id: str, reference: str, relevance: str = "document") -> Dataset:
+    """
+    The queries an experiment is scored on. `testset:<name>` is a frozen test set of the tenant in
+    Postgres (the normal case: reviewed in the database, immutable, identified by its hash);
+    anything else is a dataset file, for CI gates and for sharing a set between databases.
+    """
+    if not reference.startswith(TEST_SET_PREFIX):
+        return load_dataset(reference, relevance)
+    name = reference[len(TEST_SET_PREFIX):]
+    store = TestSetStore(engine)
+    head = store.find(tenant_id, name)
+    if head is None:
+        raise ValueError(f"Workspace {tenant_id!r} has no test set {name!r}.")
+    if head["status"] != FROZEN:
+        raise ValueError(f"Test set {name!r} is still a draft: review it, then freeze it (python -m src.testsets freeze).")
+    queries = [EvaluationQuery(**q) for q in store.accepted_questions(head["test_set_id"])]
+    problems = integrity_problems(queries, relevance)
+    if problems:
+        raise ValueError("The test set is not usable:\n  " + "\n  ".join(problems))
+    return Dataset(name=reference, content_hash=head["content_hash"], queries=queries)
+
+
+def write_dataset(path: str, queries: List[EvaluationQuery]) -> None:
+    """A dataset file the engine can load. Refuses a set it would reject."""
+    problems = integrity_problems(queries)
+    if problems:
+        raise ValueError("The dataset is not usable:\n  " + "\n  ".join(problems))
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = [q.model_dump() for q in queries]
+    target.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def integrity_problems(queries: List[EvaluationQuery], relevance: str = "document") -> List[str]:

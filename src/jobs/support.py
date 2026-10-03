@@ -4,8 +4,8 @@ from typing import Optional
 
 from src.jobs.contract import IngestionRequest
 from src.observability.logger import PipelineLogger
-from src.registry.database import DocumentRegistry
-from src.registry.engine import get_sync_engine
+from src.db.engine import get_sync_engine
+from src.stores.jobs import JobStore
 
 # A job in one of these states has already been committed or permanently failed. A rerun
 # (for example a requeue after a worker died between the atomic commit and Procrastinate
@@ -23,17 +23,17 @@ def pipeline_logger() -> PipelineLogger:
 class Progress:
     """Reports job progress as it happens, so GET /ingest/{job_id} reflects a running job."""
 
-    def __init__(self, registry: DocumentRegistry, job_id: str):
-        self.registry = registry
+    def __init__(self, jobs: JobStore, job_id: str):
+        self.jobs = jobs
         self.job_id = job_id
 
     def set(self, pct: int, metadata: Optional[dict] = None) -> None:
-        self.registry.update_job_status(self.job_id, "processing", pct, metadata=metadata)
+        self.jobs.update_job_status(self.job_id, "processing", pct, metadata=metadata)
 
 
-def already_finished(registry: DocumentRegistry, job_id: str) -> Optional[str]:
+def already_finished(jobs: JobStore, job_id: str) -> Optional[str]:
     """Why this job must not run again, or None if it should run. A missing row means the document was deleted."""
-    job = registry.get_job(job_id)
+    job = jobs.get_job(job_id)
     if job is None:
         return "its document was deleted"
     if job["status"] in FINISHED_STATUSES:

@@ -59,8 +59,8 @@ def test_an_unexpected_error_returns_a_reference_not_the_exception(app, app_stat
             raise RuntimeError("SELECT * FROM chunks WHERE tenant_id = 'secret-tenant'")
 
     app_state.generator, app_state.retrieval, app_state.evaluator = MagicMock(), Boom(), MagicMock()
-    app_state.registry = MagicMock()
-    app_state.registry.get_doc_count.return_value = 1
+    app_state.documents = MagicMock()
+    app_state.documents.document_count.return_value = 1
     response = TestClient(app, raise_server_exceptions=False).post(
         "/query", json={"query": "hi"}, headers={"X-API-Key": tenant_key("tenant-1")}
     )

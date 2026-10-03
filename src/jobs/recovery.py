@@ -18,7 +18,7 @@ from procrastinate import jobs as procrastinate_jobs
 from procrastinate.manager import JobManager
 
 from src.jobs.contract import MAX_RETRIES
-from src.registry.database import DocumentRegistry
+from src.stores.jobs import JobStore
 
 logger = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ class RecoveryReport:
     failed: int = 0
 
 
-async def recover_stalled_jobs(job_manager: JobManager, registry: DocumentRegistry, queue: str, task_name: str) -> RecoveryReport:
+async def recover_stalled_jobs(job_manager: JobManager, jobs: JobStore, queue: str, task_name: str) -> RecoveryReport:
     """Sweeps one queue's task (ingest or fetch); each worker sweeps only the queue it runs."""
     report = RecoveryReport()
     stalled = await job_manager.get_stalled_jobs(
@@ -47,7 +47,7 @@ async def recover_stalled_jobs(job_manager: JobManager, registry: DocumentRegist
             message = f"Worker stopped responding; gave up after {job.attempts + 1} attempts."
             await job_manager.finish_job_by_id_async(job.id, procrastinate_jobs.Status.FAILED, delete_job=False)
             if domain_job_id:
-                await asyncio.to_thread(registry.fail_job, domain_job_id, message)
+                await asyncio.to_thread(jobs.fail_job, domain_job_id, message)
             report.failed += 1
             logger.error(f"[job={str(domain_job_id)[:8]}] {message}")
         else:

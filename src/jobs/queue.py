@@ -12,7 +12,7 @@ connector and the task implementations (src/jobs/workers.py).
 """
 import procrastinate
 
-from src.registry.engine import libpq_url
+from src.db.engine import libpq_url
 
 API_POOL_SIZE = 2  # the API only inserts jobs; each defer holds a connection for one statement
 

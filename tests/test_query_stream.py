@@ -41,10 +41,10 @@ class FakeResources:
         return self.retriever, self.retriever
 
 
-def registry_with_docs(count):
-    registry = MagicMock()
-    registry.get_doc_count.return_value = count
-    return registry
+def documents_with(count):
+    documents = MagicMock()
+    documents.document_count.return_value = count
+    return documents
 
 
 @pytest.fixture
@@ -52,7 +52,7 @@ def wired(app_state):
     app_state.generator = FakeGenerator()
     app_state.retrieval = FakeResources()
     app_state.evaluator = MagicMock()
-    app_state.registry = registry_with_docs(3)
+    app_state.documents = documents_with(3)
     return app_state
 
 
@@ -79,25 +79,25 @@ def test_capacity_is_returned_after_a_completed_stream(client, wired, tenant_key
     assert wired.query_semaphore._value == CAPACITY
 
 
-def test_stream_works_when_no_registry_is_configured(client, wired, tenant_key):
+def test_stream_works_when_no_document_store_is_configured(client, wired, tenant_key):
     """Regression: token_generator was only defined inside `if registry:`, raising NameError."""
-    wired.registry = None
+    wired.documents = None
     response, events = stream(client, tenant_key)
 
     assert response.status_code == 200
     assert events[-1]["type"] == "done"
 
 
-def test_capacity_is_returned_when_no_registry_is_configured(client, wired, tenant_key):
+def test_capacity_is_returned_when_no_document_store_is_configured(client, wired, tenant_key):
     """Regression: the semaphore was leaked permanently on this path."""
-    wired.registry = None
+    wired.documents = None
     for _ in range(CAPACITY + 2):
         stream(client, tenant_key)
     assert wired.query_semaphore._value == CAPACITY
 
 
 def test_capacity_is_returned_for_an_empty_workspace(client, wired, tenant_key):
-    wired.registry = registry_with_docs(0)
+    wired.documents = documents_with(0)
     response, events = stream(client, tenant_key)
 
     assert "no documents" in events[0]["content"]

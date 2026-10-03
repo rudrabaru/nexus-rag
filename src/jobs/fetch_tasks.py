@@ -23,7 +23,7 @@ from procrastinate.exceptions import AlreadyEnqueued
 from src.config import get_settings
 from src.crawling.policy import DomainPacer, check_fetchable
 from src.crawling.readers import ReaderError, RobotsBlockedError, read_page
-from src.crawling.sitemap import discover_pages, is_sitemap_url
+from src.crawling.sitemap import MAX_SITEMAP_PAGES, discover_pages, is_sitemap_url
 from src.embedding.providers import build_embedder
 from src.ingestion.errors import UnprocessableSourceError
 from src.ingestion.url_policy import UnsafeUrlError, redact_url
@@ -40,15 +40,15 @@ from src.jobs.contract import (
 )
 from src.jobs.recovery import recover_stalled_jobs
 from src.jobs.support import Progress, already_finished, job_tag
-from src.registry.database import DocumentRegistry
-from src.registry.engine import get_sync_engine
+from src.db.engine import get_sync_engine
 from src.retrieving.chunk_writes import existing_source_urls
+from src.stores.fetches import FetchStore
+from src.stores.jobs import JobStore
 
 logger = logging.getLogger(__name__)
 
 fetch_blueprint = procrastinate.Blueprint()
 
-MAX_SITEMAP_PAGES = 50  # bounds one job's reader calls, fetch quota and memory
 MAX_LISTED_URLS_IN_METADATA = 20
 
 _pacers = {}
@@ -72,12 +72,13 @@ def _indexed_urls(request: IngestionRequest) -> set:
 async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
     settings = get_settings()
     tag = job_tag(request)
-    registry = DocumentRegistry(get_sync_engine())
-    progress = Progress(registry, request.job_id)
+    engine = get_sync_engine()
+    fetches, jobs = FetchStore(engine), JobStore(engine)
+    progress = Progress(jobs, request.job_id)
 
     async def audit(url, outcome, provider=None, detail=None):
         # Query strings can carry tokens: the audit trail keeps the address, not the secret.
-        await asyncio.to_thread(registry.log_fetch, request.tenant_id, request.job_id, redact_url(url), outcome, provider, detail)
+        await asyncio.to_thread(fetches.log_fetch, request.tenant_id, request.job_id, redact_url(url), outcome, provider, detail)
 
     async def report(pct, metadata=None):
         await asyncio.to_thread(progress.set, pct, metadata)
@@ -114,14 +115,14 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
     else:
         urls = [request.url]
 
-    already_stored = await asyncio.to_thread(registry.fetched_urls, request.job_id)
+    already_stored = await asyncio.to_thread(fetches.fetched_urls, request.job_id)
     already_indexed = await asyncio.to_thread(_indexed_urls, request)
     pending = [u for u in urls if u not in already_stored | already_indexed]
     if not pending and not already_stored:
         logger.info(f"{tag} resume: every page is already indexed; nothing to fetch.")
-        await asyncio.to_thread(registry.update_job_status, request.job_id, "complete", 100)
+        await asyncio.to_thread(jobs.update_job_status, request.job_id, "complete", 100)
         return
-    quota_left = settings.fetch_daily_page_quota - await asyncio.to_thread(registry.pages_fetched_today, request.tenant_id)
+    quota_left = settings.fetch_daily_page_quota - await asyncio.to_thread(fetches.pages_fetched_today, request.tenant_id)
     logger.info(f"{tag} FETCH | {len(urls)} urls, {len(urls) - len(pending)} already done, quota left today {quota_left}")
 
     fetched, robots_blocked, denied, failed, over_quota = [], [], [], [], []
@@ -148,12 +149,12 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
             failed.append(url)
             await audit(url, "failed", detail=str(e))
         else:
-            await asyncio.to_thread(registry.store_fetched_page, request.job_id, url, page.title, page.markdown, page.provider)
+            await asyncio.to_thread(fetches.store_fetched_page, request.job_id, url, page.title, page.markdown, page.provider)
             await audit(url, "fetched", page.provider, f"{len(page.markdown)} chars")
             fetched.append(url)
         await report(2 + int(46 * position / len(pending)), _summary(urls, fetched, robots_blocked, denied, failed, over_quota))
 
-    stored = await asyncio.to_thread(registry.fetched_urls, request.job_id)
+    stored = await asyncio.to_thread(fetches.fetched_urls, request.job_id)
     if not stored:
         reason = _no_pages_reason(robots_blocked, denied, failed, over_quota)
         if failed:  # a reader outage may pass: let Procrastinate retry the job
@@ -203,9 +204,9 @@ def _no_pages_reason(robots_blocked, denied, failed, over_quota) -> str:
 )
 async def fetch_source(context: procrastinate.JobContext, **kwargs) -> None:
     request = IngestionRequest(**kwargs)
-    registry = DocumentRegistry(get_sync_engine())
+    jobs = JobStore(get_sync_engine())
 
-    skip_reason = await asyncio.to_thread(already_finished, registry, request.job_id)
+    skip_reason = await asyncio.to_thread(already_finished, jobs, request.job_id)
     if skip_reason:
         logger.info(f"[job={request.job_id[:8]}] not fetching: {skip_reason}.")
         return
@@ -214,17 +215,17 @@ async def fetch_source(context: procrastinate.JobContext, **kwargs) -> None:
         await _fetch(request, context.app)
     except UnprocessableSourceError as e:
         logger.error(f"[job={request.job_id[:8]}] nothing to fetch, not retrying: {e}")
-        await asyncio.to_thread(registry.fail_job, request.job_id, str(e))
+        await asyncio.to_thread(jobs.fail_job, request.job_id, str(e))
     except Exception as e:
         logger.error(f"[job={request.job_id[:8]}] fetch attempt {context.job.attempts + 1}/{MAX_RETRIES + 1} failed: {e}")
         if context.job.attempts >= MAX_RETRIES:
-            await asyncio.to_thread(registry.fail_job, request.job_id, f"Fetching failed after {context.job.attempts + 1} attempts ({type(e).__name__}); details are in the worker log.")
+            await asyncio.to_thread(jobs.fail_job, request.job_id, f"Fetching failed after {context.job.attempts + 1} attempts ({type(e).__name__}); details are in the worker log.")
         raise
 
 
 @fetch_blueprint.periodic(cron=RECOVERY_CRON, periodic_id="recover-stalled-fetches")
 @fetch_blueprint.task(name=FETCH_RECOVERY_TASK_NAME, queue=FETCH_QUEUE, lock=FETCH_RECOVERY_TASK_NAME, pass_context=True)
 async def recover_stalled_fetches(context: procrastinate.JobContext, timestamp: int) -> None:
-    report = await recover_stalled_jobs(context.app.job_manager, DocumentRegistry(get_sync_engine()), FETCH_QUEUE, FETCH_TASK)
+    report = await recover_stalled_jobs(context.app.job_manager, JobStore(get_sync_engine()), FETCH_QUEUE, FETCH_TASK)
     if report.requeued or report.failed:
         logger.warning(f"Stalled-fetch sweep: requeued={report.requeued} failed={report.failed}")

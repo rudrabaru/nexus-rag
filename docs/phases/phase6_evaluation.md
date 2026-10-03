@@ -85,26 +85,28 @@ With `generation` in the spec, each valid run is also answered (Phase 7's contex
 A hand-written benchmark does not scale to a new corpus, and the prototype's was too easy to see real defects (below). `src/testsets/` has an LLM write questions from the corpus's own chunks, so every question has **exact ground truth: the chunk it was written from**. It runs on the laptop, calls only the LLM provider, and makes no embedding calls (Voyage's 3 requests a minute is not touched).
 
 ```
-python -m src.testsets generate --tenant demo --count 50      # chunks -> a draft of questions   (--dry-run, --show-prompt)
-python -m src.testsets review evaluation_datasets/demo.draft.json   # accept / edit / reject / skip each one
-python -m src.testsets finalize evaluation_datasets/demo.draft.json evaluation_datasets/demo.json
-python -m src.testsets verify evaluation_datasets/demo.json --tenant demo
+python -m src.testsets generate --tenant demo --set first --count 50   # chunks -> a draft set   (--dry-run, --show-prompt)
+python -m src.testsets review   --tenant demo --set first                # accept / edit / reject / skip each one
+python -m src.testsets freeze   --tenant demo --set first                # immutable and hashed
+python -m src.testsets verify   --tenant demo --set first                # do its source chunks still exist?
+python -m src.testsets list     --tenant demo
+python -m src.testsets import / export --tenant demo --set NAME FILE.json   # a dataset file in or out
 ```
-Then point an experiment spec at the dataset, with `"relevance": "chunk"` to score by exact chunk or the default `"document"`. A report labels a set whose queries are all synthetic as *SYNTHETIC*.
+Test sets live in Postgres (`test_sets`, `test_questions`): a **draft** while questions are generated and reviewed, **frozen** (immutable, hashed) when an experiment may use it. The database is the single store, so the CLI and the API read the same rows, and a crash mid-review costs nothing. Point an experiment spec at a frozen set with `"dataset": "testset:first"` (a dataset file path also works, for CI gates and for sharing a set between databases), with `"relevance": "chunk"` to score by exact chunk or the default `"document"`. A report labels a set whose queries are all synthetic as *SYNTHETIC*.
 
 ### How a question is made
 1. **Sampling.** The tenant's chunks of one embedding index are grouped by identical text. A group is one question source, and **every chunk in the group is ground truth** (`source_chunk_ids`, and all their documents in `acceptable_documents`): any of them answers the question equally well, so naming only one would score a correct retrieval as a miss. Nothing is dropped as a duplicate. Groups are interleaved round-robin across documents (seeded), so a long document cannot dominate the set.
 2. **Generation.** One call per group with a structured reply (`answerable`, `question`, `answer`). The model may **abstain**: whether a passage holds a question worth asking is the model's call, so no length or keyword rule decides which parts of the corpus get tested. Difficulty tiers cycle `easy` (may reuse the passage's terms), `medium` (paraphrase) and `hard` (no distinctive terms: synonyms, indirect descriptions, the reader's situation instead of the feature name), the stress-test tier AGENTS.md asks for. The prompt contains nothing about any corpus; `category` is structural (`code`, `table` or `prose`, from what the chunk holds).
 3. **Quality signal.** Each question records its **lexical overlap** with its source chunk (the share of its words that also appear there). It is a signal, never a filter. A tier that is not less lexical than the one before it is reported as a warning at the end of `generate`: the tiers are claims to verify, not facts.
 4. **Review.** A person sees each question beside its source chunk and accepts, edits (overlap is recomputed) or rejects it. Questions can be unanswerable from the chunk, ambiguous without context, or answered as well by another passage; only a reader catches that. Every decision is saved at once, so reviews and generation are resumable (a failed call is retried on resume, a handled chunk is not asked again).
-5. **Finalize.** Accepted questions become a JSON list in the engine's format (extra fields: `source_chunk_ids`, `reference_answer`, `origin: "synthetic"`, `lexical_overlap`), hashed like any dataset. The draft file (chunk text, rejected questions) is working state and is git-ignored; the dataset is the artifact.
+5. **Freeze.** The set becomes immutable and gets a content hash of its accepted questions (fields: `source_chunk_ids`, `reference_answer`, `origin: "synthetic"`, `lexical_overlap`): two experiments ran the same questions exactly when the hashes match. The chunk text a reviewer saw and the rejected questions stay in the draft rows; `export` writes the accepted questions as a dataset file.
 
 ### Chunk-level relevance
 Document/heading relevance cannot tell two chunks of the right section apart, which is why the prototype benchmark missed defects that moved 10 of 38 top-1 chunks. With `"relevance": "chunk"` a chunk is relevant only if its id is one of the query's `source_chunk_ids`.
 
 Tradeoffs, stated plainly:
 - **Strict, therefore a lower bound.** A different chunk may answer the question as well (near-duplicates, overlapping sections) and still count as a miss. Only identical texts are grouped. Run both modes and read the gap: a large gap means the right content is being found in the wrong chunk, or that the set has ambiguous questions.
-- **Tied to this chunking.** Chunk ids come from the URL and the chunk's position, so re-chunking invalidates them (document/heading ground truth survives). `python -m src.evaluation run` refuses a chunk-mode experiment whose source chunks are missing from the tenant, and `src.testsets verify` checks a dataset at any time. After re-chunking, regenerate; do not edit ids by hand.
+- **Tied to this chunking.** Chunk ids come from the document, the URL and the chunk's position, so re-chunking invalidates them (document/heading ground truth survives). `python -m src.evaluation run` refuses a chunk-mode experiment whose source chunks are missing from the tenant, and `src.testsets verify` checks a set at any time. After re-chunking, regenerate; do not edit ids by hand.
 - **Synthetic bias.** Questions come from the corpus's own passages and an LLM's phrasing. Absolute scores are optimistic; use the set to compare configurations, and read the hard tier on its own.
 
 ### Parameters (each an experiment, none tuned on a corpus yet)
@@ -115,7 +117,7 @@ Tradeoffs, stated plainly:
 | abort after | 5 consecutive failures | the client already retries a transient error three times with backoff, so five failed chunks in a row means the provider is down, not unlucky | a flaky provider stops a run that would have finished; it resumes where it stopped |
 | overlap word length | 3+ characters | sets short function words aside without a language-specific stop list | a crude measure: it only compares tiers on one corpus |
 
-The model is **pinned** (no fallback): a test set's character must not depend on which provider happened to be up. The draft records the model, seed, index and tiers, and refuses to resume with different ones.
+The model is **pinned** (no fallback): a test set's character must not depend on which provider happened to be up. The set records the model, seed, index and tiers, and refuses to resume with different ones.
 
 ### Not yet validated
 The code is covered by unit and integration tests with a fake LLM; a first live run with Groq produced and reviewed 10 questions, which is too few for a significance verdict (a verdict needs at least 6 queries that differ between two configurations). The first job on a real corpus is therefore the acceptance test: ingest a small public corpus, generate about 50 questions, check the tier warning and the per-tier overlap, review them, and run a first experiment in both relevance modes. Expect to adjust the prompt after reading real questions.

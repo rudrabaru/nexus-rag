@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     admin_api_key: SecretStr = SecretStr("")
 
     # Postgres (Neon) is the system of record: chunks, vectors, sparse index, documents,
-    # jobs, keys and metrics. Use the direct (non-pooler) endpoint; see src/registry/engine.py.
+    # jobs, keys and metrics. Use the direct (non-pooler) endpoint; see src/db/engine.py.
     database_url: SecretStr = SecretStr("")
     db_pool_size: int = Field(5, ge=1, le=20)
 

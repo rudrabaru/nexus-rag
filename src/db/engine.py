@@ -1,5 +1,5 @@
 """
-Database engines. Two engines share one DATABASE_URL and one schema (src/registry/schema.py):
+Database engines. Two engines share one DATABASE_URL and one schema (src/db/schema/):
 
 - sync (psycopg 3): registry, jobs, keys, metrics and chunk writes. These already run in
   worker threads (asyncio.to_thread / run_in_executor), so a blocking driver is correct there.

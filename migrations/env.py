@@ -2,8 +2,8 @@ from alembic import context
 from sqlalchemy import create_engine, pool
 
 from src.config import get_settings
-from src.registry.engine import sync_url
-from src.registry.schema import metadata
+from src.db.engine import sync_url
+from src.db.schema import metadata
 from src.runtime import load_environment
 
 

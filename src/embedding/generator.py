@@ -25,6 +25,7 @@ class EmbeddingGenerator:
     def __init__(self, embedder: Embedder):
         self.embedder = embedder
         self.last_error: Optional[str] = None
+        self.provider_tokens = 0  # what the provider reported for this run's requests
 
     def generate_embeddings(self, chunks: List[ChunkMetadata]) -> Tuple[List[EmbeddedChunk], List[int]]:
         """Returns (embedded chunks, indices into `chunks` that failed). Empty chunks are skipped, not failed."""
@@ -41,6 +42,7 @@ class EmbeddingGenerator:
             logger.error(f"EMBED | {len(positions)} chunks failed: {e}")
             return [], positions
 
+        self.provider_tokens += batch.tokens
         embedded = [
             EmbeddedChunk(
                 **chunks[i].model_dump(), embedding=vector,

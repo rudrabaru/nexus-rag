@@ -3,8 +3,8 @@ from sqlalchemy import select
 from starlette.requests import Request
 
 from src.api.rate_limit import client_ip, rate_limit_key
-from src.registry.auth_store import KEY_PREFIX, AuthStore, hash_api_key
-from src.registry.schema import api_keys
+from src.stores.api_keys import KEY_PREFIX, AuthStore, hash_api_key
+from src.db.schema import api_keys
 from tests.conftest import ADMIN_KEY
 
 ADMIN = {"X-Admin-Key": ADMIN_KEY}
@@ -201,7 +201,7 @@ def test_anonymous_callers_are_limited_per_ip():
 def test_a_missing_key_is_401_on_every_protected_route_not_a_200_sentence(client, app_state):
     from unittest.mock import MagicMock
 
-    for name in ("generator", "retrieval", "evaluator", "registry", "rewriter", "job_queue"):
+    for name in ("generator", "retrieval", "evaluator", "documents", "jobs", "ingestion", "rewriter", "job_queue"):
         setattr(app_state, name, MagicMock())
     for method, path in [("post", "/query"), ("post", "/query/stream"), ("post", "/query/compare"),
                          ("get", "/logs"), ("get", "/ingest/x"), ("post", "/ingest"),
@@ -249,20 +249,20 @@ def test_repeated_wrong_keys_are_throttled_per_client(client):
 def test_a_foreign_document_cannot_be_distinguished_from_a_missing_one(client, app_state, tenant_key):
     from unittest.mock import MagicMock
 
-    app_state.registry = MagicMock()
-    app_state.registry.get_document.side_effect = lambda doc_id: (
+    app_state.documents = MagicMock()
+    app_state.documents.get_document.side_effect = lambda doc_id: (
         {"doc_id": doc_id, "tenant_id": "tenant-1"} if doc_id == "mine" else None
     )
     headers = {"X-API-Key": tenant_key("tenant-2")}
     assert client.delete("/documents/mine", headers=headers).status_code == 404
     assert client.delete("/documents/nonexistent", headers=headers).status_code == 404
-    app_state.registry.delete_document.assert_not_called()
+    app_state.documents.delete_document.assert_not_called()
 
 
 def test_the_admin_listing_is_explicit_and_a_missing_tenant_is_an_error(auth_engine):
-    from src.registry.database import DocumentRegistry
+    from src.stores.documents import DocumentStore
 
-    registry = DocumentRegistry(auth_engine)
+    registry = DocumentStore(auth_engine)
     for tenant in (None, ""):
         with pytest.raises(ValueError):
             registry.list_documents(tenant)

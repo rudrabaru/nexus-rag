@@ -96,6 +96,9 @@ def process_documents(
     for c in all_chunks:
         c.tenant_id = tenant_id
         c.doc_id = doc_id
+        # Doc-scoped: a page ingested alone and again through a sitemap are different documents and
+        # must never share (and overwrite) a chunk id.
+        c.chunk_id = f"{doc_id}:{c.chunk_id}"
 
     update_progress(75)
 

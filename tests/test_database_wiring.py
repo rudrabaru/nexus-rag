@@ -1,6 +1,6 @@
 import pytest
 
-from src.registry.engine import async_connect_args, async_url, is_pooler_url, sync_url
+from src.db.engine import async_connect_args, async_url, is_pooler_url, sync_url
 
 NEON = "postgresql://user:pw@ep-cool-name-123.ap-southeast-1.aws.neon.tech/neondb?sslmode=require&channel_binding=require"
 

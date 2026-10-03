@@ -6,8 +6,7 @@ from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.generator import RAGGenerator
 from src.generating.models import DEFAULT_GROQ_MODEL, GenerationConfig, default_model_name
 from src.generating.query_rewriter import QueryRewriter
-from src.registry.database import DocumentRegistry
-from src.registry.engine import get_async_engine, get_sync_engine
+from src.db.engine import get_async_engine, get_sync_engine
 from src.retrieving.pipeline import RetrievalResources
 
 
@@ -17,7 +16,6 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PipelineComponents:
     retrieval: RetrievalResources
-    registry: DocumentRegistry
     generator: RAGGenerator
     evaluator: FaithfulnessEvaluator
     provider: str
@@ -30,7 +28,6 @@ def _init_components() -> PipelineComponents:
     settings = get_settings()
 
     retrieval = RetrievalResources(settings, get_sync_engine(), get_async_engine())
-    registry = DocumentRegistry(get_sync_engine())
     reranker = settings.effective_reranker
     if reranker == "flashrank":
         retrieval.reranker(reranker).load()  # model load (and first-run download) at startup, not on a query
@@ -75,7 +72,6 @@ def _init_components() -> PipelineComponents:
 
     return PipelineComponents(
         retrieval=retrieval,
-        registry=registry,
         generator=generator,
         evaluator=evaluator,
         provider=provider,

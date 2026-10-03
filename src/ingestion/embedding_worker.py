@@ -26,10 +26,12 @@ class EmbeddingOutcome:
     failed_indices: List[int]
     total_chunks: int
     error_reason: Optional[str]
+    provider_tokens: int = 0  # as reported by the embedding provider; 0 when it reported none
 
     @property
     def total_tokens(self) -> int:
-        return sum(c.token_count for c in self.chunks)
+        """What the run used: the provider's own count when it gave one, else the chunks' token sum."""
+        return self.provider_tokens or sum(c.token_count for c in self.chunks)
 
     @property
     def status(self) -> str:
@@ -91,5 +93,6 @@ class EmbeddingWorker:
                 duration_ms=(time.time() - start) * 1000,
             )
         return EmbeddingOutcome(
-            chunks=embedded, failed_indices=failed_indices, total_chunks=len(all_chunks), error_reason=error_reason
+            chunks=embedded, failed_indices=failed_indices, total_chunks=len(all_chunks), error_reason=error_reason,
+            provider_tokens=getattr(self.embedding_generator, "provider_tokens", 0),
         )

@@ -7,8 +7,7 @@ from typing import Any, Dict, List
 from pydantic import BaseModel, Field
 
 from src.evaluation.dataset import EvaluationQuery
-
-PENDING, ACCEPTED, REJECTED = "pending", "accepted", "rejected"
+from src.stores.testsets import PENDING
 
 
 class DraftItem(EvaluationQuery):

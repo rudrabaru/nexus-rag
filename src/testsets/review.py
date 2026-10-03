@@ -10,7 +10,8 @@ pending. Input and output are injected, so the loop is testable without a termin
 from collections import Counter
 from typing import Callable
 
-from src.testsets.models import ACCEPTED, PENDING, REJECTED, Draft, DraftItem
+from src.stores.testsets import ACCEPTED, PENDING, REJECTED
+from src.testsets.models import Draft, DraftItem
 from src.testsets.quality import lexical_overlap
 
 SOURCE_PREVIEW_CHARS = 2000

@@ -100,7 +100,7 @@ streamlit run scripts/chat_ui.py
 ### Testing & Monitoring
 - **Performance Tracking:** Built-in logs track exactly how long each step (searching, ranking, generating) takes.
 - **Evaluation with evidence:** `python -m src.evaluation run spec.json` runs several retrieval configurations over the same questions, stores every per-question result in Postgres, and reports whether each one is significantly better or worse than a baseline (or that the question set is too small to tell). Optionally it also generates answers and has a pinned judge model score their faithfulness, with answers and verdicts cached so identical work is never paid for twice.
-- **Synthetic test sets:** `python -m src.testsets generate --tenant T` has an LLM write questions from your ingested chunks (easy, paraphrased and hard indirect ones), each with the exact chunk it came from as ground truth. You review them (`review`), freeze the accepted ones as a dataset (`finalize`), and an experiment can then score retrieval by exact chunk (`"relevance": "chunk"`) instead of by document. Reports label such sets *SYNTHETIC*, and `verify` tells you when re-chunking has made a set's ground truth stale.
+- **Synthetic test sets:** `python -m src.testsets generate --tenant T` has an LLM write questions from your ingested chunks (easy, paraphrased and hard indirect ones), each with the exact chunk it came from as ground truth. They are stored in Postgres: you review them (`review`), freeze the accepted ones (`freeze`), and an experiment can then score retrieval by exact chunk (`"relevance": "chunk"`) instead of by document. Reports label such sets *SYNTHETIC*, and `verify` tells you when re-chunking has made a set's ground truth stale.
 
 ## Pipeline Architecture
 

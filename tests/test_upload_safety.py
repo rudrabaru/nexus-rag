@@ -3,11 +3,11 @@ import os
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import HTTPException
 
 from src.jobs import ingest_tasks as tasks
 from src.jobs.contract import IngestionRequest
-from src.services.ingestion_service import MAX_UPLOAD_BYTES, READ_CHUNK_BYTES, prepare_and_queue_ingestion, safe_filename
+from src.services.errors import InvalidRequest, PayloadTooLarge
+from src.services.ingestion_service import MAX_UPLOAD_BYTES, READ_CHUNK_BYTES, IngestionService, safe_filename
 
 
 @pytest.mark.parametrize(
@@ -27,9 +27,8 @@ def test_the_stored_filename_is_a_single_path_segment(raw, expected):
 
 @pytest.mark.parametrize("raw", [None, "", "..", "dir/", "a" * 300 + ".md"])
 def test_unusable_filenames_are_rejected(raw):
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(InvalidRequest):
         safe_filename(raw)
-    assert exc.value.status_code == 400
 
 
 @pytest.mark.parametrize("stored_name", ["..\\..\\Users\\x\\notes.md", "C:\\Users\\x\\notes.md", "../../notes.md"])
@@ -43,11 +42,11 @@ def test_the_worker_writes_uploads_inside_its_temp_directory_under_a_fixed_name(
         return MagicMock(markdown="# hi", parser="text")
 
     monkeypatch.setattr(tasks, "parse_file", fake_parse)
-    registry = MagicMock()
-    registry.get_ingest_source.return_value = (stored_name, b"# hi")
+    jobs = MagicMock()
+    jobs.get_ingest_source.return_value = (stored_name, b"# hi")
     request = IngestionRequest(job_id="j", doc_id="d", tenant_id="t", filename=stored_name)
 
-    tasks._uploaded_document(request, registry, MagicMock())
+    tasks._uploaded_document(request, jobs, MagicMock())
 
     assert os.path.basename(seen["path"]) == "upload.md"
     assert os.path.basename(os.path.dirname(seen["path"])).startswith("nexus-ingest-")
@@ -67,26 +66,28 @@ class CountingUpload:
         return b"x" * n
 
 
-def make_registry():
-    registry = MagicMock()
-    registry.get_tenant_quota.return_value = 0
-    registry.pending_upload_bytes.return_value = 0
-    registry.get_document_by_hash.return_value = None
-    return registry
+def make_service():
+    documents, jobs, fetches = MagicMock(), MagicMock(), MagicMock()
+    documents.chunk_count.return_value = 0
+    documents.get_document_by_hash.return_value = None
+    jobs.pending_upload_bytes.return_value = 0
+    jobs.active_job_count.return_value = 0
+    fetches.pages_fetched_today.return_value = 0
+    return IngestionService(MagicMock(), documents, jobs, fetches), jobs
 
 
 @pytest.mark.asyncio
-async def test_an_oversized_upload_is_refused_with_413_after_reading_at_most_one_extra_chunk():
+async def test_an_oversized_upload_is_refused_after_reading_at_most_one_extra_chunk():
     upload = CountingUpload("big.txt", MAX_UPLOAD_BYTES * 5)
-    with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), make_registry(), "tenant-1", None, upload, False)
+    service, _ = make_service()
+    with pytest.raises(PayloadTooLarge):
+        await service.submit("tenant-1", None, upload, False)
 
-    assert exc.value.status_code == 413
     assert upload.bytes_read <= MAX_UPLOAD_BYTES + READ_CHUNK_BYTES
 
 
 @pytest.mark.asyncio
 async def test_an_upload_exactly_at_the_limit_is_accepted():
-    registry = make_registry()
-    await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", None, CountingUpload("ok.txt", MAX_UPLOAD_BYTES), False)
-    registry.register_job.assert_called_once()
+    service, jobs = make_service()
+    await service.submit("tenant-1", None, CountingUpload("ok.txt", MAX_UPLOAD_BYTES), False)
+    jobs.register_job.assert_called_once()

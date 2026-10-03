@@ -9,7 +9,7 @@ from src.api.dependencies import get_auth_store
 from src.api.models.admin_models import IssueKeyRequest, IssueKeyResponse, RevokeKeysRequest, RevokeKeysResponse
 from src.api.rate_limit import ADMIN_LIMIT, limiter
 from src.api.security import require_admin
-from src.registry.auth_store import AuthStore
+from src.stores.api_keys import AuthStore
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])

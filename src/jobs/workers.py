@@ -24,7 +24,8 @@ from procrastinate import App, Blueprint, PsycopgConnector
 
 from src.config import get_settings
 from src.jobs.contract import FETCH_QUEUE, INGEST_QUEUE, TASK_NAMESPACE
-from src.registry.engine import libpq_url
+from src.db.engine import get_sync_engine, libpq_url
+from src.maintenance import FINISHED_QUEUE_JOB_HOURS, prune
 from src.runtime import bootstrap
 
 logger = logging.getLogger(__name__)
@@ -51,8 +52,20 @@ def build_app(blueprint: Blueprint, queue: str) -> App:
     return app
 
 
+async def housekeeping(app: App) -> None:
+    """Prunes old log rows and queue rows. Idempotent and cheap, so every worker launch does it."""
+    try:
+        await asyncio.to_thread(prune, get_sync_engine())
+        await app.job_manager.delete_old_jobs(
+            nb_hours=FINISHED_QUEUE_JOB_HOURS, include_failed=True, include_cancelled=True, include_aborted=True
+        )
+    except Exception:  # housekeeping must never stop a worker from working
+        logger.exception("Housekeeping failed")
+
+
 async def run(app: App, queue: str, concurrency: int, drain: bool = False) -> None:
     async with app.open_async():
+        await housekeeping(app)
         logger.info(f"Worker ready. queue={queue} concurrency={concurrency} drain={drain}")
         # delete_jobs: a successful job's queue row is removed; failures stay for inspection.
         await app.run_worker_async(queues=[queue], concurrency=concurrency, wait=not drain, delete_jobs="successful")

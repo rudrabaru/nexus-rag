@@ -45,8 +45,8 @@ def _reject_when_at_capacity(query_semaphore) -> None:
 
 
 async def _workspace_is_empty(request: Request, tenant_id: str) -> bool:
-    registry = getattr(request.app.state, "registry", None)
-    return bool(registry) and await asyncio.to_thread(registry.get_doc_count, tenant_id) == 0
+    documents = getattr(request.app.state, "documents", None)
+    return bool(documents) and await asyncio.to_thread(documents.document_count, tenant_id) == 0
 
 
 def _sse(event_type: str, content: Any = None) -> str:
@@ -100,14 +100,14 @@ async def query_rag(
                 pipeline_logger.log_event("query_complete", query_text=body.query, duration_ms=_elapsed_ms(query_start))
 
             log_id = await QueryService.log_query(
-                getattr(request.app.state, "metrics_store", None), tenant_id, body, retrieval_result, result,
+                getattr(request.app.state, "query_log", None), tenant_id, body, retrieval_result, result,
                 latency_ms=result.total_latency_ms,
             )
 
             if body.evaluate_faithfulness:
                 background_tasks.add_task(
                     QueryService.evaluate_faithfulness, evaluator, result, log_id,
-                    getattr(request.app.state, "metrics_store", None), pipeline_logger,
+                    getattr(request.app.state, "query_log", None), pipeline_logger,
                 )
 
             return QueryResponse(
@@ -185,13 +185,13 @@ async def query_rag_stream(
                         )
                         pipeline_logger.log_event("query_complete", query_text=body.query, duration_ms=_elapsed_ms(query_start))
 
-                    metrics_store = getattr(request.app.state, "metrics_store", None)
+                    query_log = getattr(request.app.state, "query_log", None)
                     log_id = await QueryService.log_query(
-                        metrics_store, tenant_id, body, retrieval_result, result, latency_ms=_elapsed_ms(query_start),
+                        query_log, tenant_id, body, retrieval_result, result, latency_ms=_elapsed_ms(query_start),
                     )
                     if body.evaluate_faithfulness:
                         evaluated = await asyncio.to_thread(
-                            QueryService.evaluate_faithfulness, evaluator, result, log_id, metrics_store, pipeline_logger
+                            QueryService.evaluate_faithfulness, evaluator, result, log_id, query_log, pipeline_logger
                         )
                         if evaluated:
                             yield _sse("faithfulness", {
@@ -219,11 +219,11 @@ async def query_rag_stream(
 @router.get("/logs")
 @limiter.limit(READ_LIMIT)
 async def get_logs(request: Request, tenant_id: str = Depends(require_tenant)):
-    metrics_store = getattr(request.app.state, "metrics_store", None)
-    if not metrics_store:
+    query_log = getattr(request.app.state, "query_log", None)
+    if not query_log:
         return {"queries": [], "summary": {}}
 
-    logs = await asyncio.to_thread(metrics_store.recent_queries, tenant_id)
+    logs = await asyncio.to_thread(query_log.recent_queries, tenant_id)
     total_queries = len(logs)
     total_cost = sum(log.get("total_cost_usd") or 0.0 for log in logs)
     total_latency = sum(log.get("latency_ms") or 0.0 for log in logs)

@@ -23,8 +23,8 @@ from sqlalchemy import func, select, text
 from sqlalchemy.engine import make_url
 
 from src.config import get_settings
-from src.registry.engine import get_sync_engine
-from src.registry.schema import (
+from src.db.engine import get_sync_engine
+from src.db.schema import (
     chunks, documents, embedding_indexes, experiments, fetch_log, jobs, pipeline_events, query_logs,
 )
 from src.runtime import ConfigurationError, bootstrap

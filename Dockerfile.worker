@@ -38,7 +38,7 @@ RUN python -c "import pymupdf; d = pymupdf.open(); d.new_page().insert_text((72,
     && chown -R nexus /opt/models
 
 # Application code only. alembic.ini and migrations/ are included: the worker verifies the schema
-# revision at startup, same as the API (src/registry/schema_version.py).
+# revision at startup, same as the API (src/db/schema_version.py).
 COPY src ./src
 COPY migrations ./migrations
 COPY alembic.ini ./

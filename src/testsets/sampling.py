@@ -18,7 +18,7 @@ from typing import Dict, List
 from sqlalchemy import select
 from sqlalchemy.engine import Engine
 
-from src.registry.schema import chunks
+from src.db.schema import chunks
 
 
 @dataclass(frozen=True)

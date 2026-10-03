@@ -7,7 +7,7 @@ from src.evaluation import store
 from src.evaluation.dataset import Dataset, EvaluationQuery
 from src.evaluation.engine import run_experiment
 from src.evaluation.spec import ExperimentSpec
-from src.registry.database import DocumentRegistry
+from tests.integration.helpers import Stores
 from src.retrieving.chunk_writes import write_chunks
 from src.retrieving.pipeline import RetrievalResources
 from src.services.query_service import QueryService, chat_config
@@ -18,7 +18,7 @@ pytestmark = pytest.mark.usefixtures("clean_tables")
 
 @pytest.fixture
 def corpus(pg_engine, monkeypatch):
-    registry = DocumentRegistry(pg_engine)
+    registry = Stores(pg_engine)
     add_document(registry, doc_id="doc-1", tenant="demo")
     with pg_engine.begin() as conn:
         write_chunks(conn, [

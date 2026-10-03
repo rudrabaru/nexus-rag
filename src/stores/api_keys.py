@@ -21,8 +21,8 @@ from typing import Callable, Optional, Tuple
 from sqlalchemy import select, update
 from sqlalchemy.engine import Engine
 
-from src.registry.rows import utcnow
-from src.registry.schema import api_keys
+from src.db.rows import utcnow
+from src.db.schema import api_keys
 
 KEY_PREFIX = "nx_"
 KEY_BYTES = 32

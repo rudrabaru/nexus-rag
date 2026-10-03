@@ -2,7 +2,7 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from src.registry.auth_store import TENANT_ID_PATTERN
+from src.stores.api_keys import TENANT_ID_PATTERN
 
 
 class IssueKeyRequest(BaseModel):

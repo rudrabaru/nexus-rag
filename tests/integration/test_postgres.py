@@ -12,12 +12,13 @@ from sqlalchemy import func, select, text
 
 from src.embedding.models import EmbeddedChunk
 from src.observability.logger import PipelineLogger
-from src.registry.auth_store import AuthStore
-from src.registry.database import DocumentRegistry, add_tenant_tokens
-from src.registry.metrics_store import MetricsStore
-from src.registry.mixins.job_store import complete_job
-from src.registry.schema import EMBEDDING_DIMENSION, chunks, embedding_indexes, pipeline_events, query_logs, tenants
-from src.registry.schema_version import ALEMBIC_INI, assert_schema_current
+from src.stores.api_keys import AuthStore
+from src.stores.tenants import add_embedding_tokens
+from tests.integration.helpers import Stores
+from src.stores.query_log import QueryLogStore
+from src.stores.jobs import complete_job
+from src.db.schema import EMBEDDING_DIMENSION, chunks, embedding_indexes, pipeline_events, query_logs, tenants
+from src.db.schema_version import ALEMBIC_INI, assert_schema_current
 from src.retrieving.chunk_store import ChunkStore
 from src.retrieving.chunk_writes import existing_source_urls, write_chunks
 from src.retrieving.config import RetrievalConfig
@@ -52,7 +53,7 @@ def chunk(chunk_id, tenant="tenant-1", doc_id="doc-1", chunk_text="hello world",
 
 @pytest.fixture
 def registry(pg_engine):
-    return DocumentRegistry(pg_engine)
+    return Stores(pg_engine)
 
 
 @pytest.fixture
@@ -358,8 +359,8 @@ def test_quota_and_counts_are_per_tenant(load, registry, store):
     add_document(registry, doc_id="doc-1", tenant="tenant-1")
     add_document(registry, doc_id="doc-2", tenant="tenant-2")
     load([chunk("a"), chunk("b"), chunk("c", tenant="tenant-2", doc_id="doc-2")])
-    assert registry.get_tenant_quota("tenant-1") == 2
-    assert registry.get_doc_count("tenant-2") == 1
+    assert registry.chunk_count("tenant-1") == 2
+    assert registry.document_count("tenant-2") == 1
     assert [d["doc_id"] for d in registry.list_documents("tenant-2")] == ["doc-2"]
     assert len(registry.list_all_documents()) == 2
 
@@ -367,7 +368,7 @@ def test_quota_and_counts_are_per_tenant(load, registry, store):
 def test_tenant_token_usage_accumulates(pg_engine):
     for tokens in (100, 50, 0):
         with pg_engine.begin() as conn:
-            add_tenant_tokens(conn, "tenant-1", tokens)
+            add_embedding_tokens(conn, "tenant-1", tokens)
     with pg_engine.connect() as conn:
         assert conn.execute(select(tenants.c.total_embedding_tokens)).scalar_one() == 150
 
@@ -384,7 +385,7 @@ def test_auth_store_issues_validates_and_revokes_on_postgres(pg_engine):
 
 def test_query_log_persists_provider_cost_and_faithfulness(pg_engine):
     """Regression: the provider argument used to be silently dropped (no column existed)."""
-    metrics = MetricsStore(pg_engine)
+    metrics = QueryLogStore(pg_engine)
     log_id = metrics.log_query(
         tenant_id="tenant-1", query="q", latency_ms=12.5, tokens_used=10, faithfulness_score=None,
         details={"top_k_requested": 5}, provider="groq", generation_cost_usd=0.0042,
@@ -411,3 +412,35 @@ def test_pipeline_events_are_persisted_off_the_calling_thread(pg_engine):
     with pg_engine.connect() as conn:
         assert conn.execute(select(func.count()).select_from(pipeline_events)).scalar_one() == 3
         assert conn.execute(select(func.count()).select_from(query_logs)).scalar_one() == 0
+
+
+def test_retention_deletes_only_rows_older_than_each_tables_window(pg_engine):
+    from datetime import datetime, timedelta, timezone
+
+    from sqlalchemy import insert
+
+    from src.db.schema import fetch_log, query_logs
+    from src.maintenance import RETENTION_DAYS, prune
+
+    now = datetime(2026, 10, 3, tzinfo=timezone.utc)
+
+    def old(table):
+        return now - timedelta(days=RETENTION_DAYS[table][2] + 1)
+
+    def fresh(table):
+        return now - timedelta(days=RETENTION_DAYS[table][2] - 1)
+
+    with pg_engine.begin() as conn:
+        conn.execute(insert(pipeline_events), [{"event": "old", "timestamp": old("pipeline_events")}, {"event": "fresh", "timestamp": fresh("pipeline_events")}])
+        conn.execute(insert(query_logs), [{"tenant_id": "t", "query": "old", "timestamp": old("query_logs")}, {"tenant_id": "t", "query": "fresh", "timestamp": fresh("query_logs")}])
+        conn.execute(insert(fetch_log), [
+            {"tenant_id": "t", "url": "https://x/old", "outcome": "fetched", "created_at": old("fetch_log")},
+            {"tenant_id": "t", "url": "https://x/fresh", "outcome": "fetched", "created_at": fresh("fetch_log")},
+        ])
+
+    assert prune(pg_engine, now=now) == {"pipeline_events": 1, "query_logs": 1, "fetch_log": 1}
+
+    with pg_engine.connect() as conn:
+        assert [r for r in conn.execute(select(pipeline_events.c.event)).scalars()] == ["fresh"]
+        assert [r for r in conn.execute(select(query_logs.c.query)).scalars()] == ["fresh"]
+        assert [r for r in conn.execute(select(fetch_log.c.url)).scalars()] == ["https://x/fresh"]

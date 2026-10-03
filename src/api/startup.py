@@ -9,10 +9,15 @@ from src.config import get_settings
 from src.config_checks import config_problems
 from src.jobs.queue import api_queue
 from src.observability.logger import PipelineLogger
-from src.registry.auth_store import AuthStore
-from src.registry.engine import dispose_engines, get_sync_engine
-from src.registry.metrics_store import MetricsStore
-from src.registry.schema_version import assert_schema_current
+from src.services.ingestion_service import IngestionService
+from src.stores.api_keys import AuthStore
+from src.stores.documents import DocumentStore
+from src.stores.fetches import FetchStore
+from src.stores.jobs import JobStore
+from src.db.engine import dispose_engines, get_sync_engine
+from src.stores.query_log import QueryLogStore
+from src.db.schema_version import assert_schema_current
+from src.maintenance import prune
 
 logger = logging.getLogger(__name__)
 
@@ -22,21 +27,29 @@ def _initialize(app: FastAPI) -> None:
     settings = get_settings()
     sync_engine = get_sync_engine()
     assert_schema_current(sync_engine)
+    try:
+        prune(sync_engine)
+    except Exception:  # housekeeping must never stop the API from starting
+        logger.exception("Retention pruning failed")
 
     components = _init_components()
     app.state.retrieval = components.retrieval
-    app.state.registry = components.registry
     app.state.generator = components.generator
     app.state.evaluator = components.evaluator
     app.state.rewriter = components.rewriter
     app.state.auth_store = AuthStore(sync_engine)
-    app.state.metrics_store = MetricsStore(sync_engine)
+    app.state.query_log = QueryLogStore(sync_engine)
     app.state.pipeline_logger = PipelineLogger("nexus_rag", engine=sync_engine)
 
     # The API only defers ingestion jobs; it never runs them (src/jobs/workers.py does), so a
     # crashed or restarted API process cannot leave a job stuck "processing" — the worker's
     # own stalled-job detection (heartbeats) is what recovers those.
     app.state.job_queue = api_queue(settings.database_url.get_secret_value()).open()
+    app.state.documents = DocumentStore(sync_engine)
+    app.state.jobs = JobStore(sync_engine)
+    app.state.ingestion = IngestionService(
+        app.state.job_queue, app.state.documents, app.state.jobs, FetchStore(sync_engine), settings
+    )
 
     index_id = components.retrieval.default_index_id
     index_size = components.retrieval.chunk_store().get_collection_size()

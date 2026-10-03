@@ -15,12 +15,12 @@ from pathlib import Path
 
 from src.config import get_settings
 from src.evaluation import store
-from src.evaluation.dataset import load_dataset
+from src.evaluation.dataset import resolve_dataset
 from src.evaluation.engine import run_experiment
 from src.evaluation.ground_truth import missing_chunk_ids
 from src.evaluation.report import build_report, regressions, render
 from src.evaluation.spec import ExperimentSpec
-from src.registry.engine import dispose_engines, get_async_engine, get_sync_engine
+from src.db.engine import dispose_engines, get_async_engine, get_sync_engine
 from src.retrieving.pipeline import RetrievalResources
 from src.runtime import ConfigurationError, bootstrap
 
@@ -65,7 +65,7 @@ def main(argv=None) -> int:
 
     if args.command == "run":
         spec = ExperimentSpec(**json.loads(Path(args.spec).read_text(encoding="utf-8")))
-        dataset = load_dataset(spec.dataset, spec.relevance)
+        dataset = resolve_dataset(engine, spec.tenant_id, spec.dataset, spec.relevance)
         if spec.relevance == "chunk":
             missing = missing_chunk_ids(engine, spec.tenant_id, (i for q in dataset.queries for i in q.source_chunk_ids))
             if missing:

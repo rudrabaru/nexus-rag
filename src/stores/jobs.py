@@ -2,14 +2,14 @@ from typing import Any, Dict, Optional, Tuple
 
 from sqlalchemy import bindparam, case, delete, func, literal, select, update
 from sqlalchemy.dialects.postgresql import JSONB, insert
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, Engine
 
-from src.registry.mixins.fetch_store import delete_fetched_pages
-from src.registry.rows import row_to_dict, utcnow
-from src.registry.schema import chunks, documents, ingest_sources, jobs
+from src.db.rows import row_to_dict, utcnow
+from src.db.schema import chunks, documents, ingest_sources, jobs
+from src.stores.fetches import delete_fetched_pages
 
 TERMINAL_STATUSES = ("complete", "failed")
-STATUSES_WITH_DOCUMENT_ERROR = ("failed", "partial_success")
+ACTIVE_STATUSES = ("queued", "processing")
 PARTIAL_SUCCESS_DEFAULT_ERROR = "Some chunks or pages failed processing (e.g., API rate limits or crawling errors)."
 
 
@@ -36,26 +36,26 @@ def complete_job(
     metadata: Optional[Dict[str, Any]] = None,
     error: Optional[str] = None,
 ) -> None:
-    """Marks a job complete (or partial_success) and records the document's final stats, on the caller's transaction."""
+    """
+    Marks a job complete (or partial_success) and records the document's final stats, on the
+    caller's transaction. A complete job clears the document's error: a failed earlier attempt
+    must not outlive a success.
+    """
     now = utcnow()
     if metadata is not None:
         conn.execute(update(jobs).where(jobs.c.job_id == job_id).values(metadata=_merged_metadata(metadata)))
 
-    if error is None:
-        stored = conn.execute(select(jobs.c.metadata).where(jobs.c.job_id == job_id)).scalar_one_or_none()
-        error = _error_from_metadata(metadata) or _error_from_metadata(stored)
     if error is None and status == "partial_success":
-        error = PARTIAL_SUCCESS_DEFAULT_ERROR
+        stored = conn.execute(select(jobs.c.metadata).where(jobs.c.job_id == job_id)).scalar_one_or_none()
+        error = _error_from_metadata(metadata) or _error_from_metadata(stored) or PARTIAL_SUCCESS_DEFAULT_ERROR
 
     conn.execute(
-        update(jobs)
-        .where(jobs.c.job_id == job_id)
-        .values(status=status, progress_pct=100, finished_at=now, error=func.coalesce(error, jobs.c.error))
+        update(jobs).where(jobs.c.job_id == job_id).values(status=status, progress_pct=100, finished_at=now, error=error)
     )
     conn.execute(
         update(documents)
         .where(documents.c.doc_id == _doc_of_job(job_id))
-        .values(status=status, updated_at=now, stats=stats, error=func.coalesce(error, documents.c.error))
+        .values(status=status, updated_at=now, stats=stats, error=error)
     )
 
 
@@ -63,8 +63,11 @@ def delete_ingest_source(conn: Connection, job_id: str) -> None:
     conn.execute(delete(ingest_sources).where(ingest_sources.c.job_id == job_id))
 
 
-class JobStoreMixin:
+class JobStore:
     """Ingestion job rows, the document status they drive, and uploads waiting for the worker."""
+
+    def __init__(self, engine: Engine):
+        self._engine = engine
 
     def register_job(
         self,
@@ -79,8 +82,9 @@ class JobStoreMixin:
     ) -> None:
         """
         Creates a queued job and upserts its document as pending (a complete document stays
-        complete). An uploaded file (filename, bytes) is stored in the same transaction, so a
-        queued job never exists without its source.
+        complete and keeps serving queries until the new run commits). An uploaded file
+        (filename, bytes) is stored in the same transaction, so a queued job never exists without
+        its source.
         """
         now = utcnow()
         upsert_document = insert(documents).values(
@@ -91,6 +95,7 @@ class JobStoreMixin:
             index_elements=[documents.c.doc_id],
             set_={
                 "status": case((documents.c.status == "complete", "complete"), else_="pending"),
+                "content_hash": func.coalesce(upsert_document.excluded.content_hash, documents.c.content_hash),
                 "updated_at": now,
             },
         )
@@ -125,16 +130,21 @@ class JobStoreMixin:
 
         with self._engine.begin() as conn:
             conn.execute(update(jobs).where(jobs.c.job_id == job_id).values(**values))
-            if status in STATUSES_WITH_DOCUMENT_ERROR and error:
+            if status == "complete":  # e.g. a resume with nothing left to do: the document is complete too
                 conn.execute(
                     update(documents)
                     .where(documents.c.doc_id == _doc_of_job(job_id))
-                    .values(status=status, error=error, updated_at=utcnow())
+                    .values(status="complete", error=None, updated_at=utcnow())
                 )
 
     def fail_job(self, job_id: str, error: str) -> None:
-        """Final failure: marks the job and its document failed and discards its pending upload or fetched pages, atomically."""
+        """
+        Final failure: marks the job failed and discards its pending upload or fetched pages,
+        atomically. The document is marked failed only when it holds no chunks; a document being
+        re-ingested keeps serving its previous chunks, and carries the error as a note.
+        """
         now = utcnow()
+        has_chunks = select(chunks.c.chunk_id).where(chunks.c.doc_id == _doc_of_job(job_id)).exists()
         with self._engine.begin() as conn:
             conn.execute(
                 update(jobs).where(jobs.c.job_id == job_id).values(status="failed", finished_at=now, error=error)
@@ -142,7 +152,7 @@ class JobStoreMixin:
             conn.execute(
                 update(documents)
                 .where(documents.c.doc_id == _doc_of_job(job_id))
-                .values(status="failed", error=error, updated_at=now)
+                .values(status=case((has_chunks, documents.c.status), else_="failed"), error=error, updated_at=now)
             )
             delete_ingest_source(conn, job_id)
             delete_fetched_pages(conn, job_id)
@@ -193,3 +203,13 @@ class JobStoreMixin:
         )
         with self._engine.connect() as conn:
             return int(conn.execute(stmt).scalar_one())
+
+    def active_job_count(self, tenant_id: str) -> int:
+        """Jobs the tenant has queued or running. Bounds how much work one tenant can pile up while no worker runs."""
+        stmt = (
+            select(func.count())
+            .select_from(jobs.join(documents, jobs.c.doc_id == documents.c.doc_id))
+            .where(documents.c.tenant_id == tenant_id, jobs.c.status.in_(ACTIVE_STATUSES))
+        )
+        with self._engine.connect() as conn:
+            return conn.execute(stmt).scalar_one()

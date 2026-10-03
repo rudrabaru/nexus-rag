@@ -3,9 +3,9 @@ from typing import Dict, List, Optional
 
 from sqlalchemy import delete, func, insert, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.engine import Connection
+from sqlalchemy.engine import Connection, Engine
 
-from src.registry.schema import fetch_log, fetched_pages
+from src.db.schema import fetch_log, fetched_pages
 
 QUOTA_WINDOW = timedelta(hours=24)
 
@@ -14,8 +14,11 @@ def delete_fetched_pages(conn: Connection, job_id: str) -> None:
     conn.execute(delete(fetched_pages).where(fetched_pages.c.job_id == job_id))
 
 
-class FetchStoreMixin:
+class FetchStore:
     """Fetched pages waiting for the parse worker, and the audit log of every fetch attempt."""
+
+    def __init__(self, engine: Engine):
+        self._engine = engine
 
     def store_fetched_page(self, job_id: str, url: str, title: Optional[str], markdown: str, provider: str) -> None:
         """Idempotent: a retried fetch job rewrites the same (job_id, url) row."""

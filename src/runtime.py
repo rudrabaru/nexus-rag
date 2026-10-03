@@ -15,8 +15,8 @@ from dotenv import load_dotenv
 
 from src.config import Settings, get_settings
 from src.config_checks import Role, config_problems
-from src.registry.engine import get_sync_engine
-from src.registry.schema_version import assert_schema_current
+from src.db.engine import get_sync_engine
+from src.db.schema_version import assert_schema_current
 
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 

@@ -1,5 +1,13 @@
-from pydantic import BaseModel
 from typing import Optional
+
+from pydantic import BaseModel
+
+
+class IngestResponse(BaseModel):
+    job_id: str
+    status: str  # queued | complete (the same content was already indexed)
+    warning: Optional[str] = None
+
 
 class JobStatusResponse(BaseModel):
     job_id: str

@@ -10,7 +10,7 @@ Vectors from different models live in different spaces; a cosine similarity betw
 
 - Every chunk row records its `index_id` and `embedding_model`, and every index has a row in `embedding_indexes` (provider, model, dimension).
 - Every search is scoped to one index, dense **and** sparse. Keeping the keyword search on the same rows means hybrid fusion never mixes two copies of the same chunk.
-- The chunk key is `(tenant_id, index_id, chunk_id)`, so the same corpus can exist in two indexes at once. That is what makes an embedding comparison a controlled experiment: same chunks, same text, only the model differs.
+- The chunk id starts with the document's id, and the chunk key is `(tenant_id, index_id, chunk_id)`, so the same corpus can exist in two indexes at once. That is what makes an embedding comparison a controlled experiment: same chunks, same text, only the model differs.
 - A query embedder must match the store's index; constructing a retriever with a mismatched pair fails immediately rather than returning nonsense.
 - Embedding is **not** a search dimension in evaluation sweeps. Changing it means building a new index, which is done once per corpus, not per query.
 

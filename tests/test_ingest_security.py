@@ -2,15 +2,16 @@ import socket
 from unittest.mock import MagicMock
 
 import pytest
-from fastapi import HTTPException
 
-from src.ingestion.url_policy import UnsafeUrlError, validate_public_url
 from src.crawling.policy import check_fetchable
+from src.ingestion.url_policy import UnsafeUrlError, validate_public_url
 from src.jobs.contract import FETCH_QUEUE, FETCH_TASK, INGEST_QUEUE, INGEST_TASK
+from src.services.errors import InvalidRequest, PayloadTooLarge, QuotaExceeded
 from src.services.ingestion_service import (
+    MAX_ACTIVE_JOBS_PER_TENANT,
     MAX_PENDING_UPLOAD_BYTES,
     MAX_UPLOAD_BYTES,
-    prepare_and_queue_ingestion,
+    IngestionService,
 )
 
 
@@ -29,17 +30,20 @@ class FakeUpload:
         return chunk
 
 
-def make_registry(quota=0, pending_bytes=0, existing_by_hash=None, pages_fetched_today=0):
-    """
-    registry.get_tenant_quota etc. are called through asyncio.to_thread, which expects a
-    plain sync callable — MagicMock's auto-generated attributes already are one.
-    """
-    registry = MagicMock()
-    registry.get_tenant_quota.return_value = quota
-    registry.pending_upload_bytes.return_value = pending_bytes
-    registry.get_document_by_hash.return_value = existing_by_hash
-    registry.pages_fetched_today.return_value = pages_fetched_today
-    return registry
+class Wired:
+    """An IngestionService over mock stores and a mock queue (MagicMock attributes are plain sync callables, as asyncio.to_thread wants)."""
+
+    def __init__(self, quota=0, pending_bytes=0, existing_by_hash=None, pages_fetched_today=0, active_jobs=0):
+        self.documents, self.jobs, self.fetches, self.queue = MagicMock(), MagicMock(), MagicMock(), MagicMock()
+        self.documents.chunk_count.return_value = quota
+        self.documents.get_document_by_hash.return_value = existing_by_hash
+        self.jobs.pending_upload_bytes.return_value = pending_bytes
+        self.jobs.active_job_count.return_value = active_jobs
+        self.fetches.pages_fetched_today.return_value = pages_fetched_today
+        self.service = IngestionService(self.queue, self.documents, self.jobs, self.fetches)
+
+    async def submit(self, url=None, file=None, resume=False, tenant="tenant-1"):
+        return await self.service.submit(tenant, url, file, resume)
 
 
 # ── URL policy ───────────────────────────────────────────────────────────────
@@ -112,21 +116,16 @@ def test_public_http_urls_are_accepted(url, monkeypatch):
 
 @pytest.mark.asyncio
 async def test_ingestion_rejects_a_local_path_in_the_url_field():
-    registry = make_registry()
-    with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", "/app/logs.txt", None, False)
-
-    assert exc.value.status_code == 400
-    registry.get_tenant_quota.assert_not_called()
+    wired = Wired()
+    with pytest.raises(InvalidRequest):
+        await wired.submit(url="/app/logs.txt")
+    wired.documents.chunk_count.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_ingestion_rejects_malformed_port_with_http_400():
-    registry = make_registry()
-    with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", "https://example.com:99999/", None, False)
-
-    assert exc.value.status_code == 400
+async def test_ingestion_rejects_malformed_port():
+    with pytest.raises(InvalidRequest):
+        await Wired().submit(url="https://example.com:99999/")
 
 
 # ── Fetch policy: what the fetch worker may ask a reader API for ────────────
@@ -168,11 +167,10 @@ def test_the_fetch_policy_still_blocks_private_addresses(monkeypatch):
 @pytest.mark.asyncio
 async def test_http_urls_are_rejected_by_the_api_before_any_job_exists(monkeypatch):
     resolve_to(monkeypatch, "93.184.216.34")
-    registry = make_registry()
-    with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", "http://example.com/docs", None, False)
-    assert exc.value.status_code == 400
-    registry.register_job.assert_not_called()
+    wired = Wired()
+    with pytest.raises(InvalidRequest):
+        await wired.submit(url="http://example.com/docs")
+    wired.jobs.register_job.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -180,11 +178,10 @@ async def test_a_tenant_over_its_daily_page_quota_gets_429(monkeypatch):
     from src.config import get_settings
 
     resolve_to(monkeypatch, "93.184.216.34")
-    registry = make_registry(pages_fetched_today=get_settings().fetch_daily_page_quota)
-    with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", "https://example.com/docs", None, False)
-    assert exc.value.status_code == 429
-    registry.register_job.assert_not_called()
+    wired = Wired(pages_fetched_today=get_settings().fetch_daily_page_quota)
+    with pytest.raises(QuotaExceeded):
+        await wired.submit(url="https://example.com/docs")
+    wired.jobs.register_job.assert_not_called()
 
 
 # ── Wiring: a valid request registers the job durably, then defers it once ──
@@ -193,17 +190,16 @@ async def test_a_tenant_over_its_daily_page_quota_gets_429(monkeypatch):
 async def test_a_valid_url_is_registered_then_deferred_to_the_fetch_queue(monkeypatch):
     """The API never fetches: a URL goes to the fetch worker, which later defers ingest."""
     resolve_to(monkeypatch, "93.184.216.34")
-    registry = make_registry()
-    job_queue = MagicMock()
+    wired = Wired()
 
-    response = await prepare_and_queue_ingestion(job_queue, registry, "tenant-1", "https://example.com/docs", None, False)
+    response = await wired.submit(url="https://example.com/docs")
 
-    assert response["status"] == "queued"
-    registry.register_job.assert_called_once()
-    job_queue.configure_task.assert_called_once_with(FETCH_TASK, queue=FETCH_QUEUE, lock=registry.register_job.call_args[0][1])
-    job_queue.configure_task.return_value.defer.assert_called_once()
-    deferred = job_queue.configure_task.return_value.defer.call_args.kwargs
-    assert deferred["job_id"] == response["job_id"]
+    assert response.status == "queued"
+    wired.jobs.register_job.assert_called_once()
+    wired.queue.configure_task.assert_called_once_with(FETCH_TASK, queue=FETCH_QUEUE, lock=wired.jobs.register_job.call_args[0][1])
+    wired.queue.configure_task.return_value.defer.assert_called_once()
+    deferred = wired.queue.configure_task.return_value.defer.call_args.kwargs
+    assert deferred["job_id"] == response.job_id
     assert deferred["url"] == "https://example.com/docs"
     assert deferred["filename"] is None
 
@@ -212,75 +208,66 @@ async def test_a_valid_url_is_registered_then_deferred_to_the_fetch_queue(monkey
 
 @pytest.mark.asyncio
 async def test_unsupported_file_extension_is_rejected():
-    registry = make_registry()
-    with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", None, FakeUpload("a.exe", b"x"), False)
-    assert exc.value.status_code == 400
+    with pytest.raises(InvalidRequest):
+        await Wired().submit(file=FakeUpload("a.exe", b"x"))
 
 
 @pytest.mark.asyncio
 async def test_oversized_upload_is_rejected():
-    registry = make_registry()
-    upload = FakeUpload("a.txt", b"x" * (MAX_UPLOAD_BYTES + 1))
-    with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", None, upload, False)
-    assert exc.value.status_code == 413
+    with pytest.raises(PayloadTooLarge):
+        await Wired().submit(file=FakeUpload("a.txt", b"x" * (MAX_UPLOAD_BYTES + 1)))
 
 
 @pytest.mark.asyncio
 async def test_too_many_pending_uploads_are_rejected():
     """Bounds Neon's 0.5 GB storage against an offline or backlogged worker."""
-    registry = make_registry(pending_bytes=MAX_PENDING_UPLOAD_BYTES)
-    with pytest.raises(HTTPException) as exc:
-        await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", None, FakeUpload("a.txt", b"x"), False)
-    assert exc.value.status_code == 429
-    registry.register_job.assert_not_called()
+    wired = Wired(pending_bytes=MAX_PENDING_UPLOAD_BYTES)
+    with pytest.raises(QuotaExceeded):
+        await wired.submit(file=FakeUpload("a.txt", b"x"))
+    wired.jobs.register_job.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_duplicate_upload_short_circuits_without_deferring_a_job():
-    registry = make_registry(existing_by_hash={"doc_id": "doc-1", "status": "complete", "source": "u", "format": "txt"})
-    job_queue = MagicMock()
+    wired = Wired(existing_by_hash={"doc_id": "doc-1", "status": "complete", "source": "u", "format": "txt"})
 
-    response = await prepare_and_queue_ingestion(job_queue, registry, "tenant-1", None, FakeUpload("a.txt", b"same"), False)
+    response = await wired.submit(file=FakeUpload("a.txt", b"same"))
 
-    assert response["status"] == "complete"
-    job_queue.configure_task.assert_not_called()
+    assert response.status == "complete"
+    wired.queue.configure_task.assert_not_called()
 
 
 @pytest.mark.asyncio
 async def test_a_valid_upload_stores_its_bytes_with_the_job_not_on_local_disk():
-    registry = make_registry()
-    job_queue = MagicMock()
+    wired = Wired()
 
-    response = await prepare_and_queue_ingestion(job_queue, registry, "tenant-1", None, FakeUpload("a.txt", b"hello"), False)
+    response = await wired.submit(file=FakeUpload("a.txt", b"hello"))
 
-    assert response["status"] == "queued"
-    assert registry.register_job.call_args.kwargs["upload"] == ("a.txt", b"hello")
-    job_queue.configure_task.assert_called_once_with(INGEST_TASK, queue=INGEST_QUEUE, lock=registry.register_job.call_args[0][1])
-    deferred = job_queue.configure_task.return_value.defer.call_args.kwargs
+    assert response.status == "queued"
+    assert wired.jobs.register_job.call_args.kwargs["upload"] == ("a.txt", b"hello")
+    wired.queue.configure_task.assert_called_once_with(INGEST_TASK, queue=INGEST_QUEUE, lock=wired.jobs.register_job.call_args[0][1])
+    deferred = wired.queue.configure_task.return_value.defer.call_args.kwargs
     assert deferred["filename"] == "a.txt" and deferred["url"] is None
 
 
 # ── Job status is tenant-scoped ──────────────────────────────────────────────
 
-def make_job_registry(job_tenant):
-    registry = MagicMock()
-    registry.get_job.return_value = {
+def wire_job(app_state, job_tenant, job_exists=True):
+    app_state.jobs, app_state.documents = MagicMock(), MagicMock()
+    app_state.jobs.get_job.return_value = {
         "job_id": "job-1", "doc_id": "doc-1", "status": "complete",
         "progress_pct": 100, "error": None, "metadata": None,
-    }
-    registry.get_document.return_value = {"doc_id": "doc-1", "tenant_id": job_tenant, "chunk_count": 2}
-    return registry
+    } if job_exists else None
+    app_state.documents.get_document.return_value = {"doc_id": "doc-1", "tenant_id": job_tenant, "chunk_count": 2}
 
 
 def test_job_status_requires_authentication(client, app_state):
-    app_state.registry = make_job_registry("tenant-1")
+    wire_job(app_state, "tenant-1")
     assert client.get("/ingest/job-1").status_code == 401
 
 
 def test_owner_can_read_their_job(client, app_state, tenant_key):
-    app_state.registry = make_job_registry("tenant-1")
+    wire_job(app_state, "tenant-1")
     response = client.get("/ingest/job-1", headers={"X-API-Key": tenant_key("tenant-1")})
 
     assert response.status_code == 200
@@ -288,15 +275,13 @@ def test_owner_can_read_their_job(client, app_state, tenant_key):
 
 
 def test_another_tenants_job_is_reported_as_missing(client, app_state, tenant_key):
-    app_state.registry = make_job_registry("tenant-1")
+    wire_job(app_state, "tenant-1")
     response = client.get("/ingest/job-1", headers={"X-API-Key": tenant_key("tenant-2")})
     assert response.status_code == 404
 
 
 def test_unknown_job_is_missing(client, app_state, tenant_key):
-    registry = make_job_registry("tenant-1")
-    registry.get_job.return_value = None
-    app_state.registry = registry
+    wire_job(app_state, "tenant-1", job_exists=False)
     assert client.get("/ingest/nope", headers={"X-API-Key": tenant_key("tenant-1")}).status_code == 404
 
 
@@ -330,3 +315,35 @@ def test_redaction_keeps_the_address_and_drops_the_secret():
     from src.ingestion.url_policy import redact_url
 
     assert redact_url("https://a.example/docs/page?token=SECRET#frag") == "https://a.example/docs/page"
+
+
+# ── Queue limits and failure handling ────────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_a_tenant_with_too_much_queued_work_is_refused_until_some_finishes():
+    wired = Wired(active_jobs=MAX_ACTIVE_JOBS_PER_TENANT)
+    with pytest.raises(QuotaExceeded):
+        await wired.submit(file=FakeUpload("a.txt", b"x"))
+    wired.jobs.register_job.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_re_ingesting_never_deletes_the_existing_document_up_front():
+    """Workers run on demand: the old chunks must keep serving until the new run commits (src/jobs/commit.py)."""
+    wired = Wired()
+    await wired.submit(file=FakeUpload("a.txt", b"v2"), resume=False)
+    wired.documents.delete_document.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_a_job_the_queue_cannot_take_is_failed_and_reported_not_left_queued_forever():
+    from src.services.errors import Unavailable
+
+    wired = Wired()
+    wired.queue.configure_task.return_value.defer.side_effect = RuntimeError("connection refused")
+    with pytest.raises(Unavailable):
+        await wired.submit(file=FakeUpload("a.txt", b"x"))
+
+    failed_job_id, reason = wired.jobs.fail_job.call_args.args
+    assert failed_job_id == wired.jobs.register_job.call_args.args[0]
+    assert "refused" not in reason  # the cause is logged, not stored for callers

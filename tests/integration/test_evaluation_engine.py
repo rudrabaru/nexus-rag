@@ -11,8 +11,8 @@ from src.evaluation.dataset import Dataset, EvaluationQuery
 from src.evaluation.engine import run_experiment
 from src.evaluation.report import build_report
 from src.evaluation.spec import ExperimentSpec
-from src.registry.database import DocumentRegistry
-from src.registry.schema import runs
+from tests.integration.helpers import Stores
+from src.db.schema import runs
 from src.retrieving.chunk_writes import write_chunks
 from src.retrieving.pipeline import RetrievalResources
 from tests.integration.test_postgres import TEST_INDEX, AxisEmbedder, add_document, chunk, unit_vector
@@ -36,7 +36,7 @@ class CountingEmbedder(AxisEmbedder):
 
 @pytest.fixture
 def corpus(pg_engine, monkeypatch):
-    registry = DocumentRegistry(pg_engine)
+    registry = Stores(pg_engine)
     add_document(registry, doc_id="doc-1", tenant="demo")
     add_document(registry, doc_id="doc-2", tenant="demo")
     with pg_engine.begin() as conn:

@@ -11,7 +11,7 @@ from src.embedding.generator import EmbeddingGenerator, embedding_input
 from src.embedding.pacing import WINDOW_SECONDS, RateWindow
 from src.embedding.providers import EmbeddingError, build_embedder
 from src.retrieving.dense import DenseRetriever
-from src.registry.schema import EMBEDDING_DIMENSION
+from src.db.schema import EMBEDDING_DIMENSION
 
 VECTOR = [0.0] * EMBEDDING_DIMENSION
 

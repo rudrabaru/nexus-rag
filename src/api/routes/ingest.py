@@ -1,22 +1,22 @@
+import asyncio
 import logging
 from typing import Any, Optional
-import asyncio
 
-import procrastinate
-from fastapi import APIRouter, File, UploadFile, Form, HTTPException, Request, Depends
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 
+from src.api.dependencies import get_documents, get_ingestion_service, get_jobs, get_pipeline_logger
+from src.api.models.ingest_models import IngestResponse, JobStatusResponse
 from src.api.rate_limit import INGEST_LIMIT, READ_LIMIT, limiter
 from src.api.security import require_tenant
-from src.api.dependencies import get_job_queue, get_registry, get_pipeline_logger
-from src.api.models.ingest_models import JobStatusResponse
-from src.registry.database import DocumentRegistry
-from src.services.ingestion_service import prepare_and_queue_ingestion
+from src.services.ingestion_service import IngestionService
+from src.stores.documents import DocumentStore
+from src.stores.jobs import JobStore
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-@router.post("/ingest")
+@router.post("/ingest", response_model=IngestResponse)
 @limiter.limit(INGEST_LIMIT)
 async def ingest_document(
     request: Request,
@@ -24,18 +24,16 @@ async def ingest_document(
     file: UploadFile = File(None),
     tenant_id: str = Depends(require_tenant),
     resume: bool = Form(False),
-    registry: DocumentRegistry = Depends(get_registry),
-    job_queue: procrastinate.App = Depends(get_job_queue),
+    service: IngestionService = Depends(get_ingestion_service),
     pipeline_logger: Any = Depends(get_pipeline_logger),
 ):
-    response = await prepare_and_queue_ingestion(job_queue, registry, tenant_id, url, file, resume)
+    submission = await service.submit(tenant_id, url, file, resume)
 
     if pipeline_logger:
         pipeline_logger.log_event(
-            "ingestion_queued", job_id=response["job_id"], tenant_id=tenant_id, source=url or (file.filename if file else None)
+            "ingestion_queued", job_id=submission.job_id, tenant_id=tenant_id, source=url or (file.filename if file else None)
         )
-
-    return response
+    return IngestResponse(job_id=submission.job_id, status=submission.status, warning=submission.warning)
 
 
 @router.get("/ingest/{job_id}", response_model=JobStatusResponse)
@@ -44,10 +42,11 @@ async def get_job_status(
     request: Request,
     job_id: str,
     tenant_id: str = Depends(require_tenant),
-    registry: DocumentRegistry = Depends(get_registry),
+    jobs: JobStore = Depends(get_jobs),
+    documents: DocumentStore = Depends(get_documents),
 ):
-    job = await asyncio.to_thread(registry.get_job, job_id)
-    doc = await asyncio.to_thread(registry.get_document, job["doc_id"]) if job else None
+    job = await asyncio.to_thread(jobs.get_job, job_id)
+    doc = await asyncio.to_thread(documents.get_document, job["doc_id"]) if job else None
     # A job owned by another tenant is reported as missing so job IDs cannot be probed.
     if not job or not doc or doc.get("tenant_id") != tenant_id:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -60,8 +59,6 @@ async def get_job_status(
         doc_id=job["doc_id"],
         metadata=job.get("metadata"),
     )
-
     if job["status"] in ("complete", "partial_success"):
         response.chunk_count = doc["chunk_count"]
-
     return response

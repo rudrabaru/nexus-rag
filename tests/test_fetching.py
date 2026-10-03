@@ -163,7 +163,8 @@ def fetch_env(monkeypatch):
     registry = MagicMock()
     registry.fetched_urls.return_value = set()
     registry.pages_fetched_today.return_value = 0
-    monkeypatch.setattr(fetch_tasks, "DocumentRegistry", lambda engine: registry)
+    monkeypatch.setattr(fetch_tasks, "FetchStore", lambda engine: registry)  # one mock stands in for both stores
+    monkeypatch.setattr(fetch_tasks, "JobStore", lambda engine: registry)
     monkeypatch.setattr(fetch_tasks, "get_sync_engine", lambda: None)
     monkeypatch.setattr(fetch_tasks, "check_fetchable", lambda url, allowed, denied: None)
     monkeypatch.setattr(fetch_tasks, "_pacers", {0.0: DomainPacer(0.0)})
