@@ -26,7 +26,7 @@ from src.crawling.readers import ReaderError, RobotsBlockedError, read_page
 from src.crawling.sitemap import discover_pages, is_sitemap_url
 from src.embedding.providers import build_embedder
 from src.ingestion.errors import UnprocessableSourceError
-from src.ingestion.url_policy import UnsafeUrlError
+from src.ingestion.url_policy import UnsafeUrlError, redact_url
 from src.jobs.contract import (
     FETCH_QUEUE,
     FETCH_RECOVERY_TASK_NAME,
@@ -76,7 +76,8 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
     progress = Progress(registry, request.job_id)
 
     async def audit(url, outcome, provider=None, detail=None):
-        await asyncio.to_thread(registry.log_fetch, request.tenant_id, request.job_id, url, outcome, provider, detail)
+        # Query strings can carry tokens: the audit trail keeps the address, not the secret.
+        await asyncio.to_thread(registry.log_fetch, request.tenant_id, request.job_id, redact_url(url), outcome, provider, detail)
 
     async def report(pct, metadata=None):
         await asyncio.to_thread(progress.set, pct, metadata)
@@ -89,10 +90,21 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
 
     await report(2)
     pacer = _pacer(settings.fetch_min_interval_seconds)
+
+    async def authorize_child_sitemap(child: str) -> None:
+        """A child sitemap is read through the reader like any page: policy, pacing and audit apply."""
+        try:
+            await asyncio.to_thread(check_fetchable, child, settings.allowed_fetch_domains, settings.denied_fetch_domains)
+        except UnsafeUrlError as e:
+            await audit(child, "denied", detail=str(e))
+            raise
+        await asyncio.sleep(pacer.reserve(child))
+        await audit(child, "sitemap_child")
+
     if is_sitemap_url(request.url):
         await asyncio.sleep(pacer.reserve(request.url))  # the reader fetches the sitemap from the site too
         try:
-            urls = await discover_pages(request.url, MAX_SITEMAP_PAGES, settings.firecrawl_api_key)
+            urls = await discover_pages(request.url, MAX_SITEMAP_PAGES, settings.firecrawl_api_key, authorize_child_sitemap)
         except RobotsBlockedError as e:
             await audit(request.url, "robots_blocked", "jina", str(e))
             raise UnprocessableSourceError(f"The sitemap is disallowed by the site's robots.txt: {e}")
@@ -122,6 +134,10 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
             await asyncio.to_thread(check_fetchable, url, settings.allowed_fetch_domains, settings.denied_fetch_domains)
             await asyncio.sleep(pacer.reserve(url))
             page = await read_page(url, settings.firecrawl_api_key)
+            if page.final_url and page.final_url != url:  # a redirect must not lead somewhere the policy forbids
+                await asyncio.to_thread(
+                    check_fetchable, page.final_url, settings.allowed_fetch_domains, settings.denied_fetch_domains
+                )
         except UnsafeUrlError as e:
             denied.append(url)
             await audit(url, "denied", detail=str(e))
@@ -202,7 +218,7 @@ async def fetch_source(context: procrastinate.JobContext, **kwargs) -> None:
     except Exception as e:
         logger.error(f"[job={request.job_id[:8]}] fetch attempt {context.job.attempts + 1}/{MAX_RETRIES + 1} failed: {e}")
         if context.job.attempts >= MAX_RETRIES:
-            await asyncio.to_thread(registry.fail_job, request.job_id, f"Fetching failed after {context.job.attempts + 1} attempts: {e}")
+            await asyncio.to_thread(registry.fail_job, request.job_id, f"Fetching failed after {context.job.attempts + 1} attempts ({type(e).__name__}); details are in the worker log.")
         raise
 
 

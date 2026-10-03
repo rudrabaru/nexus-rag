@@ -20,6 +20,8 @@ from typing import List, Optional
 
 import httpx
 
+from src.ingestion.url_policy import redact_url
+
 logger = logging.getLogger(__name__)
 
 USER_AGENT = "NexusRAG"  # the robots.txt user agent readers check on our behalf
@@ -44,6 +46,7 @@ class FetchedPage:
     title: Optional[str]
     markdown: str
     provider: str
+    final_url: Optional[str] = None  # where the reader ended up after redirects, when it says so
 
 
 async def read_with_jina(client: httpx.AsyncClient, url: str) -> FetchedPage:
@@ -65,7 +68,9 @@ async def read_with_jina(client: httpx.AsyncClient, url: str) -> FetchedPage:
     data = body.get("data") or {}
     if isinstance(data.get("httpStatus"), int) and data["httpStatus"] >= 400:
         raise ReaderError(f"jina: the site answered HTTP {data['httpStatus']}")
-    return FetchedPage(url=url, title=data.get("title"), markdown=data.get("content") or "", provider="jina")
+    return FetchedPage(
+        url=url, title=data.get("title"), markdown=data.get("content") or "", provider="jina", final_url=data.get("url")
+    )
 
 
 async def read_with_firecrawl(client: httpx.AsyncClient, url: str, api_key: str) -> FetchedPage:
@@ -85,6 +90,7 @@ async def read_with_firecrawl(client: httpx.AsyncClient, url: str, api_key: str)
     return FetchedPage(
         url=url, title=title[0] if isinstance(title, list) and title else title,
         markdown=data.get("markdown") or "", provider="firecrawl",
+        final_url=metadata.get("url") or metadata.get("sourceURL"),
     )
 
 
@@ -102,7 +108,7 @@ async def read_page(url: str, firecrawl_api_key: str = "") -> FetchedPage:
                 raise
             except (ReaderError, httpx.HTTPError) as e:
                 errors.append(str(e) or type(e).__name__)
-                logger.warning(f"FETCH | {url} | {errors[-1]}")
+                logger.warning(f"FETCH | {redact_url(url)} | {errors[-1]}")
     raise ReaderError("; ".join(errors))
 
 

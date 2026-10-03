@@ -62,7 +62,7 @@ jobs:
         run: |
           leaked=0
           for image in nexus-api:ci nexus-worker:ci; do
-            for path in .env data sources observability retrieval logs.txt tests docs; do
+            for path in .env data sources observability retrieval logs.txt tests docs scripts evaluation_datasets .claude; do
               if docker run --rm --entrypoint sh "$image" -c "[ -e /app/$path ]"; then
                 echo "::error::/app/$path is present in $image"
                 leaked=1
@@ -70,6 +70,16 @@ jobs:
             done
           done
           exit $leaked
+      - name: Images must run as an unprivileged user and the API image must declare a healthcheck
+        run: |
+          for image in nexus-api:ci nexus-worker:ci; do
+            user=$(docker inspect --format '{{.Config.User}}' "$image")
+            if [ -z "$user" ] || [ "$user" = "root" ] || [ "$user" = "0" ]; then
+              echo "::error::$image runs as root"
+              exit 1
+            fi
+          done
+          docker inspect --format '{{.Config.Healthcheck}}' nexus-api:ci | grep -q CMD
       - name: Images must carry what the startup schema check needs
         run: |
           for image in nexus-api:ci nexus-worker:ci; do
@@ -116,4 +126,8 @@ jobs:
         run: pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
       - run: pip install -r requirements-dev.txt
       - name: Run the experiment and gate on significant regressions
-        run: python -m src.evaluation run "${{ inputs.spec }}" --fail-on-regression
+        # Passed through the environment, never interpolated into the script: a dispatch input is
+        # attacker-controllable text.
+        env:
+          SPEC: ${{ inputs.spec }}
+        run: python -m src.evaluation run "$SPEC" --fail-on-regression

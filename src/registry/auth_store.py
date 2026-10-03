@@ -27,12 +27,12 @@ from src.registry.schema import api_keys
 KEY_PREFIX = "nx_"
 KEY_BYTES = 32
 DISPLAY_PREFIX_LENGTH = len(KEY_PREFIX) + 6
-MAX_KEY_LENGTH = 256
+KEY_LENGTH = len(KEY_PREFIX) + 43  # "nx_" + token_urlsafe(32), which is 43 characters
 CACHE_TTL_SECONDS = 60.0
 CACHE_MAX_ENTRIES = 10_000
 
 # Tenant IDs appear in logs, URLs and filters, so they are restricted to a safe charset.
-TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,64}$")
+TENANT_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]{1,64}$")  # anchored for pydantic's Field(pattern=); matched with fullmatch
 
 
 def hash_api_key(api_key: str) -> str:
@@ -48,10 +48,11 @@ class AuthStore:
         self._clock = clock
         self._cache: "OrderedDict[str, Tuple[Optional[str], float]]" = OrderedDict()
         self._lock = threading.Lock()
+        self._generation = 0  # bumped by every revocation, so a lookup that started before one cannot cache its stale answer
 
     def create_api_key(self, tenant_id: str) -> str:
         """Issues a new key for a tenant. The plaintext is returned once and never stored."""
-        if not TENANT_ID_PATTERN.match(tenant_id):
+        if not TENANT_ID_PATTERN.fullmatch(tenant_id):
             raise ValueError("tenant_id must be 1-64 characters of letters, digits or hyphens.")
 
         api_key = f"{KEY_PREFIX}{secrets.token_urlsafe(KEY_BYTES)}"
@@ -68,7 +69,8 @@ class AuthStore:
 
     def validate_api_key(self, api_key: Optional[str]) -> Optional[str]:
         """Returns the tenant_id for a valid, unrevoked key, or None."""
-        if not api_key or len(api_key) > MAX_KEY_LENGTH:
+        # A key of any other shape cannot be one we issued: refuse it without a lookup or a cache entry.
+        if not api_key or len(api_key) != KEY_LENGTH or not api_key.startswith(KEY_PREFIX):
             return None
 
         key_hash = hash_api_key(api_key)
@@ -76,10 +78,11 @@ class AuthStore:
         if cached is not None:
             return cached[0]
 
+        generation = self._generation
         stmt = select(api_keys.c.tenant_id).where(api_keys.c.key_hash == key_hash, api_keys.c.revoked_at.is_(None))
         with self._engine.connect() as conn:
             tenant_id = conn.execute(stmt).scalar_one_or_none()
-        self._cache_put(key_hash, tenant_id)
+        self._cache_put(key_hash, tenant_id, generation)
         return tenant_id
 
     def revoke_api_key(self, api_key: str) -> int:
@@ -93,6 +96,7 @@ class AuthStore:
         with self._engine.begin() as conn:
             revoked = conn.execute(stmt).rowcount
         with self._lock:
+            self._generation += 1
             self._cache.clear()
         return revoked
 
@@ -110,8 +114,10 @@ class AuthStore:
             self._cache.move_to_end(key_hash)
             return entry
 
-    def _cache_put(self, key_hash: str, tenant_id: Optional[str]) -> None:
+    def _cache_put(self, key_hash: str, tenant_id: Optional[str], generation: int) -> None:
         with self._lock:
+            if generation != self._generation:
+                return
             self._cache[key_hash] = (tenant_id, self._clock() + self._ttl)
             self._cache.move_to_end(key_hash)
             while len(self._cache) > CACHE_MAX_ENTRIES:

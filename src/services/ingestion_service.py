@@ -10,6 +10,7 @@ which the worker (possibly a different host) cannot see.
 import asyncio
 import hashlib
 import os
+import re
 import uuid
 from typing import Optional
 
@@ -24,6 +25,8 @@ from src.jobs.contract import FETCH_QUEUE, FETCH_TASK, INGEST_QUEUE, INGEST_TASK
 from src.registry.database import DocumentRegistry
 
 MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+READ_CHUNK_BYTES = 1024 * 1024
+MAX_FILENAME_CHARS = 255
 # Bounds how much of Neon's 0.5 GB free-tier storage (7a) an offline or backlogged worker
 # can consume with unprocessed uploads: 200 MB leaves the rest for chunk vectors. An
 # operational safety limit on ingest_sources, not a corpus-tuned retrieval threshold.
@@ -31,6 +34,31 @@ MAX_PENDING_UPLOAD_BYTES = 200 * 1024 * 1024
 MAX_SITEMAP_ESTIMATE_CHUNKS = 500
 ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 TENANT_CHUNK_QUOTA = 2000
+
+
+def safe_filename(raw: Optional[str]) -> str:
+    """
+    The label of an uploaded file: its last path segment under either separator style, without
+    control characters. The worker may run on another OS than the API, so a name that is harmless
+    here (a backslash path on Linux) must stay harmless there. It is a display label only: the
+    worker never uses it as a path.
+    """
+    name = re.split(r"[\\/]", raw or "")[-1]
+    name = "".join(c for c in name if c.isprintable()).strip()
+    if not name or name in (".", "..") or len(name) > MAX_FILENAME_CHARS:
+        raise HTTPException(status_code=400, detail="The uploaded file needs a name of at most 255 characters.")
+    return name
+
+
+async def _read_capped(file: UploadFile, limit: int) -> bytes:
+    """Reads an upload in chunks and stops as soon as it exceeds `limit`, so an oversized body is never held in memory."""
+    chunks, total = [], 0
+    while chunk := await file.read(READ_CHUNK_BYTES):
+        total += len(chunk)
+        if total > limit:
+            raise HTTPException(status_code=413, detail=f"File exceeds {limit // (1024 * 1024)}MB limit")
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _doc_id(tenant_id: str, source_ident: str) -> str:
@@ -99,7 +127,7 @@ async def prepare_and_queue_ingestion(
         doc_id = _doc_id(tenant_id, url)
         format_type = "sitemap" if is_sitemap_url(url) else "web"
     else:
-        filename = os.path.basename(file.filename)
+        filename = safe_filename(file.filename)
         ext = os.path.splitext(filename)[1].lower()
         if ext not in ALLOWED_UPLOAD_EXTENSIONS:
             raise HTTPException(
@@ -113,10 +141,8 @@ async def prepare_and_queue_ingestion(
                 status_code=429, detail="Too many documents already queued for processing. Wait for them to finish."
             )
 
-        content = await file.read()
+        content = await _read_capped(file, MAX_UPLOAD_BYTES)
         total_size = len(content)
-        if total_size > MAX_UPLOAD_BYTES:
-            raise HTTPException(status_code=400, detail=f"File exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)}MB limit")
 
         content_hash = hashlib.sha256(content).hexdigest()
         upload = (filename, content)

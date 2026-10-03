@@ -2,13 +2,12 @@ import pytest
 from sqlalchemy import select
 from starlette.requests import Request
 
-from src.api.auth import get_rate_limit_key, get_real_ip
+from src.api.rate_limit import client_ip, rate_limit_key
 from src.registry.auth_store import KEY_PREFIX, AuthStore, hash_api_key
-from src.registry.rows import utcnow
 from src.registry.schema import api_keys
 from tests.conftest import ADMIN_KEY
 
-ADMIN = {"RAG-API-KEY": ADMIN_KEY}
+ADMIN = {"X-Admin-Key": ADMIN_KEY}
 
 
 def make_request(headers=None, client=("1.2.3.4", 5000)):
@@ -101,18 +100,6 @@ def test_revoking_twice_reports_nothing_new(auth_engine):
     assert store.revoke_api_key(key) == 0
 
 
-def test_legacy_key_is_accepted_once_its_hash_is_imported(auth_engine):
-    """Keys issued by the HMAC scheme keep working after migration, and become revocable."""
-    legacy_key = "sk_live_tenant-1_" + "ab" * 32
-    with auth_engine.begin() as conn:
-        conn.execute(api_keys.insert().values(key_hash=hash_api_key(legacy_key), tenant_id="tenant-1", created_at=utcnow()))
-
-    store = AuthStore(auth_engine)
-    assert store.validate_api_key(legacy_key) == "tenant-1"
-    store.revoke_api_key(legacy_key)
-    assert store.validate_api_key(legacy_key) is None
-
-
 # ── Routes ───────────────────────────────────────────────────────────────────
 
 def test_open_registration_endpoint_is_gone(client):
@@ -121,7 +108,7 @@ def test_open_registration_endpoint_is_gone(client):
 
 def test_issuing_a_key_requires_the_admin_key(client):
     assert client.post("/admin/keys").status_code == 401
-    assert client.post("/admin/keys", headers={"RAG-API-KEY": "wrong"}).status_code == 401
+    assert client.post("/admin/keys", headers={"X-Admin-Key": "wrong"}).status_code == 401
     assert client.post("/admin/keys", headers={"X-API-Key": ADMIN_KEY}).status_code == 401
 
 
@@ -170,30 +157,112 @@ def test_demo_mode_no_longer_bypasses_authentication(client, monkeypatch):
 
 # ── Rate-limit key ───────────────────────────────────────────────────────────
 
-def test_forwarded_headers_are_ignored_by_default():
-    request = make_request({"x-forwarded-for": "9.9.9.9"})
-    assert get_real_ip(request) == "1.2.3.4"
-
-
-def test_forwarded_headers_are_honoured_only_when_proxies_are_trusted(monkeypatch):
+def hops(monkeypatch, count):
     from src.config import get_settings
 
-    monkeypatch.setenv("TRUST_PROXIES", "true")
+    monkeypatch.setenv("TRUSTED_PROXY_HOPS", str(count))
     get_settings.cache_clear()
-    assert get_real_ip(make_request({"x-forwarded-for": "9.9.9.9, 10.0.0.1"})) == "9.9.9.9"
 
 
-def test_authenticated_callers_are_limited_per_tenant_not_per_ip(auth_engine):
-    from fastapi import FastAPI
+def test_forwarded_headers_are_ignored_by_default():
+    assert client_ip(make_request({"x-forwarded-for": "9.9.9.9"})) == "1.2.3.4"
 
-    app = FastAPI()
-    app.state.auth_store = AuthStore(auth_engine)
-    key = app.state.auth_store.create_api_key("tenant-1")
 
-    request = make_request({"x-api-key": key, "x-forwarded-for": "9.9.9.9"})
-    request.scope["app"] = app
-    assert get_rate_limit_key(request) == "tenant:tenant-1"
+def test_with_one_trusted_proxy_the_last_entry_is_the_client_and_earlier_ones_are_spoofable(monkeypatch):
+    hops(monkeypatch, 1)
+    # The client sent "6.6.6.6" itself; the proxy appended the address it actually saw.
+    assert client_ip(make_request({"x-forwarded-for": "6.6.6.6, 9.9.9.9"})) == "9.9.9.9"
+
+
+def test_with_two_trusted_proxies_the_client_is_second_from_the_right(monkeypatch):
+    hops(monkeypatch, 2)
+    assert client_ip(make_request({"x-forwarded-for": "6.6.6.6, 9.9.9.9, 10.0.0.1"})) == "9.9.9.9"
+
+
+def test_a_header_shorter_than_the_trusted_chain_or_not_an_address_falls_back_to_the_peer(monkeypatch):
+    hops(monkeypatch, 2)
+    assert client_ip(make_request({"x-forwarded-for": "9.9.9.9"})) == "1.2.3.4"
+    hops(monkeypatch, 1)
+    assert client_ip(make_request({"x-forwarded-for": "not-an-ip"})) == "1.2.3.4"
+
+
+def test_authenticated_callers_are_limited_per_tenant_not_per_ip():
+    request = make_request({"x-forwarded-for": "9.9.9.9"})
+    request.state.tenant_id = "tenant-1"
+    assert rate_limit_key(request) == "tenant:tenant-1"
 
 
 def test_anonymous_callers_are_limited_per_ip():
-    assert get_rate_limit_key(make_request()) == "ip:1.2.3.4"
+    assert rate_limit_key(make_request()) == "ip:1.2.3.4"
+
+
+# ── Credentials: one path, always 401, never fail-open ──────────────────────
+
+def test_a_missing_key_is_401_on_every_protected_route_not_a_200_sentence(client, app_state):
+    from unittest.mock import MagicMock
+
+    for name in ("generator", "retrieval", "evaluator", "registry", "rewriter", "job_queue"):
+        setattr(app_state, name, MagicMock())
+    for method, path in [("post", "/query"), ("post", "/query/stream"), ("post", "/query/compare"),
+                         ("get", "/logs"), ("get", "/ingest/x"), ("post", "/ingest"),
+                         ("get", "/documents"), ("get", "/documents/stats"), ("delete", "/documents/x")]:
+        kwargs = {"json": {"query": "hi"}} if path.startswith("/query") else {}
+        assert getattr(client, method)(path, **kwargs).status_code == 401, path
+
+
+def test_a_non_ascii_admin_header_is_401_not_a_server_error(client):
+    response = client.post("/admin/keys", headers={"X-Admin-Key": "caf\u00e9".encode("latin-1")})
+    assert response.status_code == 401
+
+
+def test_keys_that_could_not_have_been_issued_never_reach_the_database(auth_engine):
+    from unittest.mock import MagicMock
+
+    engine = MagicMock()
+    store = AuthStore(engine)
+    for bad in ["x" * 46, "nx_short", "nx_" + "a" * 100, "sk_live_" + "a" * 38]:
+        assert store.validate_api_key(bad) is None
+    engine.connect.assert_not_called()
+
+
+def test_a_tenant_id_with_a_trailing_newline_is_rejected(auth_engine):
+    with pytest.raises(ValueError):
+        AuthStore(auth_engine).create_api_key("tenant-1\n")
+
+
+def test_a_lookup_that_began_before_a_revocation_cannot_cache_a_stale_answer(auth_engine):
+    store = AuthStore(auth_engine)
+    key = store.create_api_key("tenant-1")
+    generation = store._generation
+    store.revoke_api_key(key)  # a concurrent revocation lands while another request was reading the row
+    store._cache_put(hash_api_key(key), "tenant-1", generation)
+    assert store.validate_api_key(key) is None
+
+
+def test_repeated_wrong_keys_are_throttled_per_client(client):
+    for _ in range(10):
+        assert client.post("/admin/keys", headers={"X-Admin-Key": "wrong"}).status_code == 401
+    assert client.post("/admin/keys", headers={"X-Admin-Key": "wrong"}).status_code == 429
+    assert client.post("/admin/keys", headers=ADMIN).status_code == 429  # even the right key waits out the window
+
+
+def test_a_foreign_document_cannot_be_distinguished_from_a_missing_one(client, app_state, tenant_key):
+    from unittest.mock import MagicMock
+
+    app_state.registry = MagicMock()
+    app_state.registry.get_document.side_effect = lambda doc_id: (
+        {"doc_id": doc_id, "tenant_id": "tenant-1"} if doc_id == "mine" else None
+    )
+    headers = {"X-API-Key": tenant_key("tenant-2")}
+    assert client.delete("/documents/mine", headers=headers).status_code == 404
+    assert client.delete("/documents/nonexistent", headers=headers).status_code == 404
+    app_state.registry.delete_document.assert_not_called()
+
+
+def test_the_admin_listing_is_explicit_and_a_missing_tenant_is_an_error(auth_engine):
+    from src.registry.database import DocumentRegistry
+
+    registry = DocumentRegistry(auth_engine)
+    for tenant in (None, ""):
+        with pytest.raises(ValueError):
+            registry.list_documents(tenant)

@@ -38,7 +38,7 @@ class QueryService:
         if rewriter and get_settings().enable_query_generalisation:
             query = await asyncio.to_thread(rewriter.generalise, query)
         if rewriter and body.history:
-            query = await asyncio.to_thread(rewriter.rewrite, query, body.history)
+            query = await asyncio.to_thread(rewriter.rewrite, query, body.history_messages())
         return query
 
     @staticmethod

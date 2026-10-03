@@ -79,7 +79,6 @@ with st.sidebar:
     api_headers = {}
     if st.session_state.api_key:
         api_headers["X-API-Key"] = st.session_state.api_key
-        api_headers["RAG-API-KEY"] = st.session_state.api_key
         
     st.markdown("---")
     st.subheader("Query Parameters")

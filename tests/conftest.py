@@ -14,7 +14,7 @@ from src.config import Settings, get_settings  # noqa: E402
 from src.registry.auth_store import AuthStore  # noqa: E402
 from src.registry.schema import api_keys  # noqa: E402
 
-ADMIN_KEY = "test-admin-key-0123456789"
+ADMIN_KEY = "test-admin-key-0123456789-abcdefghijklmnop"
 
 STATE_KEYS = (
     "ready", "auth_store", "registry", "retrieval", "generator",
@@ -56,10 +56,10 @@ def app_state(auth_engine):
     so each test injects exactly the collaborators it needs on app.state.
     """
     from src.api.main import app
-    from src.api.routes import ingest, query
+    from src.api.rate_limit import auth_failures, limiter
 
-    query.limiter.enabled = False
-    ingest.limiter.enabled = False
+    limiter.enabled = False
+    auth_failures.reset()
 
     app.state.ready = True
     app.state.auth_store = AuthStore(auth_engine)
@@ -69,8 +69,8 @@ def app_state(auth_engine):
     for key in STATE_KEYS:
         if hasattr(app.state, key):
             delattr(app.state, key)
-    query.limiter.enabled = True
-    ingest.limiter.enabled = True
+    limiter.enabled = True
+    auth_failures.reset()
 
 
 @pytest.fixture

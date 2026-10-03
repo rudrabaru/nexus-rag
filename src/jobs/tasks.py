@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import logging
 import os
+import re
 import tempfile
 from typing import List
 
@@ -53,8 +54,11 @@ def _uploaded_document(request: IngestionRequest, registry: DocumentRegistry, pr
     if source is None:
         raise UnprocessableSourceError(f"No uploaded content found for job {request.job_id} (already processed or expired).")
     filename, content = source
+    # The uploaded name is a label, never a path: this worker may run on another OS than the API,
+    # where a name like "..\..\x.md" or "C:\x.docx" would escape the temp directory.
+    suffix = os.path.splitext(re.split(r"[\\/]", filename)[-1])[1].lower()
     with tempfile.TemporaryDirectory(prefix="nexus-ingest-") as temp_dir:
-        path = os.path.join(temp_dir, filename)
+        path = os.path.join(temp_dir, f"upload{suffix}")
         with open(path, "wb") as f:
             f.write(content)
         parsed = parse_file(path)
@@ -130,7 +134,7 @@ def ingest_document(context: procrastinate.JobContext, **kwargs) -> None:
             exc_info=True,
         )
         if is_last_attempt:
-            registry.fail_job(request.job_id, f"Ingestion failed after {context.job.attempts + 1} attempts: {e}")
+            registry.fail_job(request.job_id, f"Ingestion failed after {context.job.attempts + 1} attempts ({type(e).__name__}); details are in the worker log.")
         raise
 
 

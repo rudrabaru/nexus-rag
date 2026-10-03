@@ -6,10 +6,11 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
-from slowapi import Limiter
 from starlette.background import BackgroundTask
 
-from src.api.auth import get_current_tenant, get_rate_limit_key
+from src.api.rate_limit import QUERY_LIMIT, READ_LIMIT, limiter
+from src.api.security import require_tenant
+from src.api.errors import internal_error
 from src.api.dependencies import get_evaluator, get_generator, get_pipeline_logger, get_retrieval, get_rewriter
 from src.api.models.query_models import QueryRequest, QueryResponse
 from src.generating.evaluator import FaithfulnessEvaluator
@@ -22,12 +23,7 @@ from src.services.query_service import QueryService, chat_config
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
-limiter = Limiter(key_func=get_rate_limit_key)
 
-MISSING_KEY_MESSAGE = (
-    "Please provide a valid API key (X-API-Key header) to query your private workspace. "
-    "Ask your administrator for a key."
-)
 EMPTY_WORKSPACE_MESSAGE = (
     "Your workspace has no documents yet. Please go to the 'Add Source(s)' tab and upload a document or URL first."
 )
@@ -63,21 +59,18 @@ def _elapsed_ms(start: float) -> float:
 
 
 @router.post("/query", response_model=QueryResponse)
-@limiter.limit("5/minute")
+@limiter.limit(QUERY_LIMIT)
 async def query_rag(
     request: Request,
     body: QueryRequest,
     background_tasks: BackgroundTasks,
-    tenant_id: Optional[str] = Depends(get_current_tenant),
+    tenant_id: str = Depends(require_tenant),
     generator: RAGGenerator = Depends(get_generator),
     retrieval: RetrievalResources = Depends(get_retrieval),
     evaluator: FaithfulnessEvaluator = Depends(get_evaluator),
     rewriter: Optional[QueryRewriter] = Depends(get_rewriter),
     pipeline_logger: Any = Depends(get_pipeline_logger),
 ):
-    if not tenant_id:
-        return QueryResponse(answer=MISSING_KEY_MESSAGE, sources=[], latency_ms=0)
-
     query_start = time.time()
     if pipeline_logger:
         pipeline_logger.log_event("query_started", query_text=body.query, tenant_id=tenant_id)
@@ -98,7 +91,7 @@ async def query_rag(
             retrieval_result = await QueryService.run_retrieval(body, retrieval, rewriter, pipeline_logger, tenant_id)
 
             gen_start = time.time()
-            result = await asyncio.to_thread(generator.generate, body.query, retrieval_result, body.history)
+            result = await asyncio.to_thread(generator.generate, body.query, retrieval_result, body.history_messages())
             if pipeline_logger:
                 pipeline_logger.log_event(
                     "generation_complete", query_text=body.query, completion_tokens=result.completion_tokens,
@@ -127,25 +120,21 @@ async def query_rag(
             if semaphore_acquired and query_semaphore:
                 query_semaphore.release()
     except Exception as e:
-        logger.error(f"Error during query: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error("query", e)
 
 
 @router.post("/query/stream")
-@limiter.limit("5/minute")
+@limiter.limit(QUERY_LIMIT)
 async def query_rag_stream(
     request: Request,
     body: QueryRequest,
-    tenant_id: Optional[str] = Depends(get_current_tenant),
+    tenant_id: str = Depends(require_tenant),
     generator: RAGGenerator = Depends(get_generator),
     retrieval: RetrievalResources = Depends(get_retrieval),
     rewriter: Optional[QueryRewriter] = Depends(get_rewriter),
     evaluator: FaithfulnessEvaluator = Depends(get_evaluator),
     pipeline_logger: Any = Depends(get_pipeline_logger),
 ):
-    if not tenant_id:
-        return StreamingResponse(iter([_sse("token", MISSING_KEY_MESSAGE)]), media_type="text/event-stream")
-
     query_start = time.time()
     if pipeline_logger:
         pipeline_logger.log_event("query_started", query_text=body.query, tenant_id=tenant_id)
@@ -164,7 +153,7 @@ async def query_rag_stream(
                 return StreamingResponse(iter([_sse("token", EMPTY_WORKSPACE_MESSAGE)]), media_type="text/event-stream")
 
             retrieval_result = await QueryService.run_retrieval(body, retrieval, rewriter, pipeline_logger, tenant_id)
-            prepared = generator.prepare(body.query, retrieval_result, body.history)
+            prepared = generator.prepare(body.query, retrieval_result, body.history_messages())
             call = LLMCall()  # this request's own usage record; the generator is shared
             gen_start = time.time()
             released = False
@@ -224,15 +213,12 @@ async def query_rag_stream(
                 query_semaphore.release()
 
     except Exception as e:
-        logger.error(f"Error during query/stream: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise internal_error("query/stream", e)
 
 
 @router.get("/logs")
-async def get_logs(request: Request, tenant_id: Optional[str] = Depends(get_current_tenant)):
-    if not tenant_id:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
+@limiter.limit(READ_LIMIT)
+async def get_logs(request: Request, tenant_id: str = Depends(require_tenant)):
     metrics_store = getattr(request.app.state, "metrics_store", None)
     if not metrics_store:
         return {"queries": [], "summary": {}}
@@ -251,17 +237,14 @@ async def get_logs(request: Request, tenant_id: Optional[str] = Depends(get_curr
 
 
 @router.post("/query/compare")
-@limiter.limit("5/minute")
+@limiter.limit(QUERY_LIMIT)
 async def compare_retrieval(
     request: Request,
     body: QueryRequest,
-    tenant_id: Optional[str] = Depends(get_current_tenant),
+    tenant_id: str = Depends(require_tenant),
     retrieval: RetrievalResources = Depends(get_retrieval),
     rewriter: Optional[QueryRewriter] = Depends(get_rewriter),
 ):
-    if not tenant_id:
-        raise HTTPException(status_code=401, detail="Authentication required")
-
     # One run: "baseline" is the first-stage order of the pool the reranker reordered, so the
     # two columns differ only by the reranking step.
     search_query = await QueryService.search_query(body.model_copy(update={"history": []}), rewriter)

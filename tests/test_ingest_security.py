@@ -24,8 +24,9 @@ class FakeUpload:
         self.filename = filename
         self._content = content
 
-    async def read(self) -> bytes:
-        return self._content
+    async def read(self, size: int = -1) -> bytes:
+        chunk, self._content = (self._content, b"") if size < 0 else (self._content[:size], self._content[size:])
+        return chunk
 
 
 def make_registry(quota=0, pending_bytes=0, existing_by_hash=None, pages_fetched_today=0):
@@ -223,7 +224,7 @@ async def test_oversized_upload_is_rejected():
     upload = FakeUpload("a.txt", b"x" * (MAX_UPLOAD_BYTES + 1))
     with pytest.raises(HTTPException) as exc:
         await prepare_and_queue_ingestion(MagicMock(), registry, "tenant-1", None, upload, False)
-    assert exc.value.status_code == 400
+    assert exc.value.status_code == 413
 
 
 @pytest.mark.asyncio
@@ -297,3 +298,35 @@ def test_unknown_job_is_missing(client, app_state, tenant_key):
     registry.get_job.return_value = None
     app_state.registry = registry
     assert client.get("/ingest/nope", headers={"X-API-Key": tenant_key("tenant-1")}).status_code == 404
+
+
+# ── URL policy edge cases ────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("url", ["https://[x", "https://[::1", "https://exa mple.com:abc/"])
+def test_malformed_urls_are_unsafe_url_errors_not_crashes(url):
+    with pytest.raises(UnsafeUrlError):
+        validate_public_url(url)
+
+
+@pytest.mark.parametrize("address", ["64:ff9b::7f00:1", "64:ff9b::a00:5", "2002:7f00:1::1"])
+def test_private_addresses_wrapped_in_nat64_or_6to4_are_rejected(address, monkeypatch):
+    resolve_to(monkeypatch, address)
+    with pytest.raises(UnsafeUrlError):
+        validate_public_url("https://wrapped.example/")
+
+
+def test_a_host_that_does_not_resolve_in_time_is_rejected(monkeypatch):
+    import time
+
+    from src.ingestion import url_policy
+
+    monkeypatch.setattr(url_policy, "DNS_TIMEOUT_SECONDS", 0.05)
+    monkeypatch.setattr("src.ingestion.url_policy.socket.getaddrinfo", lambda *a, **k: time.sleep(0.5))
+    with pytest.raises(UnsafeUrlError, match="in time"):
+        validate_public_url("https://slow.example/")
+
+
+def test_redaction_keeps_the_address_and_drops_the_secret():
+    from src.ingestion.url_policy import redact_url
+
+    assert redact_url("https://a.example/docs/page?token=SECRET#frag") == "https://a.example/docs/page"

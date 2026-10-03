@@ -2,6 +2,7 @@ import logging
 from functools import lru_cache
 from typing import List, Optional
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
@@ -11,6 +12,9 @@ logger = logging.getLogger(__name__)
 LLM_PROVIDER_KEY_FIELDS = {
     "gemini": "gemini_api_key", "groq": "groq_api_key", "openai": "openai_api_key", "mistral": "mistral_api_key",
 }
+
+
+MIN_ADMIN_KEY_LENGTH = 32  # a person-chosen secret guarded only by a throttle needs room against guessing
 
 
 class Settings(BaseSettings):
@@ -83,7 +87,9 @@ class Settings(BaseSettings):
     worker_concurrency: int = 2
 
     allowed_origins: str = ""
-    trust_proxies: bool = False
+    # How many reverse proxies in front of the API append to X-Forwarded-For. 0 = the peer address is
+    # the client. Render's load balancer is one hop. Entries further left are client-supplied.
+    trusted_proxy_hops: int = Field(0, ge=0, le=5)
 
     @property
     def effective_admin_key(self) -> str:
@@ -118,6 +124,8 @@ class Settings(BaseSettings):
         problems = []
         if not self.effective_admin_key:
             problems.append("ADMIN_API_KEY")
+        elif len(self.effective_admin_key) < MIN_ADMIN_KEY_LENGTH:
+            problems.append(f"ADMIN_API_KEY (at least {MIN_ADMIN_KEY_LENGTH} characters; e.g. python -c \"import secrets; print(secrets.token_urlsafe(32))\")")
         if not self.database_url:
             problems.append("DATABASE_URL")
 

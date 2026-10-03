@@ -3,21 +3,23 @@ import logging
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 
-from src.api.auth import get_admin_tenant
 from src.api.dependencies import get_auth_store
 from src.api.models.admin_models import IssueKeyRequest, IssueKeyResponse, RevokeKeysRequest, RevokeKeysResponse
+from src.api.rate_limit import ADMIN_LIMIT, limiter
+from src.api.security import require_admin
 from src.registry.auth_store import AuthStore
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 
 @router.post("/keys", response_model=IssueKeyResponse)
+@limiter.limit(ADMIN_LIMIT)
 async def issue_api_key(
+    request: Request,
     body: Optional[IssueKeyRequest] = None,
-    _: None = Depends(get_admin_tenant),
     auth_store: AuthStore = Depends(get_auth_store),
 ):
     """Issues a tenant API key. The key is shown once; only its hash is stored."""
@@ -28,9 +30,10 @@ async def issue_api_key(
 
 
 @router.post("/keys/revoke", response_model=RevokeKeysResponse)
+@limiter.limit(ADMIN_LIMIT)
 async def revoke_api_keys(
+    request: Request,
     body: RevokeKeysRequest,
-    _: None = Depends(get_admin_tenant),
     auth_store: AuthStore = Depends(get_auth_store),
 ):
     """Revokes one key (by its value) or every key of a tenant."""

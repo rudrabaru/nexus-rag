@@ -48,15 +48,15 @@ def test_provider_key_requirement_follows_llm_provider(monkeypatch):
 
 def test_legacy_rag_api_key_is_a_fallback_for_the_admin_key(monkeypatch):
     monkeypatch.delenv("ADMIN_API_KEY")
-    settings = make_settings(monkeypatch, RAG_API_KEY="legacy-secret-0123456789")
+    settings = make_settings(monkeypatch, RAG_API_KEY="legacy-secret-0123456789-abcdefghijklmnop")
 
-    assert settings.effective_admin_key == "legacy-secret-0123456789"
+    assert settings.effective_admin_key == "legacy-secret-0123456789-abcdefghijklmnop"
     assert settings.missing_required() == []
 
 
 def test_admin_key_takes_precedence_over_legacy(monkeypatch):
-    settings = make_settings(monkeypatch, RAG_API_KEY="legacy-secret-0123456789")
-    assert settings.effective_admin_key != "legacy-secret-0123456789"
+    settings = make_settings(monkeypatch, RAG_API_KEY="legacy-secret-0123456789-abcdefghijklmnop")
+    assert settings.effective_admin_key != "legacy-secret-0123456789-abcdefghijklmnop"
 
 
 def test_cors_origins_default_to_none_and_parse_lists(monkeypatch):
@@ -67,5 +67,5 @@ def test_cors_origins_default_to_none_and_parse_lists(monkeypatch):
 
 def test_unsafe_defaults_are_off():
     settings = Settings()
-    assert settings.trust_proxies is False
+    assert settings.trusted_proxy_hops == 0
     assert settings.cors_origins == []

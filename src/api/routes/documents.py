@@ -1,42 +1,30 @@
 import asyncio
-import logging
-from typing import List, Optional
+from typing import List
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request
 
-from src.api.auth import get_current_tenant_from_admin_or_user
 from src.api.dependencies import get_registry
+from src.api.models.document_models import DocumentResponse, WorkspaceStatsResponse
+from src.api.rate_limit import READ_LIMIT, limiter
+from src.api.security import Principal, require_principal
 from src.registry.database import DocumentRegistry
 
 router = APIRouter()
-logger = logging.getLogger(__name__)
 
 
-class DocumentResponse(BaseModel):
-    id: str
-    url: str
-    title: str
-    status: str
-    created_at: str
-    chunks: int
-    error: Optional[str] = None
-    stats: dict = {}
-
-
-class WorkspaceStatsResponse(BaseModel):
-    documents_count: int
-    total_chunks: int
-    total_tokens: int
+def _list_for(registry: DocumentRegistry, principal: Principal) -> list:
+    return registry.list_all_documents() if principal.is_admin else registry.list_documents(principal.tenant_id)
 
 
 @router.get("/stats", response_model=WorkspaceStatsResponse)
+@limiter.limit(READ_LIMIT)
 async def get_workspace_stats(
+    request: Request,
     registry: DocumentRegistry = Depends(get_registry),
-    tenant_id: Optional[str] = Depends(get_current_tenant_from_admin_or_user),
+    principal: Principal = Depends(require_principal),
 ):
-    """Get aggregated workspace stats for the tenant."""
-    docs = await asyncio.to_thread(registry.list_documents, tenant_id)
+    """Aggregated workspace stats for the caller's workspace (every workspace for the admin)."""
+    docs = await asyncio.to_thread(_list_for, registry, principal)
     return WorkspaceStatsResponse(
         documents_count=len(docs),
         total_chunks=sum(d["chunk_count"] for d in docs),
@@ -45,12 +33,14 @@ async def get_workspace_stats(
 
 
 @router.get("", response_model=List[DocumentResponse])
+@limiter.limit(READ_LIMIT)
 async def list_documents(
+    request: Request,
     registry: DocumentRegistry = Depends(get_registry),
-    tenant_id: Optional[str] = Depends(get_current_tenant_from_admin_or_user),
+    principal: Principal = Depends(require_principal),
 ):
-    """List documents for the current tenant."""
-    docs = await asyncio.to_thread(registry.list_documents, tenant_id)
+    """Documents of the caller's workspace (every workspace for the admin)."""
+    docs = await asyncio.to_thread(_list_for, registry, principal)
     return [
         DocumentResponse(
             id=d["doc_id"],
@@ -67,20 +57,18 @@ async def list_documents(
 
 
 @router.delete("/{doc_id}")
+@limiter.limit(READ_LIMIT)
 async def delete_document(
+    request: Request,
     doc_id: str,
     registry: DocumentRegistry = Depends(get_registry),
-    tenant_id: Optional[str] = Depends(get_current_tenant_from_admin_or_user),
+    principal: Principal = Depends(require_principal),
 ):
     """Deletes a document. Its chunks, vectors and sparse index entries go with it in one transaction."""
-    is_admin = tenant_id is None
-
     doc = await asyncio.to_thread(registry.get_document, doc_id)
-    if not doc:
+    # Another workspace's document is reported as missing, so document ids cannot be probed.
+    if not doc or (not principal.is_admin and doc.get("tenant_id") != principal.tenant_id):
         raise HTTPException(status_code=404, detail="Document not found")
-
-    if not is_admin and doc.get("tenant_id") != tenant_id:
-        raise HTTPException(status_code=403, detail="You do not own this document.")
 
     await asyncio.to_thread(registry.delete_document, doc_id)
     return {

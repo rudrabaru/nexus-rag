@@ -17,9 +17,9 @@ def _check_ready(request: Request):
     if getattr(request.app.state, "ready", False):
         return
     # Not ready yet: distinguish between a fatal crash and still-initializing.
-    if hasattr(request.app.state, "init_error"):
-        raise HTTPException(status_code=500, detail=request.app.state.init_error)
-    raise HTTPException(status_code=503, detail="Service is initializing, please wait...")
+    if hasattr(request.app.state, "init_error"):  # the reason is in the server log, not in the response
+        raise HTTPException(status_code=503, detail="Service unavailable.")
+    raise HTTPException(status_code=503, detail="Service is starting up, please retry shortly.")
 
 def get_generator(request: Request) -> RAGGenerator:
     _check_ready(request)

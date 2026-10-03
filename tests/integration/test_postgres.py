@@ -361,7 +361,7 @@ def test_quota_and_counts_are_per_tenant(load, registry, store):
     assert registry.get_tenant_quota("tenant-1") == 2
     assert registry.get_doc_count("tenant-2") == 1
     assert [d["doc_id"] for d in registry.list_documents("tenant-2")] == ["doc-2"]
-    assert len(registry.list_documents(None)) == 2
+    assert len(registry.list_all_documents()) == 2
 
 
 def test_tenant_token_usage_accumulates(pg_engine):

@@ -1,35 +1,55 @@
 # The slim image: the API, and (same image, different command) the fetch worker. Neither parses
 # documents, so no parser is installed (requirements-api.txt; CI checks none is importable).
 #
-#   API:           default CMD below
+#   API:           default CMD below (binds $PORT, which hosts such as Render set; 8000 otherwise)
 #   Fetch worker:  procrastinate --app=src.jobs.fetch_worker.app worker --queues=fetch --concurrency=1
-FROM python:3.11-slim
+#                  (run it with --no-healthcheck: it serves no HTTP)
+#
+# Two stages: the compiler needed to build wheels stays in the builder and never ships. The runtime
+# image runs as an unprivileged user and holds only the application code: no scripts, datasets,
+# tests or docs (CI checks).
 
-WORKDIR /app
-
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
+FROM python:3.11-slim AS builder
+WORKDIR /build
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
-# Copy requirements first to leverage Docker's layer cache.
+# Requirements first, to leverage Docker's layer cache.
 COPY requirements-base.txt requirements-api.txt ./
 RUN pip install --no-cache-dir -r requirements-api.txt
 
 # Bake the default reranker's model (~4 MB) into the image, so no query waits for a download.
 # Keep the model name in step with FLASHRANK_MODEL's default (src/config.py).
-ENV FLASHRANK_CACHE_DIR=/opt/flashrank
 RUN python -c "from flashrank import Ranker; Ranker(model_name='ms-marco-TinyBERT-L-2-v2', cache_dir='/opt/flashrank')"
 
-# Copy the application (.dockerignore keeps secrets and local state out).
-# alembic.ini and migrations/ are included: the API verifies the schema revision at startup.
-COPY . .
 
+FROM python:3.11-slim
+RUN useradd --create-home --uid 10001 nexus
+WORKDIR /app
+
+COPY --from=builder /opt/venv /opt/venv
+COPY --from=builder /opt/flashrank /opt/flashrank
+
+ENV PATH="/opt/venv/bin:$PATH" \
+    FLASHRANK_CACHE_DIR=/opt/flashrank \
+    PYTHONIOENCODING=utf-8 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+# Application code only. alembic.ini and migrations/ are included: the API verifies the schema
+# revision at startup. (.dockerignore keeps secrets and local state out of the build context.)
+COPY src ./src
+COPY migrations ./migrations
+COPY alembic.ini ./
+
+USER nexus
 EXPOSE 8000
 
-ENV PYTHONIOENCODING=utf-8
-# The `procrastinate` console script (fetch worker) does not put the working directory on sys.path.
-ENV PYTHONPATH=/app
+# Liveness: /health answers 503 once initialisation has failed, so the platform replaces the instance.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health' % os.environ.get('PORT', '8000'), timeout=4)"
 
 # Migrations are applied as a release step (`alembic upgrade head`), never on boot.
-CMD ["uvicorn", "src.api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD exec uvicorn src.api.main:app --host 0.0.0.0 --port ${PORT:-8000}

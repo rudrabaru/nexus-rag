@@ -42,11 +42,18 @@ class DocumentStoreMixin:
             )
         )
 
-    def list_documents(self, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Lists one tenant's documents, or every document when tenant_id is None (admin only)."""
-        stmt = _documents_with_counts().order_by(documents.c.ingested_at)
-        if tenant_id:
-            stmt = stmt.where(documents.c.tenant_id == tenant_id)
+    def list_documents(self, tenant_id: str) -> List[Dict[str, Any]]:
+        """One tenant's documents. A missing tenant is an error, never "all tenants"."""
+        if not tenant_id:
+            raise ValueError("list_documents needs a tenant_id; use list_all_documents for an admin listing.")
+        return self._list(documents.c.tenant_id == tenant_id)
+
+    def list_all_documents(self) -> List[Dict[str, Any]]:
+        """Every tenant's documents. For the admin only."""
+        return self._list()
+
+    def _list(self, *conditions) -> List[Dict[str, Any]]:
+        stmt = _documents_with_counts().where(*conditions).order_by(documents.c.ingested_at)
         with self._engine.connect() as conn:
             return [row_to_dict(row) for row in conn.execute(stmt)]
 

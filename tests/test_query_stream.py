@@ -112,7 +112,7 @@ def test_capacity_is_returned_when_retrieval_fails(client, wired, tenant_key):
     assert wired.query_semaphore._value == CAPACITY
 
 
-def test_unauthenticated_stream_is_told_to_ask_for_a_key(client, wired):
+def test_an_unauthenticated_stream_is_a_401_not_a_stream_that_says_so(client, wired):
     response = client.post("/query/stream", json={"query": "hi"})
-    assert "administrator" in response.text
+    assert response.status_code == 401
     assert "/register" not in response.text
