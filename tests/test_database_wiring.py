@@ -50,3 +50,22 @@ def test_pooler_endpoint_gets_no_startup_settings():
 def test_pooler_endpoint_is_detected():
     assert is_pooler_url(NEON.replace("ep-cool-name-123", "ep-cool-name-123-pooler"))
     assert not is_pooler_url(NEON)
+
+
+@pytest.mark.parametrize("mode, hostname_checked", [("verify-full", True), ("verify-ca", False)])
+def test_verifying_ssl_modes_get_a_verifying_context_not_a_downgrade_to_require(mode, hostname_checked):
+    import ssl
+
+    args = async_connect_args(NEON.replace("sslmode=require", f"sslmode={mode}"))
+    context = args["ssl"]
+    assert isinstance(context, ssl.SSLContext)
+    assert context.verify_mode == ssl.CERT_REQUIRED and context.check_hostname is hostname_checked
+
+
+def test_require_mode_keeps_the_plain_url_flag_and_no_context():
+    assert "ssl" not in async_connect_args(NEON)
+
+
+def test_every_connection_carries_statement_and_lock_timeouts():
+    options = async_connect_args(NEON)["server_settings"]["options"].split()
+    assert "-cstatement_timeout=60000" in options and "-clock_timeout=10000" in options

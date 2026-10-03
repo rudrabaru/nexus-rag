@@ -43,7 +43,7 @@ def _init_components() -> PipelineComponents:
     model_name = settings.llm_model_name or default_model_name(provider)
 
     fallback_config = None
-    if provider == "gemini" and settings.groq_api_key:
+    if provider == "gemini" and settings.groq_api_key.get_secret_value():
         logger.info(
             "GROQ_API_KEY detected. Configuring Groq as automatic fallback for rate limits."
         )

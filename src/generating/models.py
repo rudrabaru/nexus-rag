@@ -12,11 +12,13 @@ DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
 # llama-3.1-8b-instant was retired from Groq (404 NotFoundError, confirmed live
 # 2026-09-22 against the project's key; the key's /models list no longer carries it).
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
-DEFAULT_MISTRAL_MODEL = "mistral-large-latest"
 
 
 def default_model_name(provider: str) -> str:
-    return {"gemini": DEFAULT_GEMINI_MODEL, "mistral": DEFAULT_MISTRAL_MODEL}.get(provider, DEFAULT_GROQ_MODEL)
+    defaults = {"gemini": DEFAULT_GEMINI_MODEL, "groq": DEFAULT_GROQ_MODEL}
+    if provider not in defaults:
+        raise ValueError(f"No default model for provider {provider!r}; set LLM_MODEL_NAME (or pass --model).")
+    return defaults[provider]
 
 
 class GenerationConfig(BaseModel):
@@ -30,7 +32,7 @@ class GenerationConfig(BaseModel):
     # LLM selection
     provider: str = Field(
         "gemini",
-        description="LLM provider: 'gemini', 'groq', 'mistral' or 'openai'",
+        description="LLM provider: 'gemini', 'groq' or 'openai'",
     )
     model_name: str = Field(
         "gemini-3.5-flash",

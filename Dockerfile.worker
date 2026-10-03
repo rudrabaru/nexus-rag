@@ -49,7 +49,8 @@ ENV PYTHONIOENCODING=utf-8 \
 
 USER nexus
 
-# Shell form (with exec, so procrastinate is PID 1 and receives SIGTERM for graceful shutdown) so
-# ${WORKER_CONCURRENCY} expands. Docling itself runs one document at a time per process
-# (src/parsing/files.py) whatever the concurrency, so peak memory stays at one document's.
-CMD exec procrastinate --app=src.jobs.worker.app worker --queues=ingest --concurrency=${WORKER_CONCURRENCY:-2}
+# Exec form, so the worker is PID 1 and receives SIGTERM for a graceful shutdown. WORKER_CONCURRENCY
+# is read from the environment by the launcher. Docling itself runs one document at a time per
+# process (src/parsing/files.py) whatever the concurrency, so peak memory stays at one document's.
+# Append --drain to exit when the queue is empty instead of waiting for jobs.
+CMD ["python", "-m", "src.jobs.workers", "ingest"]

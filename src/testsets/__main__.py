@@ -1,5 +1,5 @@
 """
-    python -m src.testsets generate --tenant T [--count 50] [--provider mistral] [--dry-run] [--show-prompt]
+    python -m src.testsets generate --tenant T [--count 50] [--provider gemini|groq] [--dry-run] [--show-prompt]
     python -m src.testsets review DRAFT.json
     python -m src.testsets finalize DRAFT.json DATASET.json
     python -m src.testsets verify DATASET.json --tenant T
@@ -12,29 +12,31 @@ import argparse
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[2] / ".env", override=False)
-
-from src.config import get_settings  # noqa: E402
-from src.embedding.providers import build_embedder  # noqa: E402
-from src.evaluation.dataset import load_dataset  # noqa: E402
-from src.evaluation.ground_truth import missing_chunk_ids  # noqa: E402
-from src.generating.llm_client import LLMClient  # noqa: E402
-from src.generating.models import GenerationConfig, default_model_name  # noqa: E402
-from src.registry.engine import get_sync_engine  # noqa: E402
-from src.registry.schema_version import assert_schema_current  # noqa: E402
-from src.testsets.drafts import accepted_queries, read_draft, write_dataset, write_draft  # noqa: E402
-from src.testsets.generator import GenerationAborted, generate  # noqa: E402
-from src.testsets.models import PENDING, Draft  # noqa: E402
-from src.testsets.prompt import DIFFICULTY_INSTRUCTIONS, build_prompt  # noqa: E402
-from src.testsets.quality import overlap_by_difficulty, tier_warnings  # noqa: E402
-from src.testsets.review import review, status_counts  # noqa: E402
-from src.testsets.sampling import group_identical, interleave_by_document, load_chunks  # noqa: E402
+from src.config import get_settings
+from src.embedding.providers import build_embedder
+from src.evaluation.dataset import load_dataset
+from src.evaluation.ground_truth import missing_chunk_ids
+from src.generating.llm_client import LLMClient
+from src.generating.models import GenerationConfig, default_model_name
+from src.registry.engine import get_sync_engine
+from src.runtime import ConfigurationError, bootstrap
+from src.testsets.drafts import accepted_queries, read_draft, write_dataset, write_draft
+from src.testsets.generator import GenerationAborted, generate
+from src.testsets.models import PENDING, Draft
+from src.testsets.prompt import DIFFICULTY_INSTRUCTIONS, build_prompt
+from src.testsets.quality import overlap_by_difficulty, tier_warnings
+from src.testsets.review import review, status_counts
+from src.testsets.sampling import group_identical, interleave_by_document, load_chunks
 
 # Questions come from different passages, so one call per question already varies; a low
 # temperature keeps the question tied to what the passage says. Untuned: a starting point.
 GENERATION_TEMPERATURE = 0.3
+
+# Seconds between calls, per provider. Gemini: assumes the 5 requests a minute the free tier has
+# shown in practice (Google does not publish it: check AI Studio and pass --min-interval). Groq: its
+# free tier allows 8K tokens a minute and a generation prompt is about 1K tokens, so one call every
+# ~8 s keeps it under the token limit. Providers without an entry use the Gemini value.
+PROVIDER_MIN_INTERVAL_SECONDS = {"gemini": 13.0, "groq": 8.0}
 
 
 def command_generate(args) -> int:
@@ -51,7 +53,6 @@ def command_generate(args) -> int:
         return 2
 
     engine = get_sync_engine()
-    assert_schema_current(engine)
     index_id = args.index or build_embedder(settings).index_id
     source_chunks = load_chunks(engine, args.tenant, index_id)
     groups = group_identical(source_chunks)
@@ -81,7 +82,7 @@ def command_generate(args) -> int:
                                         max_output_tokens=1024))  # no fallback: the model is pinned
     print(f"writing {args.count} questions with {provider}/{model_name} -> {out} (resuming at {len(draft.items)})")
     try:
-        generate(draft, ordered, client, args.count, difficulties, lambda d: write_draft(out, d), args.min_interval)
+        generate(draft, ordered, client, args.count, difficulties, lambda d: write_draft(out, d), args.min_interval or PROVIDER_MIN_INTERVAL_SECONDS.get(provider, 13.0))
     except GenerationAborted as e:
         print(f"stopped: {e}\nThe draft is saved; run the same command to resume.")
         return 1
@@ -117,7 +118,6 @@ def command_finalize(args) -> int:
 def command_verify(args) -> int:
     dataset = load_dataset(args.dataset, relevance="chunk")
     engine = get_sync_engine()
-    assert_schema_current(engine)
     missing = missing_chunk_ids(engine, args.tenant, (i for q in dataset.queries for i in q.source_chunk_ids))
     if missing:
         print(f"{len(missing)} source chunks are not in tenant {args.tenant!r}: {missing[:5]}")
@@ -133,13 +133,13 @@ def main(argv=None) -> int:
     generate_parser = commands.add_parser("generate", help="write questions from a tenant's chunks into a draft")
     generate_parser.add_argument("--tenant", required=True)
     generate_parser.add_argument("--count", type=int, default=50)
-    generate_parser.add_argument("--provider", default="mistral")
+    generate_parser.add_argument("--provider", default="gemini")
     generate_parser.add_argument("--model", help="default: the provider's default model")
     generate_parser.add_argument("--index", help="embedding index to read chunks from (default: the configured one)")
     generate_parser.add_argument("--difficulties", default="easy,medium,hard", help="tiers, cycled in order")
     generate_parser.add_argument("--seed", type=int, default=0)
     generate_parser.add_argument("--out", help="draft file (default: evaluation_datasets/TENANT.draft.json)")
-    generate_parser.add_argument("--min-interval", type=float, default=1.1, help="seconds between LLM calls (Mistral free: 1.1; Gemini free: 13 for 5 RPM limit)")
+    generate_parser.add_argument("--min-interval", type=float, help=f"seconds between LLM calls (default per provider: {PROVIDER_MIN_INTERVAL_SECONDS})")
     generate_parser.add_argument("--dry-run", action="store_true", help="show what would be sampled; call no LLM")
     generate_parser.add_argument("--show-prompt", action="store_true", help="print the first prompt")
 
@@ -153,9 +153,12 @@ def main(argv=None) -> int:
     verify_parser.add_argument("--tenant", required=True)
 
     args = parser.parse_args(argv)
-    if args.command in ("generate", "verify") and not get_settings().database_url:
-        print("DATABASE_URL is not set.")
-        return 2
+    if args.command in ("generate", "verify"):
+        try:
+            bootstrap("cli")
+        except ConfigurationError as e:
+            print(e)
+            return 2
     return {"generate": command_generate, "review": command_review, "finalize": command_finalize,
             "verify": command_verify}[args.command](args)
 

@@ -80,10 +80,12 @@ def test_the_default_index_is_voyage_4():
 
 
 def test_an_index_id_selects_its_own_provider_and_model():
-    embedder = build_embedder(get_settings(), "jina:jina-embeddings-v3")
-    assert (embedder.provider, embedder.model) == ("jina", "jina-embeddings-v3")
+    embedder = build_embedder(get_settings(), "ollama:bge-m3")
+    assert (embedder.provider, embedder.model) == ("ollama", "bge-m3")
     with pytest.raises(ValueError):
         build_embedder(get_settings(), "qdrant:whatever")
+    with pytest.raises(ValueError):  # the Jina embedding provider was removed
+        build_embedder(get_settings(), "jina:jina-embeddings-v3")
 
 
 async def test_queries_and_documents_are_embedded_asymmetrically(server, monkeypatch):
@@ -152,6 +154,6 @@ def test_a_failed_embedding_call_marks_the_batch_failed_with_its_reason(server, 
 
 
 def test_a_retriever_refuses_a_query_embedder_from_another_index(monkeypatch):
-    store = SimpleNamespace(index_id="jina:jina-embeddings-v3")
+    store = SimpleNamespace(index_id="ollama:bge-m3")
     with pytest.raises(ValueError, match="not comparable"):
         DenseRetriever(store, voyage(monkeypatch))

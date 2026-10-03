@@ -1,20 +1,15 @@
-from pathlib import Path
-
 from alembic import context
-from dotenv import load_dotenv
 from sqlalchemy import create_engine, pool
 
+from src.config import get_settings
 from src.registry.engine import sync_url
 from src.registry.schema import metadata
-
-# Real environment variables win over .env (same rule as the API).
-load_dotenv(Path(__file__).resolve().parent.parent / ".env", override=False)
-
-from src.config import get_settings  # noqa: E402  (must read the environment after .env is loaded)
+from src.runtime import load_environment
 
 
 def _database_url() -> str:
-    url = get_settings().database_url
+    load_environment()  # real environment variables win over .env (same rule as every entry point)
+    url = get_settings().database_url.get_secret_value()
     if not url:
         raise RuntimeError("DATABASE_URL is not set.")
     return sync_url(url).render_as_string(hide_password=False)

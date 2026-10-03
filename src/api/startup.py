@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from src.api.factory import _init_components
 from src.config import get_settings
+from src.config_checks import config_problems
 from src.jobs.queue import api_queue
 from src.observability.logger import PipelineLogger
 from src.registry.auth_store import AuthStore
@@ -32,10 +33,10 @@ def _initialize(app: FastAPI) -> None:
     app.state.metrics_store = MetricsStore(sync_engine)
     app.state.pipeline_logger = PipelineLogger("nexus_rag", engine=sync_engine)
 
-    # The API only defers ingestion jobs; it never runs them (src/jobs/worker.py does), so a
+    # The API only defers ingestion jobs; it never runs them (src/jobs/workers.py does), so a
     # crashed or restarted API process cannot leave a job stuck "processing" — the worker's
     # own stalled-job detection (heartbeats) is what recovers those.
-    app.state.job_queue = api_queue(settings.database_url).open()
+    app.state.job_queue = api_queue(settings.database_url.get_secret_value()).open()
 
     index_id = components.retrieval.default_index_id
     index_size = components.retrieval.chunk_store().get_collection_size()
@@ -53,10 +54,9 @@ def _initialize(app: FastAPI) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    missing = settings.missing_required()
-    if missing:
-        raise RuntimeError(f"Missing or invalid configuration: {', '.join(missing)}. Startup aborted.")
-    settings.warn_on_legacy_secrets()
+    problems = config_problems(settings, "api")
+    if problems:
+        raise RuntimeError(f"Missing or invalid configuration: {', '.join(problems)}. Startup aborted.")
 
     # The semaphore belongs to the serving event loop, so it is created here, not in the thread.
     app.state.query_semaphore = asyncio.Semaphore(settings.query_concurrency)

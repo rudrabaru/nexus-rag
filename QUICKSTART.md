@@ -35,7 +35,7 @@ docker run --env-file .env nexus-rag-api alembic upgrade head   # release step: 
 
 docker run --env-file .env -p 8000:8000 nexus-rag-api
 docker run --env-file .env nexus-rag-worker                     # second terminal
-docker run --env-file .env nexus-rag-api procrastinate --app=src.jobs.fetch_worker.app worker --queues=fetch --concurrency=1   # third terminal
+docker run --env-file .env --no-healthcheck nexus-rag-api python -m src.jobs.workers fetch   # third terminal
 ```
 The images deliberately contain no `.env`, so pass it at run time. Docker's `--env-file` keeps quotes literally, so write values unquoted. Without the parse worker every job stays at `status: "queued"`; without the fetch worker, URL jobs do.
 
@@ -73,14 +73,10 @@ Wait for `RAG Pipeline API ready` in the console.
 ### Start the workers
 In two separate terminals. These are what actually process uploads and URLs; the API only queues them:
 ```powershell
-python -m src.jobs.worker         # parse worker (uploads, and pages the fetch worker stored)
-python -m src.jobs.fetch_worker   # fetch worker (web pages and sitemaps, via reader APIs)
+python -m src.jobs.workers ingest   # parse worker (uploads, and pages the fetch worker stored)
+python -m src.jobs.workers fetch    # fetch worker (web pages and sitemaps, via reader APIs)
 ```
-Or with Procrastinate's own CLI, which supports more options:
-```powershell
-procrastinate --app=src.jobs.worker.app worker --queues=ingest
-procrastinate --app=src.jobs.fetch_worker.app worker --queues=fetch --concurrency=1
-```
+Add `--drain` to run what is queued and exit; jobs wait in the queue while no worker runs.
 
 ### Start the Streamlit UI
 In a separate terminal:

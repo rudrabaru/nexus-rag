@@ -51,10 +51,8 @@ def test_a_failed_start_does_not_reveal_its_reason_to_callers(client, app_state,
         del app_state.init_error
 
 
-def test_an_unexpected_error_returns_a_reference_not_the_exception(app_state, tenant_key):
+def test_an_unexpected_error_returns_a_reference_not_the_exception(app, app_state, tenant_key):
     from fastapi.testclient import TestClient
-
-    from src.api.main import app
 
     class Boom:
         def retrievers(self, index_id=None):

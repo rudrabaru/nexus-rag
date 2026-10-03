@@ -12,7 +12,7 @@ def commit_ingestion(engine: Engine, job_id: str, tenant_id: str, outcome: Embed
     """
     All-or-nothing: chunks, job status, document stats and tenant usage commit together, or
     none of them do. A crash between embedding and this call leaves the job "processing";
-    Procrastinate's stalled-job detection (src/jobs/worker.py) requeues it, and re-running is
+    Procrastinate's stalled-job detection (src/jobs/workers.py) requeues it, and re-running is
     safe because write_chunks upserts are idempotent.
     """
     error = outcome.error_reason if outcome.status == "partial_success" else None

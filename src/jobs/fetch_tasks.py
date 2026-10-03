@@ -1,7 +1,7 @@
 """
 The fetch task: turn a URL ingestion into Markdown pages in Postgres, then hand off to ingest.
 
-Runs on the slim fetch worker (the API image, src/jobs/fetch_worker.py), never on the heavy
+Runs on the slim fetch worker (the API image, src/jobs/workers.py), never on the heavy
 parse worker, and contacts only reader APIs (src/crawling/readers.py) — no process we host
 sends a request to the target site. Imports nothing heavier than httpx.
 
@@ -104,7 +104,7 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
     if is_sitemap_url(request.url):
         await asyncio.sleep(pacer.reserve(request.url))  # the reader fetches the sitemap from the site too
         try:
-            urls = await discover_pages(request.url, MAX_SITEMAP_PAGES, settings.firecrawl_api_key, authorize_child_sitemap)
+            urls = await discover_pages(request.url, MAX_SITEMAP_PAGES, settings.firecrawl_api_key.get_secret_value(), authorize_child_sitemap)
         except RobotsBlockedError as e:
             await audit(request.url, "robots_blocked", "jina", str(e))
             raise UnprocessableSourceError(f"The sitemap is disallowed by the site's robots.txt: {e}")
@@ -133,7 +133,7 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
         try:
             await asyncio.to_thread(check_fetchable, url, settings.allowed_fetch_domains, settings.denied_fetch_domains)
             await asyncio.sleep(pacer.reserve(url))
-            page = await read_page(url, settings.firecrawl_api_key)
+            page = await read_page(url, settings.firecrawl_api_key.get_secret_value())
             if page.final_url and page.final_url != url:  # a redirect must not lead somewhere the policy forbids
                 await asyncio.to_thread(
                     check_fetchable, page.final_url, settings.allowed_fetch_domains, settings.denied_fetch_domains

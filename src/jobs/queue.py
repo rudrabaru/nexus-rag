@@ -8,7 +8,7 @@ RQ would add Redis).
 The API only defers jobs. It uses Procrastinate's sync connector from a worker thread
 (asyncio.to_thread), the same pattern as the registry, and never imports task code; tasks
 are referenced by name (src/jobs/contract.py). The worker builds its own App with the async
-connector and the task implementations (src/jobs/worker.py).
+connector and the task implementations (src/jobs/workers.py).
 """
 import procrastinate
 

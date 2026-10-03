@@ -111,14 +111,14 @@ Tradeoffs, stated plainly:
 | Parameter | Value | Why | Cost of being wrong |
 |---|---|---|---|
 | generation temperature | 0.3 | each call is a different passage, so little extra randomness is needed; low keeps the question tied to the text | too low gives stiff phrasing; too high invents facts (the reviewer is the guard) |
-| call spacing | 1.1 s | Mistral's free tier allows 1 request a second; 10% margin | slower than needed on a provider with a higher limit (`--min-interval`) |
+| call spacing | 13 s Gemini, 8 s Groq | Gemini: the ~5 requests a minute its free tier has shown (unpublished; check AI Studio). Groq: 8K tokens a minute against ~1K-token prompts | slower than needed on a paid tier (`--min-interval`) |
 | abort after | 5 consecutive failures | the client already retries a transient error three times with backoff, so five failed chunks in a row means the provider is down, not unlucky | a flaky provider stops a run that would have finished; it resumes where it stopped |
 | overlap word length | 3+ characters | sets short function words aside without a language-specific stop list | a crude measure: it only compares tiers on one corpus |
 
 The model is **pinned** (no fallback): a test set's character must not depend on which provider happened to be up. The draft records the model, seed, index and tiers, and refuses to resume with different ones.
 
 ### Not yet validated
-The code is covered by unit and integration tests with a fake LLM; **no live generation has run**, because the database holds no corpus yet and no Mistral key is configured. The first job on a real corpus is therefore the acceptance test: ingest a small public corpus, generate about 50 questions, check the tier warning and the per-tier overlap, review them, and run a first experiment in both relevance modes. Expect to adjust the prompt after reading real questions.
+The code is covered by unit and integration tests with a fake LLM; a first live run with Groq produced and reviewed 10 questions, which is too few for a significance verdict (a verdict needs at least 6 queries that differ between two configurations). The first job on a real corpus is therefore the acceptance test: ingest a small public corpus, generate about 50 questions, check the tier warning and the per-tier overlap, review them, and run a first experiment in both relevance modes. Expect to adjust the prompt after reading real questions.
 
 ## Prototype-Corpus Results (retired 2026-09-28)
 The first corpus (2,284 chunks across about 60 documents) was deleted as prototype data, along with its frozen baselines and the file-based harness that measured them. Findings worth keeping:

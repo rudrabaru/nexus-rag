@@ -2,7 +2,7 @@
 # documents, so no parser is installed (requirements-api.txt; CI checks none is importable).
 #
 #   API:           default CMD below (binds $PORT, which hosts such as Render set; 8000 otherwise)
-#   Fetch worker:  procrastinate --app=src.jobs.fetch_worker.app worker --queues=fetch --concurrency=1
+#   Fetch worker:  python -m src.jobs.workers fetch [--drain]
 #                  (run it with --no-healthcheck: it serves no HTTP)
 #
 # Two stages: the compiler needed to build wheels stays in the builder and never ships. The runtime

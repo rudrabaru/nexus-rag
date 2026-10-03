@@ -1,69 +1,82 @@
 """
-Wipe all corpus data from Neon while keeping the schema and API keys intact.
+Wipe corpus data from the database named by DATABASE_URL, keeping the schema and API keys.
 
 Deletes:
   documents (cascades to jobs, ingest_sources, fetched_pages, chunks)
   embedding_indexes
   fetch_log, query_logs, pipeline_events
+  with --include-experiments: experiments (cascades to trials and runs) and the generation and
+  judge caches, whose results refer to chunks that no longer exist
 
 Keeps:
-  api_keys, tenants   -- existing keys stay valid
-  alembic_version     -- schema revision stays at 0003
+  api_keys, tenants, the schema revision
+
+It names the database host and waits for you to type it before deleting anything.
 
 Run:
-    python -m scripts.reset_corpus [--dry-run]
+    python -m scripts.reset_corpus [--dry-run] [--include-experiments]
 """
 import argparse
 import sys
-from pathlib import Path
 
-from dotenv import load_dotenv
+from sqlalchemy import func, select, text
+from sqlalchemy.engine import make_url
 
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[1] / ".env", override=False)
-
-from sqlalchemy import func, select, text  # noqa: E402
-
-from src.registry.engine import get_sync_engine  # noqa: E402
-from src.registry.schema import (  # noqa: E402
-    chunks, documents, embedding_indexes, fetch_log, jobs, pipeline_events, query_logs,
+from src.config import get_settings
+from src.registry.engine import get_sync_engine
+from src.registry.schema import (
+    chunks, documents, embedding_indexes, experiments, fetch_log, jobs, pipeline_events, query_logs,
 )
+from src.runtime import ConfigurationError, bootstrap
+
+CORPUS_TABLES = {
+    "documents": documents, "chunks": chunks, "jobs": jobs, "embedding_indexes": embedding_indexes,
+    "fetch_log": fetch_log, "query_logs": query_logs, "pipeline_events": pipeline_events,
+}
+CORPUS_DELETES = ["documents", "embedding_indexes", "fetch_log", "query_logs", "pipeline_events"]  # documents cascades first
+EXPERIMENT_DELETES = ["experiments", "generation_cache", "judge_cache"]
 
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="show counts, do nothing")
+    parser.add_argument("--include-experiments", action="store_true", help="also delete experiment results and caches")
     args = parser.parse_args(argv)
+
+    try:
+        bootstrap("cli")
+    except ConfigurationError as e:
+        print(e)
+        return 2
+
+    host = make_url(get_settings().database_url.get_secret_value()).host or "localhost"
+    tables = dict(CORPUS_TABLES)
+    if args.include_experiments:
+        tables["experiments"] = experiments
 
     engine = get_sync_engine()
     with engine.connect() as conn:
-        counts = {
-            "documents":        conn.execute(select(func.count()).select_from(documents)).scalar(),
-            "chunks":           conn.execute(select(func.count()).select_from(chunks)).scalar(),
-            "jobs":             conn.execute(select(func.count()).select_from(jobs)).scalar(),
-            "embedding_indexes":conn.execute(select(func.count()).select_from(embedding_indexes)).scalar(),
-            "fetch_log":        conn.execute(select(func.count()).select_from(fetch_log)).scalar(),
-            "query_logs":       conn.execute(select(func.count()).select_from(query_logs)).scalar(),
-            "pipeline_events":  conn.execute(select(func.count()).select_from(pipeline_events)).scalar(),
-        }
+        counts = {name: conn.execute(select(func.count()).select_from(table)).scalar() for name, table in tables.items()}
 
-    print("Rows to delete:")
-    for table, n in counts.items():
-        print(f"  {table}: {n:,}")
+    print(f"Database: {host}\nRows to delete:")
+    for name, n in counts.items():
+        print(f"  {name}: {n:,}")
 
     if args.dry_run:
         print("Dry run: nothing deleted.")
         return 0
 
+    if input(f"Type the database host ({host}) to confirm: ").strip() != host:
+        print("Not confirmed: nothing deleted.")
+        return 1
+
+    deletes = CORPUS_DELETES + (EXPERIMENT_DELETES if args.include_experiments else [])
     print("\nDeleting...")
     with engine.begin() as conn:
-        conn.execute(text("DELETE FROM documents"))          # cascades to jobs, ingest_sources, fetched_pages, chunks
-        conn.execute(text("DELETE FROM embedding_indexes"))  # now safe (chunks gone)
-        conn.execute(text("DELETE FROM fetch_log"))
-        conn.execute(text("DELETE FROM query_logs"))
-        conn.execute(text("DELETE FROM pipeline_events"))
+        for table in deletes:
+            conn.execute(text(f"DELETE FROM {table}"))  # names come from the constants above, never from input
 
     print("Done. The schema and API keys are untouched.")
-    print("Ingest fresh documents with EMBEDDING_PROVIDER=voyage (voyage:voyage-4 index).")
     return 0
 
 

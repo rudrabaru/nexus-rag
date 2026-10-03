@@ -13,20 +13,16 @@ import json
 import sys
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-load_dotenv(dotenv_path=Path(__file__).resolve().parents[2] / ".env", override=False)
-
-from src.config import get_settings  # noqa: E402
-from src.evaluation import store  # noqa: E402
-from src.evaluation.dataset import load_dataset  # noqa: E402
-from src.evaluation.engine import run_experiment  # noqa: E402
-from src.evaluation.ground_truth import missing_chunk_ids  # noqa: E402
-from src.evaluation.report import build_report, regressions, render  # noqa: E402
-from src.evaluation.spec import ExperimentSpec  # noqa: E402
-from src.registry.engine import dispose_engines, get_async_engine, get_sync_engine  # noqa: E402
-from src.registry.schema_version import assert_schema_current  # noqa: E402
-from src.retrieving.pipeline import RetrievalResources  # noqa: E402
+from src.config import get_settings
+from src.evaluation import store
+from src.evaluation.dataset import load_dataset
+from src.evaluation.engine import run_experiment
+from src.evaluation.ground_truth import missing_chunk_ids
+from src.evaluation.report import build_report, regressions, render
+from src.evaluation.spec import ExperimentSpec
+from src.registry.engine import dispose_engines, get_async_engine, get_sync_engine
+from src.retrieving.pipeline import RetrievalResources
+from src.runtime import ConfigurationError, bootstrap
 
 
 async def _execute(experiment_id: str) -> str:
@@ -55,12 +51,12 @@ def main(argv=None) -> int:
     listing.add_argument("--tenant")
     args = parser.parse_args(argv)
 
-    missing = get_settings().missing_required()
-    if missing:
-        print(f"Missing or invalid configuration: {', '.join(missing)}")
+    try:
+        bootstrap("cli")
+    except ConfigurationError as e:
+        print(e)
         return 2
     engine = get_sync_engine()
-    assert_schema_current(engine)
 
     if args.command == "list":
         for e in store.list_experiments(engine, args.tenant):

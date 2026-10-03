@@ -247,7 +247,7 @@ async def test_resuming_a_fully_indexed_document_completes_without_fetching(fetc
 def test_each_blueprint_only_holds_tasks_for_its_own_queue():
     """The parse worker (HF Space) must never be able to run a fetch task, and vice versa."""
     from src.jobs.fetch_tasks import fetch_blueprint
-    from src.jobs.tasks import blueprint
+    from src.jobs.ingest_tasks import blueprint
 
     assert {t.queue for t in fetch_blueprint.tasks.values()} == {FETCH_QUEUE}
     assert {t.queue for t in blueprint.tasks.values()} == {INGEST_QUEUE}
@@ -256,7 +256,7 @@ def test_each_blueprint_only_holds_tasks_for_its_own_queue():
 def test_a_worker_app_refuses_tasks_from_another_queue():
     import procrastinate
 
-    from src.jobs.bootstrap import build_app
+    from src.jobs.workers import build_app
 
     stray = procrastinate.Blueprint()
 
@@ -275,7 +275,7 @@ def test_a_worker_app_with_only_its_own_tasks_builds():
     """
     import procrastinate
 
-    from src.jobs.bootstrap import build_app
+    from src.jobs.workers import build_app
 
     own = procrastinate.Blueprint()
 

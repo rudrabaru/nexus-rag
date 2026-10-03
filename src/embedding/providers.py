@@ -10,8 +10,6 @@ Providers differ only in wire format, so each is a plain function that builds an
 - voyage: hosted default. 200M free tokens per model, but 3 RPM / 10K TPM without a payment
   method, so requests are paced (src/embedding/pacing.py).
 - ollama: local (bge-m3 by default, 1024-dim) for the optional GPU worker.
-- jina: kept only so the prototype jina-embeddings-v3 index, which the frozen retrieval
-  baselines were measured on, stays queryable. Its free allowance is a one-time grant.
 
 Asymmetric retrieval models embed queries and documents differently (Voyage input_type,
 Jina task). Using the wrong side silently lowers recall, so callers always say which.
@@ -31,13 +29,11 @@ logger = logging.getLogger(__name__)
 
 InputType = Literal["query", "document"]
 
-DEFAULT_MODELS = {"voyage": "voyage-4", "ollama": "bge-m3", "jina": "jina-embeddings-v3"}
+DEFAULT_MODELS = {"voyage": "voyage-4", "ollama": "bge-m3"}
 
 # List prices (USD per 1M tokens), for cost reporting only. Voyage's first 200M tokens per
 # model are free, so this is what the usage would cost once that grant is spent.
-LIST_PRICE_PER_MILLION = {
-    "voyage-4-large": 0.12, "voyage-4": 0.06, "voyage-4-lite": 0.02, "jina-embeddings-v3": 0.02,
-}
+LIST_PRICE_PER_MILLION = {"voyage-4-large": 0.12, "voyage-4": 0.06, "voyage-4-lite": 0.02}
 
 # Pacing needs a token estimate before the provider has counted anything, and the API image
 # carries no tokenizer. ~3 characters per token over-estimates English (~4), so pacing errs
@@ -168,7 +164,7 @@ def _retry_after(response: httpx.Response) -> Optional[float]:
 
 
 def _openai_style(data: dict) -> EmbeddingBatch:
-    """Voyage and Jina both answer {data: [{embedding, index}], usage: {total_tokens}}."""
+    """Voyage answers {data: [{embedding, index}], usage: {total_tokens}}."""
     rows = sorted(data["data"], key=lambda row: row.get("index", 0))
     return EmbeddingBatch(vectors=[row["embedding"] for row in rows], tokens=int(data.get("usage", {}).get("total_tokens", 0)))
 
@@ -188,7 +184,7 @@ def voyage_embedder(settings: Settings, model: str) -> Embedder:
         provider="voyage",
         model=model,
         endpoint=f"{settings.voyage_base_url.rstrip('/')}/embeddings",
-        headers={"Authorization": f"Bearer {settings.voyage_api_key}"},
+        headers={"Authorization": f"Bearer {settings.voyage_api_key.get_secret_value()}"},
         request_body=lambda texts, input_type: {
             "input": texts, "model": model, "input_type": input_type, "output_dimension": EMBEDDING_DIMENSION,
         },
@@ -213,21 +209,7 @@ def ollama_embedder(settings: Settings, model: str) -> Embedder:
     )
 
 
-def jina_embedder(settings: Settings, model: str) -> Embedder:
-    tasks = {"query": "retrieval.query", "document": "retrieval.passage"}
-    return Embedder(
-        provider="jina",
-        model=model,
-        endpoint="https://api.jina.ai/v1/embeddings",
-        headers={"Authorization": f"Bearer {settings.jina_api_key}"},
-        request_body=lambda texts, input_type: {"model": model, "input": texts, "task": tasks[input_type]},
-        read_response=_openai_style,
-        max_texts_per_request=100,
-        max_tokens_per_request=100 * 8192,
-    )
-
-
-_BUILDERS = {"voyage": voyage_embedder, "ollama": ollama_embedder, "jina": jina_embedder}
+_BUILDERS = {"voyage": voyage_embedder, "ollama": ollama_embedder}
 
 
 def build_embedder(settings: Settings, index_id: Optional[str] = None) -> Embedder:

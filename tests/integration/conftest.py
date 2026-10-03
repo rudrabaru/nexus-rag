@@ -122,7 +122,7 @@ async def procrastinate_app(test_schema, pg_engine):
     """
     A real Procrastinate App against the test schema (its own tables, from migration 0002,
     are not part of src.registry.schema.metadata and so are not truncated between tests).
-    Tests register their own task via @app.task(...) rather than importing src.jobs.tasks's
+    Tests register their own task via @app.task(...) rather than importing src.jobs.ingest_tasks's
     blueprint, which can only be namespaced into an App once per process (see tests/test_jobs.py).
 
     search_path is the test schema ALONE, with no `public` fallback. Procrastinate's own

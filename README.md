@@ -28,7 +28,7 @@ Create a `.env` file in the root directory and populate it with your API keys:
 GEMINI_API_KEY="your_gemini_key"
 GROQ_API_KEY="your_groq_key"
 VOYAGE_API_KEY="pa-..."   # embeddings (EMBEDDING_PROVIDER=voyage, the default)
-JINA_API_KEY="your_jina_key"       # only for RERANKER=jina and the legacy embedding index
+JINA_API_KEY="your_jina_key"       # only for RERANKER=jina
 
 # Postgres (Neon) — the DIRECT endpoint, not the "-pooler" one
 DATABASE_URL="postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?sslmode=require"
@@ -37,7 +37,6 @@ DATABASE_URL="postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?ssl
 ADMIN_API_KEY="your-admin-key"
 
 # Optional Settings
-MISTRAL_API_KEY="..."       # only for generating test sets (python -m src.testsets); free plan, no card
 WORKER_CONCURRENCY=2
 ENABLE_QUERY_GENERALISATION=false
 RETRIEVAL_STRATEGY=hybrid   # dense | sparse | hybrid
@@ -62,8 +61,9 @@ The API checks the schema revision at startup and refuses to run against a datab
 **4. Run the Workers**
 In two more terminals, with the same `.env`. The API only queues ingestion jobs; these run them:
 ```bash
-python -m src.jobs.worker         # parse worker: uploads and fetched pages -> chunks and vectors
-python -m src.jobs.fetch_worker   # fetch worker: web pages and sitemaps, through reader APIs
+python -m src.jobs.workers ingest   # parse worker: uploads and fetched pages -> chunks and vectors
+python -m src.jobs.workers fetch    # fetch worker: web pages and sitemaps, through reader APIs
+# add --drain to either to run what is queued and exit (how workers run on a laptop)
 ```
 Without the parse worker, every job stays at `status: "queued"`; without the fetch worker, URL jobs do. The first document the parse worker handles downloads Docling's models (~0.5 GB) once.
 
@@ -253,7 +253,7 @@ Both workers follow the same rule on their own startup (config, then schema), an
 Everything durable lives in one Postgres database (Neon free tier): document text and vectors, the keyword index, jobs, the job queue itself, API keys and cost history. Deleting a document removes its chunks, vectors and keyword entries in the same transaction. Neon suspends an idle database after about five minutes, so the first request after a pause can take a few seconds longer.
 
 **Ingestion needs running workers:**
-`POST /ingest` only validates and queues. The parse worker (`Dockerfile.worker`) must run for anything to be indexed, and the fetch worker (the API image with `procrastinate --app=src.jobs.fetch_worker.app worker --queues=fetch --concurrency=1`) for URLs. A deployment that only runs the API accepts ingestions that never progress past `status: "queued"`.
+`POST /ingest` only validates and queues. The parse worker (`Dockerfile.worker`) must run for anything to be indexed, and the fetch worker (the API image, run with `python -m src.jobs.workers fetch`) for URLs. A deployment that only runs the API accepts ingestions that never progress past `status: "queued"`.
 
 **Embedding indexes:**
 Each embedding model has its own index (`provider:model`), and the API searches and ingests into the index of `EMBEDDING_PROVIDER` (default `voyage:voyage-4`). Vectors of two models are never mixed: switching the provider points the API at a different index, which starts empty until documents are ingested with it.

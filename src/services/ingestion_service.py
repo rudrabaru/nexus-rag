@@ -2,7 +2,7 @@
 Validates an ingestion request and hands it to the durable job queue.
 
 Nothing here parses a document: fetching, chunking and embedding happen in the worker
-(src/jobs/tasks.py), so this module carries no document-parsing dependencies and the API
+(src/jobs/ingest_tasks.py), so this module carries no document-parsing dependencies and the API
 image stays slim. An uploaded file's bytes are read into memory, hashed, and stored in the
 `ingest_sources` table in the same transaction as the job — never on the API's local disk,
 which the worker (possibly a different host) cannot see.

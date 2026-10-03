@@ -14,6 +14,7 @@ Neon specifics:
   are disabled so queries still work.
 """
 import logging
+import ssl
 from functools import lru_cache
 from typing import Dict, Optional
 
@@ -36,6 +37,11 @@ CONNECT_TIMEOUT_SECONDS = 15  # covers a cold compute start
 # - ef_search: must be at least the largest LIMIT. The largest is the rerank candidate pool,
 #   top_k * 4 with QueryRequest.top_k <= 20, i.e. 80.
 HNSW_SESSION_SETTINGS = {"hnsw.iterative_scan": "relaxed_order", "hnsw.ef_search": "100"}
+
+# Bounds on every connection of both engines, so one stuck query cannot hold a pooled connection
+# and a thread forever. A 100-row vector insert takes seconds even on a cold Neon compute, so the
+# statement limit is generous; the lock limit is short because nothing here should wait on a lock.
+GUARD_SESSION_SETTINGS = {"statement_timeout": "60000", "lock_timeout": "10000"}
 
 _SSLMODES_REQUIRING_TLS = {"require", "verify-ca", "verify-full"}
 
@@ -62,7 +68,10 @@ def sync_url(database_url: str) -> URL:
 
 
 def async_url(database_url: str) -> URL:
-    """asyncpg rejects libpq-only parameters, so sslmode is translated and channel_binding dropped."""
+    """
+    asyncpg rejects libpq-only parameters, so sslmode is translated and channel_binding dropped.
+    verify-ca / verify-full also get a verifying SSL context from async_connect_args.
+    """
     url = _base_url(database_url)
     query = dict(url.query)
     sslmode = query.pop("sslmode", None)
@@ -86,7 +95,15 @@ def async_connect_args(database_url: str, extra_settings: Optional[Dict[str, str
     work_mem was ignored) but forwards `options`. Vanilla Postgres accepts both forms.
     """
     connect_args = {"timeout": CONNECT_TIMEOUT_SECONDS}
-    session_settings = {**HNSW_SESSION_SETTINGS, **(extra_settings or {})}
+    session_settings = {**HNSW_SESSION_SETTINGS, **GUARD_SESSION_SETTINGS, **(extra_settings or {})}
+    sslmode = dict(make_url(database_url).query).get("sslmode")
+    if sslmode in ("verify-ca", "verify-full"):
+        # asyncpg's string form of these modes insists on a root.crt file in the home directory; a
+        # context built on the system CA store verifies the certificate chain (and, for verify-full,
+        # the hostname) the way the mode promises, and works wherever Python has CA certificates.
+        context = ssl.create_default_context()
+        context.check_hostname = sslmode == "verify-full"
+        connect_args["ssl"] = context
     if is_pooler_url(database_url):
         # PgBouncer rejects unknown startup parameters, so the settings cannot be sent.
         logger.warning(
@@ -103,21 +120,21 @@ def async_connect_args(database_url: str, extra_settings: Optional[Dict[str, str
 def get_sync_engine() -> Engine:
     settings = get_settings()
     return create_engine(
-        sync_url(settings.database_url),
+        sync_url(settings.database_url.get_secret_value()),
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_pool_size,
         pool_pre_ping=True,
         pool_recycle=POOL_RECYCLE_SECONDS,
-        connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS},
+        connect_args={"connect_timeout": CONNECT_TIMEOUT_SECONDS, "options": session_options(GUARD_SESSION_SETTINGS)},
     )
 
 
 @lru_cache
 def get_async_engine() -> AsyncEngine:
     settings = get_settings()
-    connect_args = async_connect_args(settings.database_url)
+    connect_args = async_connect_args(settings.database_url.get_secret_value())
     return create_async_engine(
-        async_url(settings.database_url),
+        async_url(settings.database_url.get_secret_value()),
         pool_size=settings.db_pool_size,
         max_overflow=settings.db_pool_size,
         pool_pre_ping=True,

@@ -7,7 +7,7 @@ touched).
 - Resumable: the draft is saved after every question, and chunks already handled (a question
   written, or the model abstained) are skipped on the next run. A failed call is not recorded,
   so it is retried.
-- Paced to the provider (Mistral's free tier allows 1 request a second).
+- Paced to the provider's free-tier limits (see PROVIDER_MIN_INTERVAL_SECONDS in __main__.py).
 - Pinned model, no fallback: a test set's character should not depend on which provider
   happened to be up. A provider that fails several times in a row aborts the run instead.
 """

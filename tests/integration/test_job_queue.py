@@ -2,7 +2,7 @@
 Behaviour that only a real Procrastinate + Postgres pairing can prove: the ingest_sources
 upload hand-off, commit_ingestion's atomicity, and Procrastinate's own lock serialisation.
 
-The job-name/queue/retry wiring itself (src.jobs.tasks.blueprint under its namespace) is
+The job-name/queue/retry wiring itself (src.jobs.ingest_tasks.blueprint under its namespace) is
 tested without a database in tests/test_jobs.py, using Procrastinate's InMemoryConnector.
 """
 from datetime import datetime, timedelta, timezone

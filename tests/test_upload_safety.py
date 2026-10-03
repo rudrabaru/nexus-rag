@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import pytest
 from fastapi import HTTPException
 
-from src.jobs import tasks
+from src.jobs import ingest_tasks as tasks
 from src.jobs.contract import IngestionRequest
 from src.services.ingestion_service import MAX_UPLOAD_BYTES, READ_CHUNK_BYTES, prepare_and_queue_ingestion, safe_filename
 

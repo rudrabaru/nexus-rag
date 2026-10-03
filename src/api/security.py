@@ -37,7 +37,7 @@ def _unauthorized(detail: str) -> HTTPException:
 
 
 def _is_admin_key(candidate: Optional[str]) -> bool:
-    expected = get_settings().effective_admin_key
+    expected = get_settings().admin_api_key.get_secret_value()
     # Compared as bytes: compare_digest rejects non-ASCII str, which a header can carry.
     return bool(candidate and expected and secrets.compare_digest(candidate.encode(), expected.encode()))
 

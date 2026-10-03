@@ -124,7 +124,7 @@ def build_reranker(name: str, settings: Settings) -> Reranker:
     if name == "flashrank":
         return FlashRankReranker(settings.flashrank_model, settings.flashrank_cache_dir or default_flashrank_cache_dir())
     if name == "jina":
-        return JinaReranker(settings.jina_api_key)
+        return JinaReranker(settings.jina_api_key.get_secret_value())
     if name == "voyage":
-        return VoyageReranker(settings.voyage_api_key, settings.voyage_base_url, settings.voyage_rerank_model, voyage_rerank_window(settings))
+        return VoyageReranker(settings.voyage_api_key.get_secret_value(), settings.voyage_base_url, settings.voyage_rerank_model, voyage_rerank_window(settings))
     raise ValueError(f"Unknown reranker {name!r}; expected flashrank, jina or voyage.")

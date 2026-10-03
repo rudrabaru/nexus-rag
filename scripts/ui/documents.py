@@ -98,7 +98,7 @@ def render_documents_tab(API_BASE_URL, api_headers):
                             else:
                                 prog_ph.warning(
                                     f"⏳ [{src_name}] Still queued after {MAX_POLL_SECONDS}s — are the workers running? "
-                                    "(`python -m src.jobs.worker`; URLs also need `python -m src.jobs.fetch_worker`)"
+                                    "(`python -m src.jobs.workers ingest`; URLs also need `python -m src.jobs.workers fetch`)"
                                 )
                 except Exception as e:
                     st.error(f"Ingestion error: {str(e)}")

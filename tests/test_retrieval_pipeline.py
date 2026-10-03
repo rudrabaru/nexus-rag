@@ -116,8 +116,8 @@ def test_chat_uses_the_configured_reranker_only_when_the_request_asks(monkeypatc
     assert chat_config(QueryRequest(query="q", use_reranker=True)).reranker is None
 
 
-def test_legacy_enable_reranker_false_still_turns_reranking_off(monkeypatch):
-    monkeypatch.setenv("ENABLE_RERANKER", "false")
+def test_reranker_none_turns_reranking_off(monkeypatch):
+    monkeypatch.setenv("RERANKER", "none")
     get_settings.cache_clear()
     assert get_settings().effective_reranker is None
 

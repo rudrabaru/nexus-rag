@@ -2,6 +2,7 @@
 import httpx
 import pytest
 
+from src.config_checks import config_problems
 from src.config import Settings
 from src.embedding.pacing import RateWindow
 from src.retrieving.config import RetrievalConfig
@@ -105,5 +106,5 @@ def test_voyage_is_a_selectable_reranker_with_a_shared_window_per_process():
 
 def test_choosing_voyage_requires_its_key(monkeypatch):
     monkeypatch.delenv("VOYAGE_API_KEY", raising=False)
-    assert any("VOYAGE_API_KEY (RERANKER=voyage)" in p for p in Settings(_env_file=None, reranker="voyage").missing_required())
-    assert not any("RERANKER" in p for p in Settings(_env_file=None, reranker="voyage", voyage_api_key="k").missing_required())
+    assert any("VOYAGE_API_KEY (RERANKER=voyage)" in p for p in config_problems(Settings(_env_file=None, reranker="voyage"), "api"))
+    assert not any("RERANKER" in p for p in config_problems(Settings(_env_file=None, reranker="voyage", voyage_api_key="k"), "api"))

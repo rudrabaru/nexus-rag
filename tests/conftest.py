@@ -1,14 +1,9 @@
 import asyncio
 
-import dotenv
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
-
-# src.api.main calls load_dotenv() on import. Tests must never read a developer's real
-# .env, so it is disabled before that module is first imported.
-dotenv.load_dotenv = lambda *args, **kwargs: False
 
 from src.config import Settings, get_settings  # noqa: E402
 from src.registry.auth_store import AuthStore  # noqa: E402
@@ -29,7 +24,7 @@ def settings_env(monkeypatch):
     for name in Settings.model_fields:
         monkeypatch.delenv(name.upper(), raising=False)
     monkeypatch.setenv("ADMIN_API_KEY", ADMIN_KEY)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@db.invalid/test")
+    monkeypatch.setenv("DATABASE_URL", "postgresql://test:test@db.invalid/test?sslmode=require")
     monkeypatch.setenv("VOYAGE_API_KEY", "voyage-key")
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
     get_settings.cache_clear()
@@ -50,12 +45,19 @@ def auth_engine():
 
 
 @pytest.fixture
-def app_state(auth_engine):
+def app(auth_engine):
+    """A fresh FastAPI app per test, built by the real factory."""
+    from src.api.app import create_app
+
+    return create_app()
+
+
+@pytest.fixture
+def app_state(app, auth_engine):
     """
-    The real FastAPI app with lifespan skipped (no network) and rate limiting disabled,
-    so each test injects exactly the collaborators it needs on app.state.
+    The app with lifespan skipped (no network) and rate limiting disabled, so each test injects
+    exactly the collaborators it needs on app.state.
     """
-    from src.api.main import app
     from src.api.rate_limit import auth_failures, limiter
 
     limiter.enabled = False
@@ -74,9 +76,7 @@ def app_state(auth_engine):
 
 
 @pytest.fixture
-def client(app_state):
-    from src.api.main import app
-
+def client(app, app_state):
     return TestClient(app)
 
 

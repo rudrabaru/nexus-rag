@@ -1,5 +1,5 @@
 """Bodies are bounded before parsing or authentication."""
-from src.api.main import MAX_JSON_BODY_BYTES
+from src.api.app import MAX_JSON_BODY_BYTES
 
 
 def test_an_oversized_json_body_is_refused_before_authentication(client):

@@ -1,7 +1,3 @@
-[tool.pyrefly]
-# Disable missing import warnings globally for all third-party modules
-ignore-missing-imports = ["*"]
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]

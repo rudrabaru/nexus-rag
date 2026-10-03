@@ -3,12 +3,14 @@ The job queue contract and wiring, tested without a real database via Procrastin
 InMemoryConnector. Behaviour that needs real Postgres (locking, the ingest_sources hand-off,
 atomic commit) is in tests/integration/test_jobs.py.
 """
+import asyncio
+
 import procrastinate
 import pytest
 from procrastinate.testing import InMemoryConnector
 
 from src.jobs.contract import INGEST_QUEUE, INGEST_TASK, INGEST_TASK_NAME, MAX_RETRIES, TASK_NAMESPACE, IngestionRequest
-from src.jobs.tasks import blueprint
+from src.jobs.ingest_tasks import blueprint
 
 
 # ── IngestionRequest ─────────────────────────────────────────────────────────
@@ -40,7 +42,7 @@ def test_request_round_trips_through_defer_kwargs():
 #
 # add_tasks_from mutates the blueprint it is given (renaming its tasks into the namespace),
 # so it must run exactly once per process — the same constraint production code has
-# (src/jobs/worker.py calls it once at import time). One module-scoped app is built here and
+# (src/jobs/workers.py calls it once, when a worker starts). One module-scoped app is built here and
 # shared by the tests below, rather than one per test.
 
 @pytest.fixture(scope="module")
@@ -59,7 +61,7 @@ def test_the_worker_registers_the_task_under_the_name_the_api_defers_to(worker_a
 
 
 async def test_a_job_deferred_by_name_alone_is_fetched_by_the_worker_app(worker_app):
-    """Mirrors the real split: the API defers via configure_task(name), never importing tasks.py."""
+    """Mirrors the real split: the API defers via configure_task(name), never importing ingest_tasks.py."""
     worker_app.connector.reset()
     deferer = worker_app.configure_task(INGEST_TASK, queue=INGEST_QUEUE, lock="doc-1")
     await deferer.defer_async(job_id="j1", doc_id="doc-1", tenant_id="t1", url="https://a.example")
@@ -114,3 +116,52 @@ def test_the_recovery_sweep_is_registered_as_a_periodic_task(worker_app):
 
     assert f"{TASK_NAMESPACE}:{RECOVERY_TASK_NAME}" in worker_app.tasks
     assert any(name == f"{TASK_NAMESPACE}:{RECOVERY_TASK_NAME}" for name, _ in worker_app.periodic_registry.periodic_tasks)
+
+
+# ── The worker launcher ──────────────────────────────────────────────────────
+
+def test_importing_the_launcher_or_a_task_module_does_no_start_up_work(monkeypatch):
+    """Nothing connects to a database or loads configuration just because a module was imported."""
+    import importlib
+
+    import src.jobs.workers as workers
+    from src.registry import engine
+
+    monkeypatch.setattr(engine, "get_sync_engine", lambda: (_ for _ in ()).throw(AssertionError("touched the database")))
+    importlib.reload(workers)
+    importlib.import_module("src.jobs.fetch_tasks")
+
+
+def test_each_queue_has_its_own_task_module_and_only_its_own_tasks():
+    import importlib
+
+    from src.jobs.workers import TASK_MODULES, build_app
+
+    for queue, (module_name, blueprint_name) in TASK_MODULES.items():
+        app = build_app(getattr(importlib.import_module(module_name), blueprint_name), queue)
+        assert all(task.queue == queue for name, task in app.tasks.items() if name.startswith("nexus:"))
+
+
+def test_drain_makes_a_worker_exit_when_the_queue_is_empty():
+    from src.jobs import workers
+
+    seen = {}
+
+    class FakeApp:
+        def open_async(self):
+            class Ctx:
+                async def __aenter__(self_inner):
+                    return self_inner
+
+                async def __aexit__(self_inner, *exc):
+                    return False
+
+            return Ctx()
+
+        async def run_worker_async(self, **options):
+            seen.update(options)
+
+    asyncio.run(workers.run(FakeApp(), "ingest", 2, drain=True))
+    assert seen["wait"] is False and seen["queues"] == ["ingest"] and seen["delete_jobs"] == "successful"
+    asyncio.run(workers.run(FakeApp(), "ingest", 2, drain=False))
+    assert seen["wait"] is True
