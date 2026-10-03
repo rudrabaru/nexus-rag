@@ -62,6 +62,10 @@ class EmptyResponseError(Exception):
     """Raised when a provider returns HTTP 200 with no usable message content."""
 
 
+class GenerationError(RuntimeError):
+    """The model could not produce an answer after retries and any fallback. The message is for logs, not for callers."""
+
+
 @dataclass
 class LLMCall:
     """What one call produced, which model actually answered (after a fallback, not the configured one) and its cost."""
@@ -237,8 +241,5 @@ class LLMClient:
                             yield c
                         return
 
-                text = _failure_text(e)
                 self._served_here(call)
-                call.text += text
-                yield text
-                return
+                raise GenerationError(_failure_text(e)) from e

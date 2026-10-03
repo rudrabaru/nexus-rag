@@ -77,7 +77,7 @@ def app_state(app, auth_engine):
 
 @pytest.fixture
 def client(app, app_state):
-    return TestClient(app)
+    return TestClient(app, raise_server_exceptions=False)  # an unexpected error is a 500 response, as in production
 
 
 @pytest.fixture

@@ -34,19 +34,19 @@ def render_documents_tab(API_BASE_URL, api_headers):
                             sep = "&" if "?" in url_to_send else "?"
                             url_to_send = f"{url_to_send}{sep}filter={sitemap_filter.strip()}"
                         url_data["url"] = url_to_send
-                        res = requests.post(f"{API_BASE_URL}/ingest", data=url_data, headers=api_headers)
+                        res = requests.post(f"{API_BASE_URL}/v1/documents", data=url_data, headers=api_headers)
                         if res.status_code != 200:
                             success = False
-                            st.error(f"Ingest Error (URL): {res.json().get('detail', res.text)}")
+                            st.error(f"Ingest Error (URL): {res.json().get("message", res.text)}")
                         else:
                             job_ids.append((url_to_send, res.json().get("job_id")))
                     if ingest_files:
                         for f in ingest_files:
                             files = {"file": (f.name, f.getvalue(), f.type)}
-                            res = requests.post(f"{API_BASE_URL}/ingest", files=files, data=data, headers=api_headers)
+                            res = requests.post(f"{API_BASE_URL}/v1/documents", files=files, data=data, headers=api_headers)
                             if res.status_code != 200:
                                 success = False
-                                st.error(f"Ingest Error ({f.name}): {res.json().get('detail', res.text)}")
+                                st.error(f"Ingest Error ({f.name}): {res.json().get("message", res.text)}")
                             else:
                                 job_ids.append((f.name, res.json().get("job_id")))
                     if success:
@@ -62,7 +62,7 @@ def render_documents_tab(API_BASE_URL, api_headers):
                             while waited < MAX_POLL_SECONDS:
                                 time.sleep(2)
                                 waited += 2
-                                s_res = requests.get(f"{API_BASE_URL}/ingest/{jid}", headers=api_headers, timeout=10)
+                                s_res = requests.get(f"{API_BASE_URL}/v1/jobs/{jid}", headers=api_headers, timeout=10)
                                 if s_res.status_code == 200:
                                     j_data = s_res.json()
                                     pct = j_data.get("progress_pct", 0)
@@ -113,7 +113,7 @@ def render_documents_tab(API_BASE_URL, api_headers):
             st.rerun()
             
     try:
-        res = requests.get(f"{API_BASE_URL}/documents", headers=api_headers)
+        res = requests.get(f"{API_BASE_URL}/v1/documents", headers=api_headers)
         if res.status_code == 200:
             docs = res.json()
             if docs:
@@ -135,7 +135,7 @@ def render_documents_tab(API_BASE_URL, api_headers):
                                 st.warning(f"Warning: {doc.get('error')}")
                         with c4:
                             if st.button("Delete", key=f"del_{doc['id']}"):
-                                requests.delete(f"{API_BASE_URL}/documents/{doc['id']}", headers=api_headers)
+                                requests.delete(f"{API_BASE_URL}/v1/documents/{doc['id']}", headers=api_headers)
                                 st.rerun()
             else:
                 st.info("No documents found.")

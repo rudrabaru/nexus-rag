@@ -17,3 +17,19 @@ class JobStatusResponse(BaseModel):
     doc_id: Optional[str] = None
     chunk_count: Optional[int] = None
     metadata: Optional[dict] = None
+
+
+class DocumentResponse(BaseModel):
+    id: str
+    url: str
+    title: str
+    status: str
+    created_at: str
+    chunks: int
+    error: Optional[str] = None
+    stats: dict = {}
+
+
+class DeleteDocumentResponse(BaseModel):
+    status: str
+    message: str

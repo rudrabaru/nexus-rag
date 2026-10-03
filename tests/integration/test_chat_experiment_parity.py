@@ -1,7 +1,8 @@
 """What an experiment measures is what chat serves: the same RetrievalConfig returns the same chunks through both."""
 import pytest
 
-from src.api.models.query_models import QueryRequest
+from src.services.chat_config import chat_retrieval_config
+from src.services.chat_service import ChatQuery, ChatService
 from src.config import get_settings
 from src.evaluation import store
 from src.evaluation.dataset import Dataset, EvaluationQuery
@@ -10,7 +11,6 @@ from src.evaluation.spec import ExperimentSpec
 from tests.integration.helpers import Stores
 from src.retrieving.chunk_writes import write_chunks
 from src.retrieving.pipeline import RetrievalResources
-from src.services.query_service import QueryService, chat_config
 from tests.integration.test_postgres import AxisEmbedder, add_document, chunk, unit_vector
 
 pytestmark = pytest.mark.usefixtures("clean_tables")
@@ -36,11 +36,11 @@ async def test_chat_and_an_experiment_trial_return_identical_chunks(pg_engine, p
     get_settings.cache_clear()
     try:
         resources = RetrievalResources(get_settings(), pg_engine, pg_async_engine)
-        body = QueryRequest(query="rotate signing keys", top_k=3)
-        config = chat_config(body)
+        body = ChatQuery(query="rotate signing keys", top_k=3)
+        config = chat_retrieval_config(get_settings(), None, body.top_k, body.use_reranker)
         assert config.strategy == strategy
 
-        chat = await QueryService.run_retrieval(body, resources, None, None, "demo")
+        chat = (await ChatService(resources, generator=None, evaluator=None).prepare("demo", body)).retrieval
 
         spec = ExperimentSpec(name="parity", dataset="inline", tenant_id="demo", trials={"chat": config.model_dump(mode="json")})
         queries = [EvaluationQuery(query=body.query, acceptable_documents=["doc-1"])]

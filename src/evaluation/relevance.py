@@ -15,7 +15,6 @@ With relevance="chunk" a chunk is relevant only when its id is one of the query'
 source_chunk_ids: a stricter test that can tell two chunks of the right section apart, at the
 price of ground truth that is tied to this chunking (see Phase 6). Only "exact" exists there.
 """
-import json
 import re
 from dataclasses import dataclass
 from typing import List, Optional
@@ -36,12 +35,7 @@ def contains_run(needle: List[str], haystack: List[str]) -> bool:
 
 
 def heading_path(chunk: RetrievedChunk) -> List[str]:
-    raw = chunk.metadata.get("heading_path") or ""
-    try:
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
-        return [str(h) for h in parsed] if isinstance(parsed, list) else [str(parsed)]
-    except (json.JSONDecodeError, TypeError):
-        return [s.strip() for s in str(raw).split(" > ") if s.strip()]
+    return list(chunk.heading_path)
 
 
 def match(chunk: RetrievedChunk, query: EvaluationQuery, relevance: str = "document") -> str:

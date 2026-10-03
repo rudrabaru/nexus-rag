@@ -1,20 +1,20 @@
 """
 The FastAPI application, assembled. create_app() has no side effects beyond building the app: the
-environment is loaded by the entry point (src/api/main.py) before it is called, and the
-database is not touched until the lifespan runs.
+environment is loaded by the entry point (src/api/main.py) before it is called, and the database is
+not touched until the lifespan runs.
+
+Every resource is under /v1. Breaking changes to a response shape get /v2; the generated OpenAPI
+document (openapi.json, checked by a test) is the contract a client is generated from.
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
 
-from src.api.errors import service_error_handler, unhandled_exception_handler
-from src.api.middleware import BodyLimitMiddleware
+from src.api import errors
+from src.api.lifespan import lifespan
+from src.api.middleware import BodyLimitMiddleware, RequestIdMiddleware
 from src.api.rate_limit import limiter
-from src.api.routes import admin, documents, health, ingest, query
-from src.api.startup import lifespan
+from src.api.routes import admin, chat, documents, health, workspace
 from src.config import get_settings
-from src.services.errors import ServiceError
 from src.services.ingestion_service import MAX_UPLOAD_BYTES
 
 # 256 KB covers the largest valid JSON request (a 2,000-character query plus 20 chat turns); an
@@ -22,14 +22,22 @@ from src.services.ingestion_service import MAX_UPLOAD_BYTES
 MAX_JSON_BODY_BYTES = 256 * 1024
 MULTIPART_OVERHEAD_BYTES = 1024 * 1024
 
+DESCRIPTION = (
+    "Nexus: retrieval-augmented question answering over your own documents, with the tools to measure how well it "
+    "retrieves. Authenticate with `X-API-Key` (a workspace key); `/v1/admin` takes `X-Admin-Key`. Every error has "
+    "the body `{code, message, request_id}`."
+)
+
 
 def create_app() -> FastAPI:
-    app = FastAPI(title="Nexus RAG API", lifespan=lifespan)
+    app = FastAPI(title="Nexus RAG API", version="1.0.0", description=DESCRIPTION, lifespan=lifespan, responses=errors.COMMON_ERRORS)
 
+    # add_middleware wraps: the last one added is outermost. Request ids come first so every
+    # response, including a refusal by the layers below, carries one.
     app.add_middleware(
         BodyLimitMiddleware,
         default_limit=MAX_JSON_BODY_BYTES,
-        path_limits={"/ingest": MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD_BYTES},
+        path_limits={"/v1/documents": MAX_UPLOAD_BYTES + MULTIPART_OVERHEAD_BYTES},
     )
     # CORS: no origins are allowed unless ALLOWED_ORIGINS lists them. Credentials are never
     # allowed cross-origin because authentication uses headers, not cookies.
@@ -39,16 +47,13 @@ def create_app() -> FastAPI:
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Request-ID", "Retry-After"],
     )
+    app.add_middleware(RequestIdMiddleware)
 
     app.state.limiter = limiter
-    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
-    app.add_exception_handler(ServiceError, service_error_handler)
-    app.add_exception_handler(Exception, unhandled_exception_handler)
+    errors.register(app)
 
-    app.include_router(health.router)
-    app.include_router(query.router)
-    app.include_router(ingest.router)
-    app.include_router(admin.router)
-    app.include_router(documents.router, prefix="/documents", tags=["documents"])
+    for router in (health.router, chat.router, documents.router, workspace.router, admin.router):
+        app.include_router(router)
     return app

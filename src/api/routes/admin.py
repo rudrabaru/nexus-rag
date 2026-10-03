@@ -6,16 +6,16 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Request
 
 from src.api.dependencies import get_auth_store
-from src.api.models.admin_models import IssueKeyRequest, IssueKeyResponse, RevokeKeysRequest, RevokeKeysResponse
+from src.api.schemas.admin import IssueKeyRequest, IssueKeyResponse, RevokeKeysRequest, RevokeKeysResponse
 from src.api.rate_limit import ADMIN_LIMIT, limiter
 from src.api.security import require_admin
 from src.stores.api_keys import AuthStore
 
 logger = logging.getLogger(__name__)
-router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/v1/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 
-@router.post("/keys", response_model=IssueKeyResponse)
+@router.post("/keys", response_model=IssueKeyResponse, operation_id="issue_api_key")
 @limiter.limit(ADMIN_LIMIT)
 async def issue_api_key(
     request: Request,
@@ -29,7 +29,7 @@ async def issue_api_key(
     return IssueKeyResponse(tenant_id=tenant_id, api_key=api_key)
 
 
-@router.post("/keys/revoke", response_model=RevokeKeysResponse)
+@router.post("/keys/revoke", response_model=RevokeKeysResponse, operation_id="revoke_api_keys")
 @limiter.limit(ADMIN_LIMIT)
 async def revoke_api_keys(
     request: Request,

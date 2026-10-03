@@ -19,8 +19,10 @@ from src.retrieving.models import RetrievalResult, RetrievedChunk
 
 
 def chunk(chunk_id, url="https://docs.python.org/3/whatsnew/3.13.html", section="", path=None, score=1.0):
-    metadata = {"source_url": url, "section_title": section, "heading_path": json.dumps(path or [])}
-    return RetrievedChunk(chunk_id=chunk_id, source_document="Doc", text="t", similarity_score=score, metadata=metadata)
+    metadata = {"source_url": url, "section_title": section}
+    return RetrievedChunk(
+        chunk_id=chunk_id, source_document="Doc", text="t", similarity_score=score, heading_path=list(path or []), metadata=metadata
+    )
 
 
 def query(documents=("3.13.html",), headings=(), **extra):

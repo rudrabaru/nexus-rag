@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import AsyncIterator, List, Optional
 
 from .context_builder import ContextBuilder
-from .llm_client import LLMCall, LLMClient
+from .llm_client import GenerationError, LLMCall, LLMClient
 from .models import ContextWindow, GenerationConfig, GenerationResult
 from .prompt_template import build_prompt
 
@@ -80,6 +80,8 @@ class RAGGenerator:
 
         gen_start = time.time()
         call = self.llm_client.call_llm(prepared.prompt)
+        if call.failed:
+            raise GenerationError(call.text)
         result.generation_latency_ms = (time.time() - gen_start) * 1000
         result.total_latency_ms = (time.time() - total_start) * 1000
         result.answer = call.text

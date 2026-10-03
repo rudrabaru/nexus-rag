@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pytest
 from sqlalchemy import select
 from starlette.requests import Request
@@ -107,13 +109,13 @@ def test_open_registration_endpoint_is_gone(client):
 
 
 def test_issuing_a_key_requires_the_admin_key(client):
-    assert client.post("/admin/keys").status_code == 401
-    assert client.post("/admin/keys", headers={"X-Admin-Key": "wrong"}).status_code == 401
-    assert client.post("/admin/keys", headers={"X-API-Key": ADMIN_KEY}).status_code == 401
+    assert client.post("/v1/admin/keys").status_code == 401
+    assert client.post("/v1/admin/keys", headers={"X-Admin-Key": "wrong"}).status_code == 401
+    assert client.post("/v1/admin/keys", headers={"X-API-Key": ADMIN_KEY}).status_code == 401
 
 
 def test_admin_can_issue_a_key_that_then_authenticates(client, app_state):
-    response = client.post("/admin/keys", json={"tenant_id": "acme-1"}, headers=ADMIN)
+    response = client.post("/v1/admin/keys", json={"tenant_id": "acme-1"}, headers=ADMIN)
 
     assert response.status_code == 200
     body = response.json()
@@ -122,36 +124,39 @@ def test_admin_can_issue_a_key_that_then_authenticates(client, app_state):
 
 
 def test_admin_key_generates_a_tenant_id_when_none_given(client):
-    response = client.post("/admin/keys", headers=ADMIN)
+    response = client.post("/v1/admin/keys", headers=ADMIN)
     assert response.status_code == 200
     assert len(response.json()["tenant_id"]) == 36
 
 
 def test_admin_key_rejects_an_unsafe_tenant_id(client):
-    response = client.post("/admin/keys", json={"tenant_id": "a_b"}, headers=ADMIN)
+    response = client.post("/v1/admin/keys", json={"tenant_id": "a_b"}, headers=ADMIN)
     assert response.status_code == 422
 
 
-def test_revoked_key_gets_401(client, tenant_key):
+def test_revoked_key_gets_401(client, app_state, tenant_key):
+    app_state.query_log = MagicMock()
+    app_state.query_log.summary.return_value = {"total_queries": 0, "total_cost_usd": 0.0, "avg_cost_per_query_usd": 0.0, "avg_latency_ms": 0.0}
+    app_state.query_log.recent_queries.return_value = []
     key = tenant_key("tenant-1")
-    assert client.get("/logs", headers={"X-API-Key": key}).status_code == 200
+    assert client.get("/v1/usage", headers={"X-API-Key": key}).status_code == 200
 
-    response = client.post("/admin/keys/revoke", json={"api_key": key}, headers=ADMIN)
+    response = client.post("/v1/admin/keys/revoke", json={"api_key": key}, headers=ADMIN)
     assert response.json() == {"revoked": 1}
-    assert client.get("/logs", headers={"X-API-Key": key}).status_code == 401
+    assert client.get("/v1/usage", headers={"X-API-Key": key}).status_code == 401
 
 
 def test_revoke_requires_admin_and_exactly_one_target(client, tenant_key):
     key = tenant_key("tenant-1")
-    assert client.post("/admin/keys/revoke", json={"api_key": key}).status_code == 401
-    assert client.post("/admin/keys/revoke", json={}, headers=ADMIN).status_code == 422
+    assert client.post("/v1/admin/keys/revoke", json={"api_key": key}).status_code == 401
+    assert client.post("/v1/admin/keys/revoke", json={}, headers=ADMIN).status_code == 422
     both = {"api_key": key, "tenant_id": "tenant-1"}
-    assert client.post("/admin/keys/revoke", json=both, headers=ADMIN).status_code == 422
+    assert client.post("/v1/admin/keys/revoke", json=both, headers=ADMIN).status_code == 422
 
 
 def test_demo_mode_no_longer_bypasses_authentication(client, monkeypatch):
     monkeypatch.setenv("DEMO_MODE", "true")
-    response = client.get("/logs")
+    response = client.get("/v1/usage")
     assert response.status_code == 401
 
 
@@ -203,15 +208,17 @@ def test_a_missing_key_is_401_on_every_protected_route_not_a_200_sentence(client
 
     for name in ("generator", "retrieval", "evaluator", "documents", "jobs", "ingestion", "rewriter", "job_queue"):
         setattr(app_state, name, MagicMock())
-    for method, path in [("post", "/query"), ("post", "/query/stream"), ("post", "/query/compare"),
-                         ("get", "/logs"), ("get", "/ingest/x"), ("post", "/ingest"),
-                         ("get", "/documents"), ("get", "/documents/stats"), ("delete", "/documents/x")]:
-        kwargs = {"json": {"query": "hi"}} if path.startswith("/query") else {}
+    for method, path in [("post", "/v1/chat"), ("post", "/v1/chat/stream"), ("post", "/v1/retrieval/compare"),
+                         ("get", "/v1/usage"), ("get", "/v1/jobs/x"), ("post", "/v1/documents"),
+                         ("get", "/v1/documents"), ("get", "/v1/workspace/stats"), ("get", "/v1/workspace/settings"),
+                         ("put", "/v1/workspace/settings"), ("delete", "/v1/documents/x"), ("get", "/v1/system/workers")]:
+        kwargs = {"json": {"query": "hi"}} if path in ("/v1/chat", "/v1/chat/stream", "/v1/retrieval/compare") else {}
+        kwargs = {"json": {}} if path == "/v1/workspace/settings" and method == "put" else kwargs
         assert getattr(client, method)(path, **kwargs).status_code == 401, path
 
 
 def test_a_non_ascii_admin_header_is_401_not_a_server_error(client):
-    response = client.post("/admin/keys", headers={"X-Admin-Key": "caf\u00e9".encode("latin-1")})
+    response = client.post("/v1/admin/keys", headers={"X-Admin-Key": "caf\u00e9".encode("latin-1")})
     assert response.status_code == 401
 
 
@@ -241,9 +248,9 @@ def test_a_lookup_that_began_before_a_revocation_cannot_cache_a_stale_answer(aut
 
 def test_repeated_wrong_keys_are_throttled_per_client(client):
     for _ in range(10):
-        assert client.post("/admin/keys", headers={"X-Admin-Key": "wrong"}).status_code == 401
-    assert client.post("/admin/keys", headers={"X-Admin-Key": "wrong"}).status_code == 429
-    assert client.post("/admin/keys", headers=ADMIN).status_code == 429  # even the right key waits out the window
+        assert client.post("/v1/admin/keys", headers={"X-Admin-Key": "wrong"}).status_code == 401
+    assert client.post("/v1/admin/keys", headers={"X-Admin-Key": "wrong"}).status_code == 429
+    assert client.post("/v1/admin/keys", headers=ADMIN).status_code == 429  # even the right key waits out the window
 
 
 def test_a_foreign_document_cannot_be_distinguished_from_a_missing_one(client, app_state, tenant_key):
@@ -254,8 +261,8 @@ def test_a_foreign_document_cannot_be_distinguished_from_a_missing_one(client, a
         {"doc_id": doc_id, "tenant_id": "tenant-1"} if doc_id == "mine" else None
     )
     headers = {"X-API-Key": tenant_key("tenant-2")}
-    assert client.delete("/documents/mine", headers=headers).status_code == 404
-    assert client.delete("/documents/nonexistent", headers=headers).status_code == 404
+    assert client.delete("/v1/documents/mine", headers=headers).status_code == 404
+    assert client.delete("/v1/documents/nonexistent", headers=headers).status_code == 404
     app_state.documents.delete_document.assert_not_called()
 
 

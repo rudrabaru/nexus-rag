@@ -11,7 +11,7 @@ def render_playground_tab(API_BASE_URL, api_headers, top_k):
         with st.spinner("Running parallel retrieval..."):
             try:
                 payload = {"query": query, "top_k": top_k}
-                res = requests.post(f"{API_BASE_URL}/query/compare", json=payload, headers=api_headers, timeout=30)
+                res = requests.post(f"{API_BASE_URL}/v1/retrieval/compare", json=payload, headers=api_headers, timeout=30)
                 if res.status_code == 200:
                     data = res.json()
                     baseline = data.get("baseline", [])

@@ -33,7 +33,7 @@ JINA_API_KEY="your_jina_key"       # only for RERANKER=jina
 # Postgres (Neon) — the DIRECT endpoint, not the "-pooler" one
 DATABASE_URL="postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?sslmode=require"
 
-# Authorises POST /admin/keys and /admin/keys/revoke
+# Authorises POST /v1/admin/keys and /v1/admin/keys/revoke
 ADMIN_API_KEY="your-admin-key"
 
 # Optional Settings
@@ -131,7 +131,7 @@ sequenceDiagram
     participant Query as Query API
 
     %% Key provisioning (admin only; there is no open sign-up)
-    Admin->>Auth: POST /admin/keys (admin key)
+    Admin->>Auth: POST /v1/admin/keys (admin key)
     Auth-->>Admin: Returns API Key & Workspace ID
     Admin-->>User: Shares the API Key
     Note right of User: Keep your API Key. No passwords<br/>are saved in the database.
@@ -145,7 +145,7 @@ sequenceDiagram
     Worker->>Queue: Claim the job
     Worker-->>Queue: (fetch worker) read pages via reader API, store them, defer ingest
     Worker-->>Queue: (parse worker) parse, chunk, embed, commit
-    User->>Ingest: GET /ingest/{job_id}
+    User->>Ingest: GET /v1/jobs/{job_id}
     Ingest-->>User: status: complete
     Note right of User: Data is securely locked<br/>to your Workspace
 
@@ -253,10 +253,10 @@ Both workers follow the same rule on their own startup (config, then schema), an
 Everything durable lives in one Postgres database (Neon free tier): document text and vectors, the keyword index, jobs, the job queue itself, API keys and cost history. Deleting a document removes its chunks, vectors and keyword entries in the same transaction. Neon suspends an idle database after about five minutes, so the first request after a pause can take a few seconds longer.
 
 **Ingestion needs running workers:**
-`POST /ingest` only validates and queues. The parse worker (`Dockerfile.worker`) must run for anything to be indexed, and the fetch worker (the API image, run with `python -m src.jobs.workers fetch`) for URLs. A deployment that only runs the API accepts ingestions that never progress past `status: "queued"`.
+`POST /v1/documents` only validates and queues. The parse worker (`Dockerfile.worker`) must run for anything to be indexed, and the fetch worker (the API image, run with `python -m src.jobs.workers fetch`) for URLs. A deployment that only runs the API accepts ingestions that never progress past `status: "queued"`.
 
 **Embedding indexes:**
 Each embedding model has its own index (`provider:model`), and the API searches and ingests into the index of `EMBEDDING_PROVIDER` (default `voyage:voyage-4`). Vectors of two models are never mixed: switching the provider points the API at a different index, which starts empty until documents are ingested with it.
 
 **Workspace Access:**
-There is no open sign-up. An administrator issues your workspace key with `POST /admin/keys` and can revoke it with `POST /admin/keys/revoke` (both send the `X-Admin-Key` header). Paste the key into the **"API Key"** box in the sidebar of the chat interface to unlock your workspace and the documents you previously uploaded. Chat history lives only in the browser session and is not restored after a refresh.
+There is no open sign-up. An administrator issues your workspace key with `POST /v1/admin/keys` and can revoke it with `POST /v1/admin/keys/revoke` (both send the `X-Admin-Key` header). Paste the key into the **"API Key"** box in the sidebar of the chat interface to unlock your workspace and the documents you previously uploaded. Chat history lives only in the browser session and is not restored after a refresh.

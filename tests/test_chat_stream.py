@@ -58,7 +58,7 @@ def wired(app_state):
 
 def stream(client, tenant_key, tenant="tenant-1"):
     response = client.post(
-        "/query/stream",
+        "/v1/chat/stream",
         json={"query": "what is this?"},
         headers={"X-API-Key": tenant_key(tenant)},
     )
@@ -113,6 +113,6 @@ def test_capacity_is_returned_when_retrieval_fails(client, wired, tenant_key):
 
 
 def test_an_unauthenticated_stream_is_a_401_not_a_stream_that_says_so(client, wired):
-    response = client.post("/query/stream", json={"query": "hi"})
+    response = client.post("/v1/chat/stream", json={"query": "hi"})
     assert response.status_code == 401
     assert "/register" not in response.text

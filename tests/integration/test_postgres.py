@@ -2,7 +2,6 @@
 Behaviour that only real Postgres + pgvector can prove: migrations, HNSW and full-text search,
 tenant isolation in SQL, cascades, atomic JSONB merges and the halfvec round trip.
 """
-import json
 
 import numpy as np
 import pytest
@@ -128,7 +127,7 @@ async def test_dense_search_returns_nearest_first_within_the_tenant(load, regist
     assert [r.chunk_id for r in results] == ["c-near", "c-mid", "c-far"]
     assert results[0].similarity_score == pytest.approx(1.0, abs=1e-3)
     assert results[1].similarity_score == pytest.approx(0.7071, abs=1e-3)
-    assert json.loads(results[0].metadata["heading_path"]) == ["Guide", "Setup"]
+    assert results[0].heading_path == ["Guide", "Setup"]
 
 
 async def test_two_tenants_can_hold_the_same_chunk_id(load, registry, store):
@@ -444,3 +443,45 @@ def test_retention_deletes_only_rows_older_than_each_tables_window(pg_engine):
         assert [r for r in conn.execute(select(pipeline_events.c.event)).scalars()] == ["fresh"]
         assert [r for r in conn.execute(select(query_logs.c.query)).scalars()] == ["fresh"]
         assert [r for r in conn.execute(select(fetch_log.c.url)).scalars()] == ["https://x/fresh"]
+
+
+def test_a_workspaces_retrieval_settings_are_stored_replaced_and_cleared_per_tenant(pg_engine):
+    from src.stores.workspace import WorkspaceSettingsStore
+
+    store = WorkspaceSettingsStore(pg_engine)
+    assert store.get_retrieval("tenant-1") is None
+
+    store.put_retrieval("tenant-1", {"strategy": "dense", "rrf_k": 30})
+    store.put_retrieval("tenant-1", {"strategy": "sparse"})  # a later choice replaces the earlier one
+    store.put_retrieval("tenant-2", {"strategy": "hybrid"})
+
+    assert store.get_retrieval("tenant-1") == {"strategy": "sparse"}
+    assert store.get_retrieval("tenant-2") == {"strategy": "hybrid"}
+    assert store.clear_retrieval("tenant-1") is True and store.get_retrieval("tenant-1") is None
+    assert store.clear_retrieval("tenant-1") is False
+
+
+def test_usage_totals_cover_the_whole_history_not_just_the_rows_returned(pg_engine):
+    store = QueryLogStore(pg_engine)
+    for i in range(5):
+        store.log_query("tenant-1", f"q{i}", latency_ms=100.0 * (i + 1), tokens_used=10, faithfulness_score=None, details={},
+                        generation_cost_usd=0.25)
+    store.log_query("tenant-2", "other", latency_ms=1.0, tokens_used=1, faithfulness_score=None, details={}, generation_cost_usd=9.0)
+
+    assert len(store.recent_queries("tenant-1", limit=2)) == 2
+    summary = store.summary("tenant-1")
+    assert summary["total_queries"] == 5 and summary["total_cost_usd"] == 1.25
+    assert summary["avg_cost_per_query_usd"] == 0.25 and summary["avg_latency_ms"] == 300.0
+    assert store.summary("nobody") == {"total_queries": 0, "total_cost_usd": 0.0, "avg_cost_per_query_usd": 0.0, "avg_latency_ms": 0.0}
+
+
+def test_the_system_store_sees_the_database_and_counts_only_recent_worker_heartbeats(pg_engine):
+    from sqlalchemy import text
+
+    from src.stores.system import SystemStore
+
+    store = SystemStore(pg_engine)
+    assert store.database_ok() is True and store.workers_online() == 0
+    with pg_engine.begin() as conn:
+        conn.execute(text("INSERT INTO procrastinate_workers (last_heartbeat) VALUES (now()), (now() - interval '10 minutes')"))
+    assert store.workers_online() == 1  # the stale heartbeat belongs to a worker that stopped

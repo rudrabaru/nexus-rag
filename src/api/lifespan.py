@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from src.api.factory import _init_components
+from src.api.container import build_components
 from src.config import get_settings
 from src.config_checks import config_problems
 from src.jobs.queue import api_queue
@@ -14,6 +14,8 @@ from src.stores.api_keys import AuthStore
 from src.stores.documents import DocumentStore
 from src.stores.fetches import FetchStore
 from src.stores.jobs import JobStore
+from src.stores.system import SystemStore
+from src.stores.workspace import WorkspaceSettingsStore
 from src.db.engine import dispose_engines, get_sync_engine
 from src.stores.query_log import QueryLogStore
 from src.db.schema_version import assert_schema_current
@@ -32,7 +34,7 @@ def _initialize(app: FastAPI) -> None:
     except Exception:  # housekeeping must never stop the API from starting
         logger.exception("Retention pruning failed")
 
-    components = _init_components()
+    components = build_components()
     app.state.retrieval = components.retrieval
     app.state.generator = components.generator
     app.state.evaluator = components.evaluator
@@ -46,6 +48,8 @@ def _initialize(app: FastAPI) -> None:
     # own stalled-job detection (heartbeats) is what recovers those.
     app.state.job_queue = api_queue(settings.database_url.get_secret_value()).open()
     app.state.documents = DocumentStore(sync_engine)
+    app.state.workspace = WorkspaceSettingsStore(sync_engine)
+    app.state.system = SystemStore(sync_engine)
     app.state.jobs = JobStore(sync_engine)
     app.state.ingestion = IngestionService(
         app.state.job_queue, app.state.documents, app.state.jobs, FetchStore(sync_engine), settings

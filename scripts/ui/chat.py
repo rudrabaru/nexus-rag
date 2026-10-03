@@ -2,6 +2,14 @@ import streamlit as st
 import requests
 import json
 
+def _message(response):
+    """The API's error message, or the raw text when the body is not the standard error shape."""
+    try:
+        return response.json().get("message", response.text[:200])
+    except ValueError:
+        return response.text[:200]
+
+
 def render_chat_tab(API_BASE_URL, api_headers, top_k, use_reranker, stream_response):
     st.title("Nexus RAG Assistant")
     if not st.session_state.api_key:
@@ -57,7 +65,7 @@ def render_chat_tab(API_BASE_URL, api_headers, top_k, use_reranker, stream_respo
 
                     try:
                         if stream_response:
-                            response = requests.post(f"{API_BASE_URL}/query/stream", json=payload, headers=api_headers, timeout=120, stream=True)
+                            response = requests.post(f"{API_BASE_URL}/v1/chat/stream", json=payload, headers=api_headers, timeout=120, stream=True)
                             if response.status_code == 200:
                                 full_response = ""
                                 sources = []
@@ -76,6 +84,9 @@ def render_chat_tab(API_BASE_URL, api_headers, top_k, use_reranker, stream_respo
                                                 elif data.get("type") == "faithfulness":
                                                     faithfulness_data = data["content"]
                                                 elif data.get("type") == "done":
+                                                    message_placeholder.markdown(full_response)
+                                                elif data.get("type") == "error":
+                                                    full_response += f"\n\n:red[{data.get('message', 'The answer could not be completed.')}]"
                                                     message_placeholder.markdown(full_response)
                                             except json.JSONDecodeError:
                                                 pass
@@ -111,11 +122,11 @@ def render_chat_tab(API_BASE_URL, api_headers, top_k, use_reranker, stream_respo
                                     "faithfulness_data": faithfulness_data
                                 })
                             else:
-                                error_msg = f"Error {response.status_code}: {response.text[:200]}"
+                                error_msg = f"Error {response.status_code}: {_message(response)}"
                                 message_placeholder.error(error_msg)
                                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
                         else:
-                            response = requests.post(f"{API_BASE_URL}/query", json=payload, headers=api_headers, timeout=120)
+                            response = requests.post(f"{API_BASE_URL}/v1/chat", json=payload, headers=api_headers, timeout=120)
                             if response.status_code == 200:
                                 data = response.json()
                                 full_response = data["answer"]
@@ -159,7 +170,7 @@ def render_chat_tab(API_BASE_URL, api_headers, top_k, use_reranker, stream_respo
                                     "sources": sources,
                                 })
                             else:
-                                error_msg = f"Error {response.status_code}: {response.text[:200]}"
+                                error_msg = f"Error {response.status_code}: {_message(response)}"
                                 message_placeholder.error(error_msg)
                                 st.session_state.messages.append({"role": "assistant", "content": error_msg})
                     except Exception as e:

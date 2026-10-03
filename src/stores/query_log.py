@@ -90,3 +90,20 @@ class QueryLogStore:
         )
         with self._engine.connect() as conn:
             return [row_to_dict(row) for row in conn.execute(stmt)]
+
+    def summary(self, tenant_id: str) -> Dict[str, Any]:
+        """Totals over the tenant's whole retained history (SQL aggregates, not the latest rows)."""
+        stmt = select(
+            func.count().label("total_queries"),
+            func.coalesce(func.sum(query_logs.c.total_cost_usd), 0.0).label("total_cost_usd"),
+            func.coalesce(func.avg(query_logs.c.latency_ms), 0.0).label("avg_latency_ms"),
+        ).where(query_logs.c.tenant_id == tenant_id)
+        with self._engine.connect() as conn:
+            row = conn.execute(stmt).mappings().one()
+        total = row["total_queries"]
+        return {
+            "total_queries": total,
+            "total_cost_usd": round(float(row["total_cost_usd"]), 6),
+            "avg_cost_per_query_usd": round(float(row["total_cost_usd"]) / total, 6) if total else 0.0,
+            "avg_latency_ms": round(float(row["avg_latency_ms"]), 2),
+        }

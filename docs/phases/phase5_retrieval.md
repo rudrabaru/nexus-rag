@@ -39,7 +39,7 @@ Every query-time retrieval knob lives in one `RetrievalConfig`:
 ### Stage 2: Sparse Retrieval (Keyword Search)
 Concurrently, Postgres full-text search runs over a generated `tsvector` column (`to_tsvector('english', chunk_text)`, GIN-indexed). The query goes through `plainto_tsquery`, which treats every character as plain text, so query syntax cannot be injected. All terms must match first (AND). When nothing matches, the same terms are retried with any-term matching (OR), and that fallback is logged. Results are ranked by `ts_rank_cd`, which is not BM25. RRF consumes only the rank order, so only the ordering matters.
 
-Because the sparse index is a generated column of the same row as the vector, it cannot fall out of sync with it. The SQLite FTS5 index it replaces held 1,162 rows against 2,284 vectors, so hybrid search had been searching about half the corpus for keywords.
+Dense and sparse results are ordered by score and then by chunk id: the keyword rank (`ts_rank_cd`) ties constantly and identical-text chunks tie on distance, and an unordered tie made a rerun rank differently and added noise to every significance test. Because the sparse index is a generated column of the same row as the vector, it cannot fall out of sync with it. The SQLite FTS5 index it replaces held 1,162 rows against 2,284 vectors, so hybrid search had been searching about half the corpus for keywords.
 
 Known limitation: `'english'` stemming is applied to every document. A non-English corpus needs a per-document text-search configuration (language detection already exists in the ingestion stage).
 

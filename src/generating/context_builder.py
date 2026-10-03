@@ -1,4 +1,3 @@
-import json
 import time
 import logging
 import hashlib
@@ -105,21 +104,12 @@ class ContextBuilder:
 
     def _to_context_chunk(self, chunk: RetrievedChunk) -> ContextChunk:
         """Convert a RetrievedChunk to a ContextChunk with token estimate."""
-        # Parse heading_path from metadata (stored as JSON array string)
-        raw_path = chunk.metadata.get("heading_path", "")
-        try:
-            heading_path = json.loads(raw_path) if raw_path else []
-            if not isinstance(heading_path, list):
-                heading_path = [str(heading_path)]
-        except (json.JSONDecodeError, TypeError):
-            heading_path = [s.strip() for s in str(raw_path).split(" > ") if s.strip()]
-
-        source_url = chunk.metadata.get("source_url", chunk.source_document)
+        source_url = chunk.source_url or chunk.metadata.get("source_url") or chunk.source_document
 
         return ContextChunk(
             chunk_id=chunk.chunk_id,
             source_url=source_url,
-            heading_path=heading_path,
+            heading_path=list(chunk.heading_path),
             text=chunk.text,
             similarity_score=chunk.similarity_score,
             token_estimate=_estimate_tokens(chunk.text),

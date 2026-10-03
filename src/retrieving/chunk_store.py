@@ -13,7 +13,6 @@ A store is bound to one embedding index (provider:model). Dense and sparse searc
 scoped to it: a query vector is only comparable with vectors of the same model, and keeping
 sparse on the same rows means hybrid fusion never mixes two copies of one chunk.
 """
-import json
 import logging
 from typing import List, Optional, Sequence, Tuple
 
@@ -63,10 +62,9 @@ def vector_literal(values: Sequence[float]) -> str:
 
 def _to_retrieved_chunk(row, score: float) -> RetrievedChunk:
     metadata = {column.name: row[column.name] for column in _METADATA_COLUMNS}
-    # context_builder and src/evaluation/relevance.py parse heading_path as a JSON string, the shape
-    # the legacy Qdrant payload used. Changing it would silently break heading matching.
-    metadata["heading_path"] = json.dumps(row["heading_path"] or [])
+    metadata.pop("heading_path")
     return RetrievedChunk(
+        heading_path=[str(h) for h in (row["heading_path"] or [])],
         chunk_id=row["chunk_id"],
         source_document=row["source_document"],
         source_url=row["source_url"],

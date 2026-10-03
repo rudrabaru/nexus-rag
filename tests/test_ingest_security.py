@@ -263,12 +263,12 @@ def wire_job(app_state, job_tenant, job_exists=True):
 
 def test_job_status_requires_authentication(client, app_state):
     wire_job(app_state, "tenant-1")
-    assert client.get("/ingest/job-1").status_code == 401
+    assert client.get("/v1/jobs/job-1").status_code == 401
 
 
 def test_owner_can_read_their_job(client, app_state, tenant_key):
     wire_job(app_state, "tenant-1")
-    response = client.get("/ingest/job-1", headers={"X-API-Key": tenant_key("tenant-1")})
+    response = client.get("/v1/jobs/job-1", headers={"X-API-Key": tenant_key("tenant-1")})
 
     assert response.status_code == 200
     assert response.json()["chunk_count"] == 2
@@ -276,13 +276,13 @@ def test_owner_can_read_their_job(client, app_state, tenant_key):
 
 def test_another_tenants_job_is_reported_as_missing(client, app_state, tenant_key):
     wire_job(app_state, "tenant-1")
-    response = client.get("/ingest/job-1", headers={"X-API-Key": tenant_key("tenant-2")})
+    response = client.get("/v1/jobs/job-1", headers={"X-API-Key": tenant_key("tenant-2")})
     assert response.status_code == 404
 
 
 def test_unknown_job_is_missing(client, app_state, tenant_key):
     wire_job(app_state, "tenant-1", job_exists=False)
-    assert client.get("/ingest/nope", headers={"X-API-Key": tenant_key("tenant-1")}).status_code == 404
+    assert client.get("/v1/jobs/nope", headers={"X-API-Key": tenant_key("tenant-1")}).status_code == 404
 
 
 # ── URL policy edge cases ────────────────────────────────────────────────────

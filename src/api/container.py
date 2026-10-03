@@ -23,7 +23,7 @@ class PipelineComponents:
     rewriter: QueryRewriter
 
 
-def _init_components() -> PipelineComponents:
+def build_components() -> PipelineComponents:
     """Shared factory function to initialize core pipeline components."""
     settings = get_settings()
 

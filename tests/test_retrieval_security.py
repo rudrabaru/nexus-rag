@@ -1,4 +1,3 @@
-import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -120,11 +119,11 @@ async def test_results_carry_the_real_chunk_id_and_cosine_similarity():
     assert chunk.text == "hello world"
 
 
-async def test_heading_path_keeps_the_json_string_shape_consumers_parse():
+async def test_heading_path_is_a_typed_list_on_the_chunk():
     """context_builder and evaluation_helpers json.loads() this field; a list would break heading matching."""
     store, _, _ = make_store([make_row(heading_path=["H1", "H2"])])
     [chunk] = await store.search_dense(EMBEDDING, top_k=5, tenant_id="tenant-1")
-    assert json.loads(chunk.metadata["heading_path"]) == ["H1", "H2"]
+    assert chunk.heading_path == ["H1", "H2"] and "heading_path" not in chunk.metadata
 
 
 # ── Sparse search ────────────────────────────────────────────────────────────

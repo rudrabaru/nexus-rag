@@ -41,7 +41,7 @@ The images deliberately contain no `.env`, so pass it at run time. Docker's `--e
 
 Issue a workspace key (there is no open sign-up):
 ```bash
-curl -X POST http://localhost:8000/admin/keys -H "X-Admin-Key: <your ADMIN_API_KEY>"
+curl -X POST http://localhost:8000/v1/admin/keys -H "X-Admin-Key: <your ADMIN_API_KEY>"
 ```
 - API available at: [http://localhost:8000](http://localhost:8000)
 - API docs at: [http://localhost:8000/docs](http://localhost:8000/docs)

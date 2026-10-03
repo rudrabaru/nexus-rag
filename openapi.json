@@ -1,0 +1,2218 @@
+{
+  "components": {
+    "schemas": {
+      "Body_add_document": {
+        "properties": {
+          "file": {
+            "contentMediaType": "application/octet-stream",
+            "description": "A PDF, DOCX, TXT or MD file, up to 20 MB.",
+            "title": "File",
+            "type": "string"
+          },
+          "resume": {
+            "default": false,
+            "description": "Only add what is missing from an earlier partial run.",
+            "title": "Resume",
+            "type": "boolean"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A web page or sitemap URL (https).",
+            "title": "Url"
+          }
+        },
+        "title": "Body_add_document",
+        "type": "object"
+      },
+      "ChatRequest": {
+        "properties": {
+          "evaluate_faithfulness": {
+            "default": false,
+            "description": "Have a judge model score the answer afterwards (costs LLM calls).",
+            "title": "Evaluate Faithfulness",
+            "type": "boolean"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/ChatTurn"
+            },
+            "maxItems": 20,
+            "title": "History",
+            "type": "array"
+          },
+          "query": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "top_k": {
+            "default": 5,
+            "description": "How many sources to answer from.",
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "type": "integer"
+          },
+          "use_reranker": {
+            "default": false,
+            "description": "Reorder the candidates with the workspace's reranker.",
+            "title": "Use Reranker",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "ChatRequest",
+        "type": "object"
+      },
+      "ChatResponse": {
+        "properties": {
+          "answer": {
+            "title": "Answer",
+            "type": "string"
+          },
+          "latency_breakdown": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Breakdown"
+          },
+          "latency_ms": {
+            "title": "Latency Ms",
+            "type": "number"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            },
+            "title": "Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "answer",
+          "sources",
+          "latency_ms"
+        ],
+        "title": "ChatResponse",
+        "type": "object"
+      },
+      "ChatTurn": {
+        "description": "One earlier message. Only user and assistant turns exist: a caller cannot inject a \"system\" turn.",
+        "properties": {
+          "content": {
+            "maxLength": 4000,
+            "title": "Content",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "assistant"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "content"
+        ],
+        "title": "ChatTurn",
+        "type": "object"
+      },
+      "DeleteDocumentResponse": {
+        "properties": {
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "message"
+        ],
+        "title": "DeleteDocumentResponse",
+        "type": "object"
+      },
+      "DocumentResponse": {
+        "properties": {
+          "chunks": {
+            "title": "Chunks",
+            "type": "integer"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "stats": {
+            "additionalProperties": true,
+            "default": {},
+            "title": "Stats",
+            "type": "object"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "url",
+          "title",
+          "status",
+          "created_at",
+          "chunks"
+        ],
+        "title": "DocumentResponse",
+        "type": "object"
+      },
+      "ErrorBody": {
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "details": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Details"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "ErrorBody",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "Health": {
+        "properties": {
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "Health",
+        "type": "object"
+      },
+      "IngestResponse": {
+        "properties": {
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "warning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warning"
+          }
+        },
+        "required": [
+          "job_id",
+          "status"
+        ],
+        "title": "IngestResponse",
+        "type": "object"
+      },
+      "IssueKeyRequest": {
+        "properties": {
+          "tenant_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9-]{1,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Tenant to issue a key for. A new UUID is generated when omitted.",
+            "title": "Tenant Id"
+          }
+        },
+        "title": "IssueKeyRequest",
+        "type": "object"
+      },
+      "IssueKeyResponse": {
+        "properties": {
+          "api_key": {
+            "title": "Api Key",
+            "type": "string"
+          },
+          "tenant_id": {
+            "title": "Tenant Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "api_key"
+        ],
+        "title": "IssueKeyResponse",
+        "type": "object"
+      },
+      "JobStatusResponse": {
+        "properties": {
+          "chunk_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Count"
+          },
+          "doc_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Doc Id"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "job_id": {
+            "title": "Job Id",
+            "type": "string"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          },
+          "progress_pct": {
+            "title": "Progress Pct",
+            "type": "integer"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "job_id",
+          "status",
+          "progress_pct"
+        ],
+        "title": "JobStatusResponse",
+        "type": "object"
+      },
+      "RetrievalComparison": {
+        "properties": {
+          "baseline": {
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            },
+            "title": "Baseline",
+            "type": "array"
+          },
+          "baseline_latency_ms": {
+            "title": "Baseline Latency Ms",
+            "type": "number"
+          },
+          "degraded": {
+            "description": "Why the result is not what the configuration asked for.",
+            "items": {
+              "type": "string"
+            },
+            "title": "Degraded",
+            "type": "array"
+          },
+          "reranked": {
+            "items": {
+              "$ref": "#/components/schemas/Source"
+            },
+            "title": "Reranked",
+            "type": "array"
+          },
+          "reranked_latency_ms": {
+            "title": "Reranked Latency Ms",
+            "type": "number"
+          },
+          "reranker": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranker"
+          }
+        },
+        "required": [
+          "baseline",
+          "reranked",
+          "baseline_latency_ms",
+          "reranked_latency_ms"
+        ],
+        "title": "RetrievalComparison",
+        "type": "object"
+      },
+      "RevokeKeysRequest": {
+        "properties": {
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Revoke this key.",
+            "title": "Api Key"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "pattern": "^[A-Za-z0-9-]{1,64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Revoke every key of this tenant.",
+            "title": "Tenant Id"
+          }
+        },
+        "title": "RevokeKeysRequest",
+        "type": "object"
+      },
+      "RevokeKeysResponse": {
+        "properties": {
+          "revoked": {
+            "title": "Revoked",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revoked"
+        ],
+        "title": "RevokeKeysResponse",
+        "type": "object"
+      },
+      "Source": {
+        "properties": {
+          "chunk_preview": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Preview"
+          },
+          "section": {
+            "title": "Section",
+            "type": "string"
+          },
+          "similarity_score": {
+            "title": "Similarity Score",
+            "type": "number"
+          },
+          "url": {
+            "title": "Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "url",
+          "section",
+          "similarity_score"
+        ],
+        "title": "Source",
+        "type": "object"
+      },
+      "UsageEntry": {
+        "properties": {
+          "faithfulness_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Faithfulness Score"
+          },
+          "latency_ms": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latency Ms"
+          },
+          "log_id": {
+            "title": "Log Id",
+            "type": "integer"
+          },
+          "provider": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provider"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          },
+          "tokens_used": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tokens Used"
+          },
+          "total_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Cost Usd"
+          }
+        },
+        "required": [
+          "log_id",
+          "timestamp",
+          "query"
+        ],
+        "title": "UsageEntry",
+        "type": "object"
+      },
+      "UsageResponse": {
+        "properties": {
+          "queries": {
+            "items": {
+              "$ref": "#/components/schemas/UsageEntry"
+            },
+            "title": "Queries",
+            "type": "array"
+          },
+          "summary": {
+            "$ref": "#/components/schemas/UsageSummary"
+          }
+        },
+        "required": [
+          "summary",
+          "queries"
+        ],
+        "title": "UsageResponse",
+        "type": "object"
+      },
+      "UsageSummary": {
+        "properties": {
+          "avg_cost_per_query_usd": {
+            "title": "Avg Cost Per Query Usd",
+            "type": "number"
+          },
+          "avg_latency_ms": {
+            "title": "Avg Latency Ms",
+            "type": "number"
+          },
+          "total_cost_usd": {
+            "title": "Total Cost Usd",
+            "type": "number"
+          },
+          "total_queries": {
+            "title": "Total Queries",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_queries",
+          "total_cost_usd",
+          "avg_cost_per_query_usd",
+          "avg_latency_ms"
+        ],
+        "title": "UsageSummary",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      },
+      "Workers": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "online": {
+            "title": "Online",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "online",
+          "detail"
+        ],
+        "title": "Workers",
+        "type": "object"
+      },
+      "WorkspaceRetrieval": {
+        "description": "The retrieval settings a workspace's chat runs. Anything left out keeps the deployment's default.",
+        "properties": {
+          "dense_weight": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dense Weight"
+          },
+          "rerank_candidates": {
+            "anyOf": [
+              {
+                "maximum": 80.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rerank Candidates"
+          },
+          "reranker": {
+            "anyOf": [
+              {
+                "enum": [
+                  "flashrank",
+                  "jina",
+                  "voyage"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reranker"
+          },
+          "rrf_k": {
+            "anyOf": [
+              {
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rrf K"
+          },
+          "sparse_weight": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sparse Weight"
+          },
+          "strategy": {
+            "anyOf": [
+              {
+                "enum": [
+                  "dense",
+                  "sparse",
+                  "hybrid"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Strategy"
+          }
+        },
+        "title": "WorkspaceRetrieval",
+        "type": "object"
+      },
+      "WorkspaceSettingsResponse": {
+        "properties": {
+          "retrieval": {
+            "$ref": "#/components/schemas/WorkspaceRetrieval"
+          },
+          "source": {
+            "enum": [
+              "workspace",
+              "default"
+            ],
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "retrieval"
+        ],
+        "title": "WorkspaceSettingsResponse",
+        "type": "object"
+      },
+      "WorkspaceStats": {
+        "properties": {
+          "documents_count": {
+            "title": "Documents Count",
+            "type": "integer"
+          },
+          "total_chunks": {
+            "title": "Total Chunks",
+            "type": "integer"
+          },
+          "total_tokens": {
+            "title": "Total Tokens",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "documents_count",
+          "total_chunks",
+          "total_tokens"
+        ],
+        "title": "WorkspaceStats",
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "APIKeyHeader": {
+        "in": "header",
+        "name": "X-Admin-Key",
+        "type": "apiKey"
+      }
+    }
+  },
+  "info": {
+    "description": "Nexus: retrieval-augmented question answering over your own documents, with the tools to measure how well it retrieves. Authenticate with `X-API-Key` (a workspace key); `/v1/admin` takes `X-Admin-Key`. Every error has the body `{code, message, request_id}`.",
+    "title": "Nexus RAG API",
+    "version": "1.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "description": "Liveness. A failed start never recovers in-process, so it reports 503 and the platform replaces the instance.",
+        "operationId": "health",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "summary": "Health",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/ready": {
+      "get": {
+        "description": "Readiness: started, and the database answers. Anything else is 503, so traffic is not routed here yet.",
+        "operationId": "ready",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "summary": "Ready",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/v1/admin/keys": {
+      "post": {
+        "description": "Issues a tenant API key. The key is shown once; only its hash is stored.",
+        "operationId": "issue_api_key",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/IssueKeyRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueKeyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Issue Api Key",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/admin/keys/revoke": {
+      "post": {
+        "description": "Revokes one key (by its value) or every key of a tenant.",
+        "operationId": "revoke_api_keys",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeKeysRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeKeysResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Revoke Api Keys",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/v1/chat": {
+      "post": {
+        "description": "Answers a question from the workspace's documents, with the sources it used.",
+        "operationId": "chat",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Chat",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/v1/chat/stream": {
+      "post": {
+        "description": "Server-sent events, one JSON object per `data:` line: `token` (answer text, repeated), `sources`, `done` (the answer is complete), then optionally `faithfulness` (seconds later, when requested). A failure while streaming ends the stream with an `error` event; a failure before it starts is an ordinary error response.",
+        "operationId": "chat_stream",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Chat Stream",
+        "tags": [
+          "chat"
+        ],
+        "x-events": {
+          "$defs": {
+            "DoneEvent": {
+              "properties": {
+                "latency_ms": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Latency Ms"
+                },
+                "type": {
+                  "const": "done",
+                  "default": "done",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "title": "DoneEvent",
+              "type": "object"
+            },
+            "ErrorEvent": {
+              "properties": {
+                "code": {
+                  "title": "Code",
+                  "type": "string"
+                },
+                "message": {
+                  "title": "Message",
+                  "type": "string"
+                },
+                "type": {
+                  "const": "error",
+                  "default": "error",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "code",
+                "message"
+              ],
+              "title": "ErrorEvent",
+              "type": "object"
+            },
+            "FaithfulnessContent": {
+              "properties": {
+                "reasoning": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Reasoning"
+                },
+                "score": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Score"
+                }
+              },
+              "title": "FaithfulnessContent",
+              "type": "object"
+            },
+            "FaithfulnessEvent": {
+              "properties": {
+                "content": {
+                  "$ref": "#/$defs/FaithfulnessContent"
+                },
+                "type": {
+                  "const": "faithfulness",
+                  "default": "faithfulness",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content"
+              ],
+              "title": "FaithfulnessEvent",
+              "type": "object"
+            },
+            "Source": {
+              "properties": {
+                "chunk_preview": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Chunk Preview"
+                },
+                "section": {
+                  "title": "Section",
+                  "type": "string"
+                },
+                "similarity_score": {
+                  "title": "Similarity Score",
+                  "type": "number"
+                },
+                "url": {
+                  "title": "Url",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "url",
+                "section",
+                "similarity_score"
+              ],
+              "title": "Source",
+              "type": "object"
+            },
+            "SourcesEvent": {
+              "properties": {
+                "content": {
+                  "items": {
+                    "$ref": "#/$defs/Source"
+                  },
+                  "title": "Content",
+                  "type": "array"
+                },
+                "type": {
+                  "const": "sources",
+                  "default": "sources",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content"
+              ],
+              "title": "SourcesEvent",
+              "type": "object"
+            },
+            "TokenEvent": {
+              "properties": {
+                "content": {
+                  "title": "Content",
+                  "type": "string"
+                },
+                "type": {
+                  "const": "token",
+                  "default": "token",
+                  "title": "Type",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "content"
+              ],
+              "title": "TokenEvent",
+              "type": "object"
+            }
+          },
+          "description": "Documentation only: the events of POST /v1/chat/stream, one per `data:` line, as JSON.",
+          "properties": {
+            "done": {
+              "$ref": "#/$defs/DoneEvent"
+            },
+            "error": {
+              "$ref": "#/$defs/ErrorEvent"
+            },
+            "faithfulness": {
+              "$ref": "#/$defs/FaithfulnessEvent"
+            },
+            "sources": {
+              "$ref": "#/$defs/SourcesEvent"
+            },
+            "token": {
+              "$ref": "#/$defs/TokenEvent"
+            }
+          },
+          "required": [
+            "token",
+            "sources",
+            "done",
+            "faithfulness",
+            "error"
+          ],
+          "title": "ChatStreamEvents",
+          "type": "object"
+        }
+      }
+    },
+    "/v1/documents": {
+      "get": {
+        "description": "The documents of the caller's workspace (every workspace for the admin).",
+        "operationId": "list_documents",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentResponse"
+                  },
+                  "title": "Response List Documents",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "List Documents",
+        "tags": [
+          "documents"
+        ]
+      },
+      "post": {
+        "description": "Queues a source for ingestion. Processing happens in a worker; poll `/v1/jobs/{job_id}`.",
+        "operationId": "add_document",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_add_document"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IngestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Add Document",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/v1/documents/{doc_id}": {
+      "delete": {
+        "description": "Deletes a document. Its chunks, vectors and keyword-index entries go with it in one transaction.",
+        "operationId": "delete_document",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "doc_id",
+            "required": true,
+            "schema": {
+              "title": "Doc Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteDocumentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Delete Document",
+        "tags": [
+          "documents"
+        ]
+      }
+    },
+    "/v1/jobs/{job_id}": {
+      "get": {
+        "description": "Progress of an ingestion job.",
+        "operationId": "get_job",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "job_id",
+            "required": true,
+            "schema": {
+              "title": "Job Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatusResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Job",
+        "tags": [
+          "documents",
+          "jobs"
+        ]
+      }
+    },
+    "/v1/retrieval/compare": {
+      "post": {
+        "description": "What the reranker changes for this question: the same retrieval with and without it. No LLM is called.",
+        "operationId": "compare_retrieval",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetrievalComparison"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Compare Retrieval",
+        "tags": [
+          "chat"
+        ]
+      }
+    },
+    "/v1/system/workers": {
+      "get": {
+        "description": "Whether a batch worker is running. Workers run on demand, so none online is normal: documents and\nexperiments wait in the queue until one starts, while chat and stored results are unaffected.",
+        "operationId": "workers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Workers"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Workers",
+        "tags": [
+          "health",
+          "system"
+        ]
+      }
+    },
+    "/v1/usage": {
+      "get": {
+        "description": "Cost and latency of this workspace's questions: totals over its retained history, and the most recent ones.",
+        "operationId": "usage",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Usage",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/v1/workspace/settings": {
+      "delete": {
+        "description": "Returns this workspace to the deployment's defaults.",
+        "operationId": "reset_workspace_settings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Reset Workspace Settings",
+        "tags": [
+          "workspace"
+        ]
+      },
+      "get": {
+        "description": "The retrieval settings chat runs for this workspace, and whether they are its own or the deployment's defaults.",
+        "operationId": "get_workspace_settings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Workspace Settings",
+        "tags": [
+          "workspace"
+        ]
+      },
+      "put": {
+        "description": "Sets the retrieval settings this workspace's chat runs (for example the winner of an experiment).",
+        "operationId": "put_workspace_settings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceRetrieval"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceSettingsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Put Workspace Settings",
+        "tags": [
+          "workspace"
+        ]
+      }
+    },
+    "/v1/workspace/stats": {
+      "get": {
+        "description": "Documents, chunks and tokens in the caller's workspace (every workspace for the admin).",
+        "operationId": "workspace_stats",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceStats"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Workspace Stats",
+        "tags": [
+          "workspace"
+        ]
+      }
+    }
+  }
+}

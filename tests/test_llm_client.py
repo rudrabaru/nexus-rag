@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 import litellm
 import pytest
 
-from src.generating.llm_client import LLMCall, LLMClient
+from src.generating.llm_client import GenerationError, LLMCall, LLMClient
 from src.generating.models import GenerationConfig
 
 
@@ -317,10 +317,12 @@ async def test_stream_never_falls_back_after_the_first_token_is_yielded(monkeypa
     client = LLMClient(config(fallback={"provider": "groq", "model_name": "fallback-model"}))
     client._fallback_client.call_llm_stream = fallback_called
 
-    chunks = [c async for c in client.call_llm_stream("hi", LLMCall(), max_retries=0)]
+    chunks = []
+    with pytest.raises(GenerationError):  # the failure is an error, not more answer text
+        async for piece in client.call_llm_stream("hi", LLMCall(), max_retries=0):
+            chunks.append(piece)
 
-    assert chunks[0] == "partial "
-    assert "[Generation failed:" in chunks[1]
+    assert chunks == ["partial "]
     fallback_called.assert_not_called()
 
 

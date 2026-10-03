@@ -9,6 +9,7 @@ class RetrievedChunk(BaseModel):
     source_url: Optional[str] = None
     text: str
     similarity_score: float
+    heading_path: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any]
 
 

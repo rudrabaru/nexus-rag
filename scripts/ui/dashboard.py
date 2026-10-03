@@ -7,7 +7,7 @@ def render_dashboard_tab(API_BASE_URL, api_headers):
     
     st.subheader("Cost & Latency Summary")
     try:
-        res = requests.get(f"{API_BASE_URL}/logs", headers=api_headers, timeout=10)
+        res = requests.get(f"{API_BASE_URL}/v1/usage", headers=api_headers, timeout=10)
         if res.status_code == 200:
             data = res.json()
             summary = data.get("summary", {})

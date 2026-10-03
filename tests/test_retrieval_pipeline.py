@@ -4,14 +4,13 @@ import os
 import pytest
 from pydantic import ValidationError
 
-from src.api.models.query_models import QueryRequest
 from src.config import get_settings
 from src.retrieving.config import RetrievalConfig
 from src.retrieving.fusion import fuse, rrf_scores
 from src.retrieving.models import RetrievalResult, RetrievedChunk
 from src.retrieving.pipeline import RetrievalPipeline
 from src.retrieving.rerankers import FlashRankReranker, JinaReranker, RerankError
-from src.services.query_service import chat_config
+from src.services.chat_config import chat_retrieval_config
 
 
 def chunk(chunk_id: str, score: float = 1.0) -> RetrievedChunk:
@@ -107,13 +106,28 @@ def test_invalid_configurations_are_rejected(bad):
 
 
 def test_chat_uses_the_configured_reranker_only_when_the_request_asks(monkeypatch):
-    assert chat_config(QueryRequest(query="q", top_k=3)).reranker is None
-    config = chat_config(QueryRequest(query="q", top_k=3, use_reranker=True))
+    assert chat_retrieval_config(get_settings(), None, 3, use_reranker=False).reranker is None
+    config = chat_retrieval_config(get_settings(), None, 3, use_reranker=True)
     assert (config.reranker, config.rerank_candidates, config.strategy) == ("flashrank", 12, "hybrid")
 
     monkeypatch.setenv("RERANKER", "none")
     get_settings.cache_clear()
-    assert chat_config(QueryRequest(query="q", use_reranker=True)).reranker is None
+    assert chat_retrieval_config(get_settings(), None, 5, use_reranker=True).reranker is None
+
+
+def test_a_workspaces_choices_override_the_defaults_and_the_request_still_has_the_last_word():
+    workspace = {"strategy": "dense", "reranker": "jina", "rerank_candidates": 8, "rrf_k": 30, "top_k": 99, "index_id": "x:y"}
+
+    config = chat_retrieval_config(get_settings(), workspace, top_k=4, use_reranker=True)
+    assert (config.strategy, config.reranker, config.rerank_candidates, config.rrf_k) == ("dense", "jina", 8, 30)
+    assert config.top_k == 4 and config.index_id is None  # top_k is the caller's and the index is the deployment's
+
+    assert chat_retrieval_config(get_settings(), workspace, top_k=4, use_reranker=False).reranker is None
+
+
+def test_a_pool_smaller_than_top_k_is_widened_and_one_larger_than_the_limit_is_capped():
+    assert chat_retrieval_config(get_settings(), {"rerank_candidates": 2}, 5, True).rerank_candidates == 5
+    assert chat_retrieval_config(get_settings(), None, 20, True).rerank_candidates == 80
 
 
 def test_reranker_none_turns_reranking_off(monkeypatch):
