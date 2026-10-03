@@ -1,12 +1,13 @@
 """Upload parsing: text passthrough, Docling in a child process, and the PyMuPDF fallbacks."""
 import os
+import zipfile
 
 import pymupdf
 import pytest
 
 from src.config import get_settings
-from src.ingestion.errors import UnprocessableSourceError
-from src.parsing import files
+from src.errors import UnprocessableSourceError
+from src.parsing import child, files
 from src.parsing.files import parse_file
 from src.parsing.structure import promote_fake_headings
 
@@ -83,3 +84,35 @@ def test_docling_parses_a_pdf_in_a_child_process(tmp_path):
     assert parsed.parser == "docling"
     assert "Load balancing distributes traffic" in parsed.markdown
     assert "&amp;" not in parsed.markdown and "<!-- image -->" not in parsed.markdown
+
+
+# ── The child process: untrusted input stays out of the worker ──────────────
+
+def test_the_page_count_comes_from_the_child_process(tmp_path):
+    assert files._run_child("pages", make_pdf(tmp_path / "a.pdf", pages=3), 60) == "3"
+
+
+def test_an_unusable_file_is_rejected_not_reported_as_a_parser_failure(tmp_path):
+    (tmp_path / "broken.pdf").write_bytes(b"%PDF-1.4 garbage")
+    with pytest.raises(UnprocessableSourceError):
+        files._run_child("pages", str(tmp_path / "broken.pdf"), 60)
+
+
+def test_a_crashing_parser_is_a_runtime_error_with_its_reason(tmp_path):
+    with pytest.raises(RuntimeError, match="parser process failed"):
+        files._run_child("text", str(tmp_path / "missing.pdf"), 60)
+
+
+def test_a_docx_that_unpacks_far_beyond_its_size_is_refused(tmp_path, monkeypatch):
+    bomb = tmp_path / "bomb.docx"
+    with zipfile.ZipFile(bomb, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("word/document.xml", b"\0" * (3 * 1024 * 1024))
+    monkeypatch.setattr(child, "MAX_UNPACKED_DOCX_BYTES", 1024 * 1024)
+    with pytest.raises(child.RejectedInput, match="unpacks to"):
+        child.check_unpacked_size(str(bomb))
+
+
+def test_a_docx_that_is_not_a_zip_is_refused(tmp_path):
+    (tmp_path / "fake.docx").write_bytes(b"not a zip")
+    with pytest.raises(child.RejectedInput, match="not a valid DOCX"):
+        child.check_unpacked_size(str(tmp_path / "fake.docx"))

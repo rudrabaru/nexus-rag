@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.crawling.metadata import CrawledDocument
-from src.ingestion.errors import UnprocessableSourceError
+from src.errors import UnprocessableSourceError
 from src.ingestion.pipeline import process_documents
 
 NAV = "[Home](/home) [Docs](/docs) [Blog](/blog)"

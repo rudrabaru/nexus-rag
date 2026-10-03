@@ -12,13 +12,15 @@ from typing import Any, Callable, List, Optional
 from src.chunking.chunker import DocumentChunker
 from src.chunking.metadata import ChunkingConfig
 from src.config import get_settings
+from src.db.engine import get_sync_engine
 from src.crawling.metadata import CrawledDocument
 from src.embedding.generator import EmbeddingGenerator
 from src.embedding.providers import build_embedder
 from src.ingestion.embedding_worker import EmbeddingOutcome, EmbeddingWorker
-from src.ingestion.errors import UnprocessableSourceError
+from src.errors import UnprocessableSourceError
 from src.processing.cleaner import DocumentCleaner
 from src.processing.models import Block
+from src.stores.checkpoints import CheckpointStore
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +104,9 @@ def process_documents(
 
     update_progress(75)
 
-    generator = embedding_generator or EmbeddingGenerator(build_embedder(get_settings()))
+    generator = embedding_generator or EmbeddingGenerator(
+        build_embedder(get_settings()), CheckpointStore(get_sync_engine()), job_id
+    )
     outcome = EmbeddingWorker(generator).embed(all_chunks, update_progress, pipeline_logger, job_id)
 
     if pipeline_logger:

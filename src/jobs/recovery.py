@@ -13,6 +13,7 @@ commit, and chunk writes are idempotent upserts.
 import asyncio
 import logging
 from dataclasses import dataclass
+from typing import Optional
 
 from procrastinate import jobs as procrastinate_jobs
 from procrastinate.manager import JobManager
@@ -35,13 +36,21 @@ class RecoveryReport:
     failed: int = 0
 
 
-async def recover_stalled_jobs(job_manager: JobManager, jobs: JobStore, queue: str, task_name: str) -> RecoveryReport:
-    """Sweeps one queue's task (ingest or fetch); each worker sweeps only the queue it runs."""
+async def recover_stalled_jobs(
+    job_manager: JobManager, jobs: JobStore, queue: str, task_name: str, own_worker_id: Optional[int] = None
+) -> RecoveryReport:
+    """
+    Sweeps one queue's task (ingest or fetch); each worker sweeps only the queue it runs. A job held by
+    the sweeping worker itself is alive by definition (it is running this sweep), so a heartbeat it
+    missed while busy never gets its own job requeued.
+    """
     report = RecoveryReport()
     stalled = await job_manager.get_stalled_jobs(
         queue=queue, task_name=task_name, seconds_since_heartbeat=STALLED_AFTER_SECONDS
     )
     for job in stalled:
+        if own_worker_id is not None and job.worker_id == own_worker_id:
+            continue
         domain_job_id = job.task_kwargs.get("job_id")
         if job.attempts >= MAX_RETRIES:
             message = f"Worker stopped responding; gave up after {job.attempts + 1} attempts."

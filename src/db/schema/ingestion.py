@@ -1,4 +1,5 @@
 """Documents and the work that turns sources into them: jobs, the sources waiting for a worker, and the fetch audit."""
+from pgvector.sqlalchemy import HALFVEC
 from sqlalchemy import (
     BigInteger,
     Column,
@@ -14,7 +15,7 @@ from sqlalchemy import (
     text,
 )
 
-from src.db.schema.base import Json, metadata, now
+from src.db.schema.base import EMBEDDING_DIMENSION, Json, metadata, now
 
 documents = Table(
     "documents",
@@ -89,4 +90,20 @@ fetch_log = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=now()),
     Index(None, "tenant_id", "created_at"),
     Index(None, "created_at"),
+)
+
+# Embeddings already paid for by a running ingestion. At the card-free Voyage limit one ingestion
+# is hours of paced requests, so a failure late in the run must not repeat the early part. Rows
+# are keyed by the chunk and carry a hash of exactly what was embedded and into which index, so a
+# changed chunker or provider can never reuse a stale vector. They are deleted in the commit that
+# stores the chunks, or with the job.
+embedding_checkpoints = Table(
+    "embedding_checkpoints",
+    metadata,
+    Column("job_id", Text, ForeignKey("jobs.job_id", ondelete="CASCADE"), nullable=False),
+    Column("chunk_id", Text, nullable=False),
+    Column("input_hash", Text, nullable=False),
+    Column("embedding", HALFVEC(EMBEDDING_DIMENSION), nullable=False),
+    Column("tokens", Integer, nullable=False),
+    PrimaryKeyConstraint("job_id", "chunk_id"),
 )

@@ -16,13 +16,14 @@ Jina task). Using the wrong side silently lowers recall, so callers always say w
 """
 import asyncio
 import logging
+import threading
 from dataclasses import dataclass
 from typing import Callable, Dict, List, Literal, Optional
 
 import httpx
 
 from src.config import Settings
-from src.embedding.pacing import RateWindow
+from src.embedding.pacing import WINDOW_SECONDS, RateWindow
 from src.db.schema import EMBEDDING_DIMENSION
 
 logger = logging.getLogger(__name__)
@@ -47,9 +48,10 @@ RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
 class EmbeddingError(RuntimeError):
     """An embedding request failed. `retryable` is False for errors retrying cannot fix (bad key, bad model)."""
 
-    def __init__(self, message: str, retryable: bool):
+    def __init__(self, message: str, retryable: bool, status: Optional[int] = None):
         super().__init__(message)
         self.retryable = retryable
+        self.status = status  # the provider's HTTP status, when it answered
 
 
 @dataclass
@@ -86,24 +88,24 @@ class Embedder:
         vectors: List[List[float]] = []
         tokens = 0
         async with httpx.AsyncClient(timeout=self.timeout_seconds) as client:
-            for group in self._request_groups(texts):
-                batch = await self._post_paced(client, group, input_type)
+            for positions in self.group_indices(texts):
+                batch = await self._post_paced(client, [texts[i] for i in positions], input_type)
                 vectors.extend(batch.vectors)
                 tokens += batch.tokens
         return EmbeddingBatch(vectors=vectors, tokens=tokens)
 
-    def _request_groups(self, texts: List[str]) -> List[List[str]]:
-        """Splits texts into requests within the provider's per-request text and token limits."""
+    def group_indices(self, texts: List[str]) -> List[List[int]]:
+        """Positions of `texts` split into requests within the provider's per-request text and token limits."""
         token_cap = self.max_tokens_per_request
         if self.window:
             token_cap = min(token_cap, self.window.tokens_per_minute)
         groups, current, current_tokens = [], [], 0
-        for text in texts:
+        for position, text in enumerate(texts):
             estimate = estimate_tokens(text)
             if current and (len(current) >= self.max_texts_per_request or current_tokens + estimate > token_cap):
                 groups.append(current)
                 current, current_tokens = [], 0
-            current.append(text)
+            current.append(position)
             current_tokens += estimate
         if current:
             groups.append(current)
@@ -121,16 +123,26 @@ class Embedder:
                     return self._validated(self.read_response(response.json()), len(texts))
                 retryable = response.status_code in RETRYABLE_STATUS
                 error = EmbeddingError(
-                    f"{self.provider} embeddings HTTP {response.status_code}: {response.text[:200]}", retryable
+                    f"{self.provider} embeddings HTTP {response.status_code}: {response.text[:200]}", retryable,
+                    status=response.status_code,
                 )
                 if not retryable:
                     raise error
-                delay = _retry_after(response) or 2.0 ** (attempt + 1)
+                delay = self._rate_limit_wait(response) if response.status_code == 429 else _retry_after(response) or 2.0 ** (attempt + 1)
             if attempt == MAX_ATTEMPTS - 1:
                 raise error
             logger.warning(f"EMBED | {error} | retry {attempt + 1}/{MAX_ATTEMPTS - 1} in {delay:.1f}s")
             await asyncio.sleep(min(delay, MAX_BACKOFF_SECONDS))
         raise AssertionError("unreachable")
+
+    def _rate_limit_wait(self, response: httpx.Response) -> float:
+        """
+        A 429 means this minute's budget is spent, so retrying within seconds only burns attempts:
+        wait for the budget to refill (a whole window), or as long as the provider asks.
+        """
+        waits = [_retry_after(response) or 0.0]
+        waits.append(WINDOW_SECONDS if self.window else 2.0)
+        return max(waits)
 
     async def _wait_for_window(self, tokens: int) -> None:
         if not self.window:
@@ -173,10 +185,14 @@ def _openai_style(data: dict) -> EmbeddingBatch:
 _windows: Dict[str, RateWindow] = {}
 
 
+_windows_lock = threading.Lock()
+
+
 def _window(provider: str, rpm: int, tpm: int) -> RateWindow:
-    if provider not in _windows:
-        _windows[provider] = RateWindow(rpm, tpm)
-    return _windows[provider]
+    with _windows_lock:
+        if provider not in _windows:
+            _windows[provider] = RateWindow(rpm, tpm)
+        return _windows[provider]
 
 
 def voyage_embedder(settings: Settings, model: str) -> Embedder:

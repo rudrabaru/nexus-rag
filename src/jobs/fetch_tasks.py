@@ -25,7 +25,7 @@ from src.crawling.policy import DomainPacer, check_fetchable
 from src.crawling.readers import ReaderError, RobotsBlockedError, read_page
 from src.crawling.sitemap import MAX_SITEMAP_PAGES, discover_pages, is_sitemap_url
 from src.embedding.providers import build_embedder
-from src.ingestion.errors import UnprocessableSourceError
+from src.errors import UnprocessableSourceError
 from src.ingestion.url_policy import UnsafeUrlError, redact_url
 from src.jobs.contract import (
     FETCH_QUEUE,
@@ -35,11 +35,10 @@ from src.jobs.contract import (
     INGEST_QUEUE,
     INGEST_TASK,
     MAX_RETRIES,
-    RECOVERY_CRON,
     IngestionRequest,
 )
-from src.jobs.recovery import recover_stalled_jobs
-from src.jobs.support import Progress, already_finished, job_tag
+from src.jobs.policy import register_recovery, run_with_policy
+from src.jobs.support import Progress, job_tag
 from src.db.engine import get_sync_engine
 from src.retrieving.chunk_writes import existing_source_urls
 from src.stores.fetches import FetchStore
@@ -204,28 +203,7 @@ def _no_pages_reason(robots_blocked, denied, failed, over_quota) -> str:
 )
 async def fetch_source(context: procrastinate.JobContext, **kwargs) -> None:
     request = IngestionRequest(**kwargs)
-    jobs = JobStore(get_sync_engine())
-
-    skip_reason = await asyncio.to_thread(already_finished, jobs, request.job_id)
-    if skip_reason:
-        logger.info(f"[job={request.job_id[:8]}] not fetching: {skip_reason}.")
-        return
-
-    try:
-        await _fetch(request, context.app)
-    except UnprocessableSourceError as e:
-        logger.error(f"[job={request.job_id[:8]}] nothing to fetch, not retrying: {e}")
-        await asyncio.to_thread(jobs.fail_job, request.job_id, str(e))
-    except Exception as e:
-        logger.error(f"[job={request.job_id[:8]}] fetch attempt {context.job.attempts + 1}/{MAX_RETRIES + 1} failed: {e}")
-        if context.job.attempts >= MAX_RETRIES:
-            await asyncio.to_thread(jobs.fail_job, request.job_id, f"Fetching failed after {context.job.attempts + 1} attempts ({type(e).__name__}); details are in the worker log.")
-        raise
+    await run_with_policy(context, request, lambda: _fetch(request, context.app), "fetching")
 
 
-@fetch_blueprint.periodic(cron=RECOVERY_CRON, periodic_id="recover-stalled-fetches")
-@fetch_blueprint.task(name=FETCH_RECOVERY_TASK_NAME, queue=FETCH_QUEUE, lock=FETCH_RECOVERY_TASK_NAME, pass_context=True)
-async def recover_stalled_fetches(context: procrastinate.JobContext, timestamp: int) -> None:
-    report = await recover_stalled_jobs(context.app.job_manager, JobStore(get_sync_engine()), FETCH_QUEUE, FETCH_TASK)
-    if report.requeued or report.failed:
-        logger.warning(f"Stalled-fetch sweep: requeued={report.requeued} failed={report.failed}")
+register_recovery(fetch_blueprint, FETCH_QUEUE, FETCH_TASK, FETCH_RECOVERY_TASK_NAME)

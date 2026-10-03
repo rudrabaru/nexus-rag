@@ -64,6 +64,8 @@ In two more terminals, with the same `.env`. The API only queues ingestion jobs;
 python -m src.jobs.workers ingest   # parse worker: uploads and fetched pages -> chunks and vectors
 python -m src.jobs.workers fetch    # fetch worker: web pages and sitemaps, through reader APIs
 # add --drain to either to run what is queued and exit (how workers run on a laptop)
+scripts/run_workers.ps1             # Windows: fetch queue, then parse queue, each until empty
+scripts/run_workers.sh              # macOS / Linux: the same
 ```
 Without the parse worker, every job stays at `status: "queued"`; without the fetch worker, URL jobs do. The first document the parse worker handles downloads Docling's models (~0.5 GB) once.
 

@@ -6,6 +6,7 @@ from sqlalchemy.engine import Connection, Engine
 
 from src.db.rows import row_to_dict, utcnow
 from src.db.schema import chunks, documents, ingest_sources, jobs
+from src.stores.checkpoints import delete_checkpoints
 from src.stores.fetches import delete_fetched_pages
 
 TERMINAL_STATUSES = ("complete", "failed")
@@ -156,6 +157,7 @@ class JobStore:
             )
             delete_ingest_source(conn, job_id)
             delete_fetched_pages(conn, job_id)
+            delete_checkpoints(conn, job_id)
 
     def complete_as_duplicate(self, job_id: str, duplicate_of: str) -> None:
         """

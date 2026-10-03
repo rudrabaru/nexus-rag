@@ -5,12 +5,14 @@ Uploaded file -> Markdown.
 - .pdf / .docx: Docling (layout analysis, reading order, table structure, OCR of scanned pages
   with RapidOCR), in a child process.
 
-Why a child process per document: Docling's peak memory was 1.7-3.4 GB per PDF in the
-2026-09-26 spike (docs/phases/phase1_ingestion.md), and its memory is not reliably released
-between documents. A fresh process returns it to the OS, can be killed on a timeout, and an
-out-of-memory kill takes down only the child.
+Why a child process, and for every parser: the upload is untrusted, and the libraries that read
+it (Docling, PyMuPDF, the zip reader) are large native code. Run in a fresh process they cannot
+take the worker down with a crash or an out-of-memory kill, can be killed on a timeout, and hand
+their memory back to the OS (Docling peaked at 1.7-3.4 GB per PDF in the 2026-09-26 spike,
+docs/phases/phase1_ingestion.md, and does not release it between documents). The child answers
+through a file, never a pickle (src/parsing/child.py).
 
-Why one at a time: a lock serialises Docling across the worker's concurrent jobs, so peak
+Why one Docling at a time: a lock serialises it across the worker's concurrent jobs, so peak
 memory is one document's, not WORKER_CONCURRENCY of them.
 
 Fallback: a PDF over DOCLING_MAX_PAGES, or one Docling fails on (timeout, crash, OOM), is read
@@ -18,22 +20,24 @@ with PyMuPDF as plain text. That keeps the content but loses heading structure, 
 document is marked with the parser that produced it so the loss is visible.
 """
 import logging
-import multiprocessing
+import subprocess
+import sys
+import tempfile
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 
-import pymupdf
-
 from src.config import get_settings
-from src.ingestion.errors import UnprocessableSourceError
-from src.parsing import docling_child
+from src.errors import UnprocessableSourceError
+from src.parsing import child
 from src.parsing.structure import promote_fake_headings
 
 logger = logging.getLogger(__name__)
 
 TEXT_EXTENSIONS = {".txt", ".md"}
 DOCLING_EXTENSIONS = {".pdf", ".docx"}
+PROJECT_ROOT = Path(__file__).resolve().parents[2]  # the child is started as a module of this package
+QUICK_PARSE_TIMEOUT_SECONDS = 120  # page count and plain text: seconds on any document the upload cap admits
 
 _one_docling_at_a_time = threading.Lock()
 
@@ -53,10 +57,10 @@ def parse_file(path: str) -> ParsedFile:
 
     settings = get_settings()
     if extension == ".pdf":
-        pages = _pdf_page_count(path)
+        pages = int(_run_child("pages", path, QUICK_PARSE_TIMEOUT_SECONDS))
         if pages > settings.docling_max_pages:
             logger.warning(f"PARSE | {pages} pages > DOCLING_MAX_PAGES={settings.docling_max_pages}; using PyMuPDF text")
-            return ParsedFile(_pymupdf_text(path), "pymupdf")
+            return ParsedFile(_run_child("text", path, QUICK_PARSE_TIMEOUT_SECONDS), "pymupdf")
 
     try:
         markdown = _docling_markdown(path, settings.docling_timeout_seconds)
@@ -64,7 +68,7 @@ def parse_file(path: str) -> ParsedFile:
         if extension != ".pdf":
             raise UnprocessableSourceError(f"Could not parse the document: {e}") from e
         logger.warning(f"PARSE | Docling failed ({e}); using PyMuPDF text, which has no heading structure")
-        return ParsedFile(_pymupdf_text(path), "pymupdf")
+        return ParsedFile(_run_child("text", path, QUICK_PARSE_TIMEOUT_SECONDS), "pymupdf")
 
     if extension == ".docx":
         markdown = promote_fake_headings(markdown)
@@ -72,38 +76,27 @@ def parse_file(path: str) -> ParsedFile:
 
 
 def _docling_markdown(path: str, timeout_seconds: int) -> str:
-    """Runs Docling in a fresh spawned process. Raises RuntimeError on error, timeout or a killed child."""
-    context = multiprocessing.get_context("spawn")
     with _one_docling_at_a_time:
-        receiver, sender = context.Pipe(duplex=False)
-        child = context.Process(target=docling_child.convert, args=(path, sender), daemon=True)
-        child.start()
-        sender.close()  # the parent's copy: EOF on the receiver once the child is gone
+        return _run_child("docling", path, timeout_seconds)
+
+
+def _run_child(mode: str, path: str, timeout_seconds: int) -> str:
+    """
+    Runs one parser mode in a fresh process. Raises UnprocessableSourceError when the file itself is
+    unusable, and RuntimeError on a failure of the parser (error, timeout, killed child).
+    """
+    with tempfile.TemporaryDirectory(prefix="nexus-parse-") as scratch:
+        output = Path(scratch) / "out"
         try:
-            if not receiver.poll(timeout_seconds):
-                raise RuntimeError(f"timed out after {timeout_seconds}s")
-            status, payload = receiver.recv()
-        except EOFError:
-            child.join(timeout=5)
-            raise RuntimeError(f"the parser process died (exit code {child.exitcode}; out of memory?)")
-        finally:
-            if child.is_alive():
-                child.kill()
-            child.join(timeout=5)
-            receiver.close()
-    if status != "ok":
-        raise RuntimeError(payload)
-    return payload
-
-
-def _pdf_page_count(path: str) -> int:
-    try:
-        with pymupdf.open(path) as pdf:
-            return pdf.page_count
-    except Exception as e:
-        raise UnprocessableSourceError(f"The PDF could not be opened: {e}") from e
-
-
-def _pymupdf_text(path: str) -> str:
-    with pymupdf.open(path) as pdf:
-        return "\n\n".join(page.get_text() for page in pdf)
+            done = subprocess.run(
+                [sys.executable, "-m", "src.parsing.child", mode, path, str(output)],
+                stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=timeout_seconds, cwd=PROJECT_ROOT,
+            )
+        except subprocess.TimeoutExpired:  # the child is killed before this is raised
+            raise RuntimeError(f"timed out after {timeout_seconds}s") from None
+        if done.returncode == child.REJECTED:
+            raise UnprocessableSourceError(done.stderr.strip() or "The file could not be parsed.")
+        if done.returncode != child.DONE:
+            detail = done.stderr.strip().splitlines()[-1] if done.stderr.strip() else "no message"
+            raise RuntimeError(f"the parser process failed (exit code {done.returncode}; {detail})")
+        return output.read_text(encoding="utf-8")

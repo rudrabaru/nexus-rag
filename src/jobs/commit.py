@@ -4,6 +4,7 @@ from sqlalchemy.engine import Engine
 from src.ingestion.embedding_worker import EmbeddingOutcome
 from src.jobs.contract import IngestionRequest
 from src.retrieving.chunk_writes import delete_stale_chunks, write_chunks
+from src.stores.checkpoints import delete_checkpoints
 from src.stores.fetches import delete_fetched_pages
 from src.stores.jobs import complete_job, delete_ingest_source
 from src.stores.tenants import add_embedding_tokens
@@ -36,3 +37,4 @@ def commit_ingestion(engine: Engine, request: IngestionRequest, outcome: Embeddi
         complete_job(conn, request.job_id, outcome.stats, status=outcome.status, metadata=outcome.metadata, error=error)
         delete_ingest_source(conn, request.job_id)
         delete_fetched_pages(conn, request.job_id)
+        delete_checkpoints(conn, request.job_id)

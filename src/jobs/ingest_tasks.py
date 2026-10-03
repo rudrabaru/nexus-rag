@@ -6,14 +6,9 @@ worker (src/jobs/fetch_tasks.py) and wait in fetched_pages; an upload's bytes wa
 ingest_sources. Everything this module imports is worker-only; the API only knows the task's
 name, queue and payload (src/jobs/contract.py).
 
-Failure handling:
-- UnprocessableSourceError means retrying would produce the same result (no usable content,
-  content too large). It is not re-raised: the job is marked failed and Procrastinate sees
-  the task as having run successfully, so it is never retried.
-- Any other exception is re-raised so Procrastinate retries it with backoff. On the attempt
-  that exhausts the retry budget, the job is also marked failed here, so the domain status
-  (jobs.status) does not stay "processing" once Procrastinate has given up.
+Failures and the recovery of dead workers follow the shared policy in src/jobs/policy.py.
 """
+import asyncio
 import hashlib
 import logging
 import os
@@ -24,12 +19,12 @@ from typing import List
 import procrastinate
 
 from src.crawling.metadata import CrawledDocument
-from src.ingestion.errors import UnprocessableSourceError
+from src.errors import UnprocessableSourceError
 from src.ingestion.pipeline import process_documents
 from src.jobs.commit import commit_ingestion
-from src.jobs.contract import INGEST_QUEUE, INGEST_TASK, INGEST_TASK_NAME, MAX_RETRIES, RECOVERY_CRON, RECOVERY_TASK_NAME, IngestionRequest
-from src.jobs.recovery import recover_stalled_jobs
-from src.jobs.support import Progress, already_finished, job_tag, pipeline_logger
+from src.jobs.contract import INGEST_QUEUE, INGEST_TASK, INGEST_TASK_NAME, MAX_RETRIES, RECOVERY_TASK_NAME, IngestionRequest
+from src.jobs.policy import register_recovery, run_with_policy
+from src.jobs.support import Progress, job_tag, pipeline_logger
 from src.parsing.files import parse_file
 from src.db.engine import get_sync_engine
 from src.stores.documents import DocumentStore
@@ -110,38 +105,10 @@ def _ingest(request: IngestionRequest) -> None:
     retry=procrastinate.RetryStrategy(max_attempts=MAX_RETRIES, exponential_wait=5),
     pass_context=True,
 )
-def ingest_document(context: procrastinate.JobContext, **kwargs) -> None:
+async def ingest_document(context: procrastinate.JobContext, **kwargs) -> None:
+    """The work blocks, so it runs in a thread: the event loop keeps sending the worker's heartbeat meanwhile."""
     request = IngestionRequest(**kwargs)
-    jobs = JobStore(get_sync_engine())
-
-    skip_reason = already_finished(jobs, request.job_id)
-    if skip_reason:
-        logger.info(f"[job={request.job_id[:8]}] not running: {skip_reason}.")
-        return
-
-    try:
-        _ingest(request)
-    except UnprocessableSourceError as e:
-        logger.error(f"[job={request.job_id[:8]}] unprocessable source, not retrying: {e}")
-        jobs.fail_job(request.job_id, str(e))
-    except Exception as e:
-        is_last_attempt = context.job.attempts >= MAX_RETRIES
-        logger.error(
-            f"[job={request.job_id[:8]}] attempt {context.job.attempts + 1}/{MAX_RETRIES + 1} failed: {e}",
-            exc_info=True,
-        )
-        if is_last_attempt:
-            jobs.fail_job(
-                request.job_id,
-                f"Ingestion failed after {context.job.attempts + 1} attempts ({type(e).__name__}); details are in the worker log.",
-            )
-        raise
+    await run_with_policy(context, request, lambda: asyncio.to_thread(_ingest, request), "ingestion")
 
 
-@blueprint.periodic(cron=RECOVERY_CRON, periodic_id="recover-stalled-ingestions")
-@blueprint.task(name=RECOVERY_TASK_NAME, queue=INGEST_QUEUE, lock=RECOVERY_TASK_NAME, pass_context=True)
-async def recover_stalled_ingestions(context: procrastinate.JobContext, timestamp: int) -> None:
-    """Requeues (or fails, once out of retries) ingestion jobs whose worker died. lock= keeps two workers' sweeps from overlapping."""
-    report = await recover_stalled_jobs(context.app.job_manager, JobStore(get_sync_engine()), INGEST_QUEUE, INGEST_TASK)
-    if report.requeued or report.failed:
-        logger.warning(f"Stalled-job sweep: requeued={report.requeued} failed={report.failed}")
+register_recovery(blueprint, INGEST_QUEUE, INGEST_TASK, RECOVERY_TASK_NAME)
