@@ -14,20 +14,26 @@ instead of silently measuring the first stage.
   away (FLASHRANK_MODEL) for an evaluation that wants to measure the trade-off. The hosted
   weights are CC-BY-SA and trained on MS MARCO (non-commercial terms).
 - jina: jina-reranker-v2-base-multilingual over HTTP. Draws on Jina's one-time token grant.
+- voyage: rerank-3 over HTTP. 200M free tokens, but without a payment method the rerank limit is
+  3 requests and 10K tokens a minute (measured 2026-10-02; a bucket separate from embeddings), so
+  requests are paced like embeddings. At that limit a pool of 8 candidates of ~600 tokens fits
+  (3.9K tokens measured) and a pool of 20 (~10K+) was rejected: use a small rerank_candidates.
 
-Voyage rerank and a local bge-reranker-v2-m3 are future options; each is one more class.
+A local bge-reranker-v2-m3 is a future option; it is one more class.
 """
 import asyncio
 import logging
 import threading
 import time
 from pathlib import Path
-from typing import List, Protocol
+from typing import List
 
 import httpx
 
 from src.config import Settings
 from src.retrieving.models import RetrievalResult, RetrievedChunk
+from src.retrieving.rerank_common import RerankError, Reranker, rescored, result
+from src.retrieving.voyage_reranker import VoyageReranker, voyage_rerank_window
 
 logger = logging.getLogger(__name__)
 
@@ -36,28 +42,6 @@ JINA_RERANK_MODEL = "jina-reranker-v2-base-multilingual"
 JINA_COST_PER_1K_TOKENS = 0.000015  # list price, for cost reporting only
 JINA_ATTEMPTS = 3
 JINA_TIMEOUT_SECONDS = 45.0
-
-
-class RerankError(RuntimeError):
-    """The reranker could not score the candidates."""
-
-
-class Reranker(Protocol):
-    name: str
-
-    async def rerank(self, query: str, candidates: List[RetrievedChunk], top_k: int) -> RetrievalResult: ...
-
-
-def _result(query: str, top_k: int, start: float, chunks: List[RetrievedChunk], cost_usd: float = 0.0) -> RetrievalResult:
-    latency = (time.time() - start) * 1000
-    return RetrievalResult(
-        query=query, top_k=top_k, latency_ms=latency, rerank_latency_ms=latency, rerank_cost_usd=cost_usd, chunks=chunks
-    )
-
-
-def _rescored(candidates: List[RetrievedChunk], order: List[tuple], top_k: int) -> List[RetrievedChunk]:
-    """Copies of the candidates in reranked order, carrying the reranker's score. order: (index, score)."""
-    return [candidates[i].model_copy(update={"similarity_score": float(score)}) for i, score in order[:top_k]]
 
 
 class FlashRankReranker:
@@ -90,12 +74,12 @@ class FlashRankReranker:
     async def rerank(self, query: str, candidates: List[RetrievedChunk], top_k: int) -> RetrievalResult:
         start = time.time()
         if not candidates:
-            return _result(query, top_k, start, [])
+            return result(query, top_k, start, [])
         try:
             order = await asyncio.to_thread(self._order, query, candidates)  # CPU-bound: off the event loop
         except Exception as e:
             raise RerankError(f"flashrank: {type(e).__name__}: {e}") from e
-        return _result(query, top_k, start, _rescored(candidates, order, top_k))
+        return result(query, top_k, start, rescored(candidates, order, top_k))
 
 
 class JinaReranker:
@@ -107,7 +91,7 @@ class JinaReranker:
     async def rerank(self, query: str, candidates: List[RetrievedChunk], top_k: int) -> RetrievalResult:
         start = time.time()
         if not candidates:
-            return _result(query, top_k, start, [])
+            return result(query, top_k, start, [])
         if not self.api_key:
             raise RerankError("jina: JINA_API_KEY is not set")
 
@@ -124,7 +108,7 @@ class JinaReranker:
                     body = response.json()
                     order = [(r["index"], r["relevance_score"]) for r in body["results"]]
                     tokens = body.get("usage", {}).get("total_tokens", 0)
-                    return _result(query, top_k, start, _rescored(candidates, order, top_k), tokens / 1000 * JINA_COST_PER_1K_TOKENS)
+                    return result(query, top_k, start, rescored(candidates, order, top_k), tokens / 1000 * JINA_COST_PER_1K_TOKENS)
                 except Exception as e:
                     last_error = e
                     if attempt < JINA_ATTEMPTS - 1:
@@ -141,4 +125,6 @@ def build_reranker(name: str, settings: Settings) -> Reranker:
         return FlashRankReranker(settings.flashrank_model, settings.flashrank_cache_dir or default_flashrank_cache_dir())
     if name == "jina":
         return JinaReranker(settings.jina_api_key)
-    raise ValueError(f"Unknown reranker {name!r}; expected flashrank or jina.")
+    if name == "voyage":
+        return VoyageReranker(settings.voyage_api_key, settings.voyage_base_url, settings.voyage_rerank_model, voyage_rerank_window(settings))
+    raise ValueError(f"Unknown reranker {name!r}; expected flashrank, jina or voyage.")

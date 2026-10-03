@@ -6,6 +6,12 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger(__name__)
 
+# The Settings field holding each LLM provider's API key. litellm reads the same variables
+# (GEMINI_API_KEY, ...) from the environment when it makes the call.
+LLM_PROVIDER_KEY_FIELDS = {
+    "gemini": "gemini_api_key", "groq": "groq_api_key", "openai": "openai_api_key", "mistral": "mistral_api_key",
+}
+
 
 class Settings(BaseSettings):
     """
@@ -29,6 +35,7 @@ class Settings(BaseSettings):
     gemini_api_key: str = ""
     groq_api_key: str = ""
     openai_api_key: str = ""
+    mistral_api_key: str = ""  # bulk generation and judging: test-set generation (src/testsets), experiment models
 
     llm_provider: str = "gemini"
     llm_model_name: str = ""
@@ -43,6 +50,7 @@ class Settings(BaseSettings):
     # verified 2026-09-26). Adding a payment method raises them; free tokens still apply.
     voyage_rpm: int = 3
     voyage_tpm: int = 10_000
+    voyage_rerank_model: str = "rerank-3"  # rerank-3 is current; rerank-2.5 legacy. Same 3 RPM / 10K TPM card-free limit, separate from embeddings
     ollama_base_url: str = "http://localhost:11434"
 
     # Page fetching (src/fetching): only hosted reader APIs ever contact a third-party site.
@@ -63,7 +71,7 @@ class Settings(BaseSettings):
 
     # Chat's default retrieval (src/retrieving/config.py); an evaluation sets its own.
     retrieval_strategy: str = "hybrid"  # dense | sparse | hybrid
-    # The reranker a query's use_reranker flag applies: flashrank | jina | none.
+    # The reranker a query's use_reranker flag applies: flashrank | jina | voyage | none.
     reranker: str = "flashrank"
     enable_reranker: Optional[bool] = None  # legacy: false means RERANKER=none
     flashrank_model: str = "ms-marco-TinyBERT-L-2-v2"
@@ -100,6 +108,11 @@ class Settings(BaseSettings):
     def denied_fetch_domains(self) -> List[str]:
         return [d.lower() for d in _csv(self.fetch_denied_domains)]
 
+    def has_llm_key(self, provider: str) -> bool:
+        """False when the provider is known and its key is empty. Unknown providers are left to litellm."""
+        field = LLM_PROVIDER_KEY_FIELDS.get(provider.lower())
+        return field is None or bool(getattr(self, field))
+
     def missing_required(self) -> List[str]:
         """Names of settings that must be set (or valid) before the API can serve traffic."""
         problems = []
@@ -116,23 +129,22 @@ class Settings(BaseSettings):
 
         if self.retrieval_strategy.lower() not in ("dense", "sparse", "hybrid"):
             problems.append("RETRIEVAL_STRATEGY (dense | sparse | hybrid)")
-        if self.reranker.lower() not in ("flashrank", "jina", "none"):
-            problems.append("RERANKER (flashrank | jina | none)")
+        if self.reranker.lower() not in ("flashrank", "jina", "voyage", "none"):
+            problems.append("RERANKER (flashrank | jina | voyage | none)")
         elif self.effective_reranker == "jina" and not self.jina_api_key:
             problems.append("JINA_API_KEY (RERANKER=jina)")
+        elif self.effective_reranker == "voyage" and not self.voyage_api_key:
+            problems.append("VOYAGE_API_KEY (RERANKER=voyage)")
 
-        provider_key = {"gemini": "gemini_api_key", "groq": "groq_api_key", "openai": "openai_api_key"}.get(
-            self.llm_provider.lower()
-        )
-        if provider_key and not getattr(self, provider_key):
-            problems.append(provider_key.upper())
+        if not self.has_llm_key(self.llm_provider):
+            problems.append(LLM_PROVIDER_KEY_FIELDS[self.llm_provider.lower()].upper())
         return problems
 
     def warn_on_legacy_secrets(self) -> None:
         if self.rag_api_key and not self.admin_api_key:
             logger.warning("RAG_API_KEY is deprecated; set ADMIN_API_KEY instead.")
         if self.enable_reranker is not None:
-            logger.warning("ENABLE_RERANKER is deprecated; set RERANKER=flashrank | jina | none instead.")
+            logger.warning("ENABLE_RERANKER is deprecated; set RERANKER=flashrank | jina | voyage | none instead.")
 
 
 def _csv(value: str) -> List[str]:

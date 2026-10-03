@@ -21,7 +21,7 @@ Every query-time retrieval knob lives in one `RetrievalConfig`:
 | `top_k` | 5 | results returned |
 | `rrf_k` | 60 | RRF constant (Cormack et al. 2009's value, not tuned here) |
 | `dense_weight`, `sparse_weight` | 1.0, 1.0 | weight of each ranking in the fusion; 0 skips that search |
-| `reranker` | none | `flashrank` or `jina` |
+| `reranker` | none | `flashrank`, `jina` or `voyage` |
 | `rerank_candidates` | 20 | first-stage pool the reranker reorders (≤ 80, see ef_search below) |
 | `index_id` | configured index | which embedding index to search |
 
@@ -61,6 +61,9 @@ A cross-encoder reads the query and each candidate together and scores their joi
 |---|---|---|---|
 | **FlashRank** (default) | In the API process, ONNX on CPU, no torch | $0 | Model `ms-marco-TinyBERT-L-2-v2`, baked into the API image. Reads up to 512 tokens per passage |
 | **Jina** | Hosted API | Draws on Jina's one-time grant | `jina-reranker-v2-base-multilingual` |
+| **Voyage** | Hosted API | 200M free tokens, then $0.05 per 1M (`rerank-3`) | Paced to its own limit, below |
+
+**Voyage's card-free limit, measured** (2026-10-02, on this project's key): rerank is limited to **3 requests and 10K tokens a minute**, a bucket separate from embeddings (an embedding call succeeded while rerank was rate-limited). Voyage counts the documents' tokens plus the query once per document: a pool of 8 passages of about 600 tokens cost 3,896 tokens and was accepted, while a pool of 20 (about 10K tokens) was rejected with a 429. So at that limit the reranker is only usable with a small `rerank_candidates` (about 8) and one query every 20 seconds or so. Requests are paced with the same window class as embeddings; a 429 waits one request slot (60 s / requests per minute) and is retried twice, then raises, so the pipeline records the run as degraded rather than silently returning the first-stage order. Adding a payment method would lift these limits, which the spend rule excludes.
 
 **Model choice, measured** (2026-09-29, 20 candidates of ~600 tokens, 16 CPU threads): TinyBERT-L-2 ~95 ms, MiniLM-L-12 ~1.95 s per rerank; both ranked the answering passage first in the spike. The free API host has 0.1 vCPU, where MiniLM would take on the order of 20 seconds, so TinyBERT is the default and MiniLM is one setting away (`FLASHRANK_MODEL`) for an evaluation that measures the quality/latency trade-off. FlashRank's hosted weights are CC-BY-SA and trained on MS MARCO, whose terms are non-commercial.
 
