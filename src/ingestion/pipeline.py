@@ -18,6 +18,7 @@ from src.embedding.generator import EmbeddingGenerator
 from src.embedding.providers import build_embedder
 from src.ingestion.embedding_worker import EmbeddingOutcome, EmbeddingWorker
 from src.errors import UnprocessableSourceError
+from src.processing.block_parser import BlockParser
 from src.processing.cleaner import DocumentCleaner
 from src.processing.models import Block
 from src.stores.checkpoints import CheckpointStore
@@ -81,7 +82,7 @@ def process_documents(
 
     # Block document frequency is only measurable across the documents of one job (a sitemap).
     cleaner = DocumentCleaner(total_documents=len(crawled_docs))
-    all_blocks = [cleaner.parse_blocks(doc.markdown_content) for doc in crawled_docs]
+    all_blocks = [BlockParser.parse_blocks(doc.markdown_content) for doc in crawled_docs]
     if len(crawled_docs) > 1:
         cleaner.process_corpus_frequencies(all_blocks)
 
@@ -94,7 +95,8 @@ def process_documents(
     chunker = DocumentChunker(config=ChunkingConfig(source_version="v_live", output_version="v_live"))
     all_chunks = chunker.chunk_batch(chunk_input_docs)
     if not all_chunks:
-        raise UnprocessableSourceError("No chunk could be produced from the extracted content.")
+        detail = f" ({chunker.failures[0].reason})" if chunker.failures else ""
+        raise UnprocessableSourceError(f"No chunk could be produced from the extracted content{detail}.")
     for c in all_chunks:
         c.tenant_id = tenant_id
         c.doc_id = doc_id
@@ -108,6 +110,10 @@ def process_documents(
         build_embedder(get_settings()), CheckpointStore(get_sync_engine()), job_id
     )
     outcome = EmbeddingWorker(generator).embed(all_chunks, update_progress, pipeline_logger, job_id)
+    if chunker.failures:
+        outcome.unchunked_sources = [failure.url for failure in chunker.failures]
+        note = f"{len(chunker.failures)} document(s) could not be chunked and are not indexed (first: {chunker.failures[0].reason})."
+        outcome.error_reason = " ".join(filter(None, [outcome.error_reason, note]))
 
     if pipeline_logger:
         pipeline_logger.log_event(

@@ -6,7 +6,7 @@ transaction (src/jobs/commit.py), so a crash mid-embedding leaves no partial doc
 """
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
 from src.embedding.models import EmbeddedChunk
@@ -27,6 +27,7 @@ class EmbeddingOutcome:
     total_chunks: int
     error_reason: Optional[str]
     provider_tokens: int = 0  # as reported by the embedding provider; 0 when it reported none
+    unchunked_sources: List[str] = field(default_factory=list)  # documents the chunker failed on; they are in no chunk
 
     @property
     def total_tokens(self) -> int:
@@ -35,7 +36,7 @@ class EmbeddingOutcome:
 
     @property
     def status(self) -> str:
-        return "partial_success" if self.failed_indices else "complete"
+        return "partial_success" if self.failed_indices or self.unchunked_sources else "complete"
 
     @property
     def stats(self) -> Dict[str, int]:
@@ -43,10 +44,11 @@ class EmbeddingOutcome:
 
     @property
     def metadata(self) -> Optional[Dict[str, Any]]:
-        if not self.failed_indices:
+        if not self.failed_indices and not self.unchunked_sources:
             return None
         return {
             "failed_chunk_indices": self.failed_indices,
+            "unchunked_sources": self.unchunked_sources[:20],
             "embedded": len(self.chunks),
             "total": self.total_chunks,
             "error_reason": self.error_reason,

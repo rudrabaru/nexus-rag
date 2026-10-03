@@ -26,10 +26,6 @@ logger = logging.getLogger(__name__)
 
 USER_AGENT = "NexusRAG"  # the robots.txt user agent readers check on our behalf
 READ_TIMEOUT_SECONDS = 60.0
-# Below this many words a page is treated as unreadable (login wall, bot block, empty shell),
-# not as a short document, and the next reader is tried. Carried over from the previous web
-# adapter; a page this short cannot yield a useful chunk.
-MIN_READABLE_WORDS = 30
 
 
 class RobotsBlockedError(Exception):
@@ -113,9 +109,14 @@ async def read_page(url: str, firecrawl_api_key: str = "") -> FetchedPage:
 
 
 def _readable(page: FetchedPage) -> FetchedPage:
-    words = len(page.markdown.split())
-    if words < MIN_READABLE_WORDS:
-        raise ReaderError(f"{page.provider}: only {words} words extracted (login wall, bot block or empty page)")
+    """
+    A page with no words at all is an empty shell and the next reader is tried. A short page is not
+    rejected for being short: length is not evidence that content is useless, and a login wall or bot
+    block that comes back for several URLs is recognised by being identical across them (the fetch
+    job skips repeats of the same content).
+    """
+    if not page.markdown.split():
+        raise ReaderError(f"{page.provider}: no text extracted (empty page)")
     return page
 
 

@@ -84,7 +84,7 @@ fetch_log = Table(
     Column("tenant_id", Text, nullable=False),
     Column("job_id", Text),
     Column("url", Text, nullable=False),
-    Column("outcome", Text, nullable=False),  # fetched | sitemap | sitemap_child | robots_blocked | denied | failed | quota_exceeded
+    Column("outcome", Text, nullable=False),  # fetched | sitemap | sitemap_child | robots_blocked | denied | failed | quota_exceeded | duplicate_content
     Column("provider", Text),
     Column("detail", Text),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=now()),

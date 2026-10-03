@@ -6,7 +6,11 @@ from .metadata import ChunkingConfig
 def merge_tiny_chunks(
     chunks: List[ChunkMetadata], config: ChunkingConfig
 ) -> List[ChunkMetadata]:
-    """Merges tiny or incomplete chunks into neighboring related chunks."""
+    """
+    Merges tiny or incomplete chunks into the chunk after them when they share a heading path or
+    are its parent. A small chunk that has no such neighbour stays small: a short section is a valid
+    chunk, and merging it across headings would blur what the chunk is about.
+    """
     if not chunks:
         return []
 
@@ -29,32 +33,15 @@ def merge_tiny_chunks(
             current.content_type == "table" and next_chunk.content_type == "table"
         ) or (current.content_type == "code" and next_chunk.content_type == "code")
 
-        # Hierarchy checks
-        # Sibling: same parent path
-        is_sibling = False
-        if (
-            len(current.heading_path) == len(next_chunk.heading_path)
-            and len(current.heading_path) > 0
-        ):
-            if current.heading_path[:-1] == next_chunk.heading_path[:-1]:
-                is_sibling = True
-
-        # Parent-Child: next is child of current
-        is_parent_child = False
-        if len(current.heading_path) < len(next_chunk.heading_path):
-            if (
-                next_chunk.heading_path[: len(current.heading_path)]
-                == current.heading_path
-            ):
-                is_parent_child = True
-
-        # Same Exact Path
+        # Only content under the same heading path, or under a path the current chunk is the parent of
+        # (a section's introduction and its first subsection), may be merged. Siblings are different
+        # topics: joining two small ones would give a chunk two unrelated meanings under one path.
         is_same_path = current.heading_path == next_chunk.heading_path
-
-        # Are they related enough to consider merging?
-        is_related = is_same_path or is_parent_child or is_sibling
-        if not current.heading_path or not next_chunk.heading_path:
-            is_related = True  # Top level elements
+        is_parent_child = (
+            len(current.heading_path) < len(next_chunk.heading_path)
+            and next_chunk.heading_path[: len(current.heading_path)] == current.heading_path
+        )
+        is_related = is_same_path or is_parent_child
 
         should_merge = False
 

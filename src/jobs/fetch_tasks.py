@@ -15,6 +15,7 @@ Per job:
 4. The ingest task is deferred; it reads the pages from fetched_pages.
 """
 import asyncio
+import hashlib
 import logging
 
 import procrastinate
@@ -58,6 +59,11 @@ def _pacer(min_interval: float) -> DomainPacer:
     if min_interval not in _pacers:
         _pacers[min_interval] = DomainPacer(min_interval)
     return _pacers[min_interval]
+
+
+def content_key(markdown: str) -> str:
+    """Identifies a page by its text alone, ignoring whitespace differences."""
+    return hashlib.sha256(" ".join(markdown.split()).encode("utf-8")).hexdigest()
 
 
 def _indexed_urls(request: IngestionRequest) -> set:
@@ -124,7 +130,8 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
     quota_left = settings.fetch_daily_page_quota - await asyncio.to_thread(fetches.pages_fetched_today, request.tenant_id)
     logger.info(f"{tag} FETCH | {len(urls)} urls, {len(urls) - len(pending)} already done, quota left today {quota_left}")
 
-    fetched, robots_blocked, denied, failed, over_quota = [], [], [], [], []
+    fetched, robots_blocked, denied, failed, over_quota, duplicates = [], [], [], [], [], []
+    seen_content = set()
     for position, url in enumerate(pending, start=1):
         if len(fetched) >= quota_left:
             over_quota.append(url)
@@ -148,10 +155,16 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
             failed.append(url)
             await audit(url, "failed", detail=str(e))
         else:
+            key = content_key(page.markdown)
+            if key in seen_content:  # the same text under another URL: a block page or a mirrored template
+                duplicates.append(url)
+                await audit(url, "duplicate_content", page.provider, "identical to a page already fetched in this job")
+                continue
+            seen_content.add(key)
             await asyncio.to_thread(fetches.store_fetched_page, request.job_id, url, page.title, page.markdown, page.provider)
             await audit(url, "fetched", page.provider, f"{len(page.markdown)} chars")
             fetched.append(url)
-        await report(2 + int(46 * position / len(pending)), _summary(urls, fetched, robots_blocked, denied, failed, over_quota))
+        await report(2 + int(46 * position / len(pending)), _summary(urls, fetched, robots_blocked, denied, failed, over_quota, duplicates))
 
     stored = await asyncio.to_thread(fetches.fetched_urls, request.job_id)
     if not stored:
@@ -160,7 +173,7 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
             raise ReaderError(reason)
         raise UnprocessableSourceError(reason)
 
-    await report(50, _summary(urls, fetched, robots_blocked, denied, failed, over_quota))
+    await report(50, _summary(urls, fetched, robots_blocked, denied, failed, over_quota, duplicates))
     try:
         await app.configure_task(
             INGEST_TASK, queue=INGEST_QUEUE, lock=request.doc_id, queueing_lock=f"ingest-{request.job_id}"
@@ -170,10 +183,11 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
     logger.info(f"{tag} FETCH DONE | stored={len(stored)} robots_blocked={len(robots_blocked)} failed={len(failed)}")
 
 
-def _summary(urls, fetched, robots_blocked, denied, failed, over_quota) -> dict:
+def _summary(urls, fetched, robots_blocked, denied, failed, over_quota, duplicates) -> dict:
     summary = {
         "total_pages": len(urls), "fetched_pages": len(fetched), "failed_pages": len(failed),
         "robots_blocked_pages": len(robots_blocked), "denied_pages": len(denied), "quota_skipped_pages": len(over_quota),
+        "duplicate_pages": len(duplicates),
     }
     if robots_blocked:
         summary["robots_blocked_urls"] = robots_blocked[:MAX_LISTED_URLS_IN_METADATA]

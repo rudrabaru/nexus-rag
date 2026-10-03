@@ -19,15 +19,30 @@ Certain structural elements must remain completely intact to preserve their sema
 ### Soft Targets and Hard Limits
 While the engine prioritizes semantic coherence, it respects the physical constraints of downstream embedding models.
 - **Target Size:** The system aims for an optimal chunk size that balances contextual density with retrieval precision.
-- **Maximum Thresholds:** A strict upper token limit is enforced. If an atomic section naturally exceeds this limit, it falls back to a secondary splitting strategy, carefully breaking long passages by natural paragraph boundaries or single newlines as a last resort.
+- **Maximum Thresholds:** The embedding limit (2,000 tokens) is never exceeded, and nothing is cut off to meet it. A block over the limit (less the overlap that is prepended to the chunk after it) is **split**: text at line boundaries, and inside one over-long line at word boundaries; code at line boundaries, each piece re-fenced; a table at row boundaries, each piece repeating the header row (and the heading line above it), so a row is never read without its column names. Every line reaches the index. A document whose chunking fails is skipped and recorded on the job (`unchunked_sources`, job ends `partial_success` with the reason) instead of vanishing silently.
 
 ### Small Chunk Merging
 A common issue in structure-based chunking is the creation of fragmented, tiny chunks (e.g., a heading with only a single short sentence beneath it). The system implements an intelligent merging step:
-- It aggregates small, adjacent chunks that share the same parent heading hierarchy until they reach the optimal target size.
-- This prevents sparse chunks that lack sufficient context for accurate similarity matching.
+- A small chunk is merged into the one after it only when both share a **heading path**, or the small chunk is the **parent** of the next (a section's introduction and its first subsection). A heading-only chunk always merges into its own body.
+- **Siblings are never merged.** Two small sections under the same parent are different topics; joining them gives one chunk two unrelated meanings under a single path, which conflicts with treating the heading hierarchy as a retrieval signal. A small chunk with no related neighbour stays small: a short section is a valid chunk, and the `[document > heading path]` prefix gives it context when embedded.
+- *Measured trade-off (2026-10-03, this repository's 11 Markdown documents, as a stand-in until a real corpus is ingested):* before, 87 chunks with 11 under 150 tokens (median 276); after, 112 chunks with 38 under 150 (median 219). More, smaller chunks is the intended price. *Experiment:* whether it helps or hurts retrieval must be measured on the first real corpus before this rule is called settled.
 
 ### Prose Overlap
 To maintain context between adjacent chunks and avoid cutting off thoughts abruptly, a controlled overlap is introduced at the boundaries. Crucially, this overlap is restricted to prose; atomic blocks (like code or tables) are explicitly excluded from overlap duplication to prevent noise, redundancy, and artificially inflated similarity scores during retrieval.
+
+### Thresholds And Their Status
+
+| Value | Setting | Rationale / status |
+|---|---|---|
+| Target chunk size | 600 tokens | Sizing audit (below): the median and p90 of the prototype corpus sat at 574 and 632 with no retrieval defect traced to size. Experiment: not yet compared with other sizes. |
+| Maximum chunk size | 800 tokens | A code block or table may push a chunk past the target up to this size to stay whole. Experiment. |
+| Overlap | 125 tokens, prose only | Roughly one short paragraph of context across a boundary; code and tables are excluded so structured data is never duplicated. Experiment. |
+| Minimum chunk size | 150 tokens | Below this a chunk is a merge candidate (subject to the heading rule above); it is not a rule that small chunks are wrong. Experiment. |
+| Tiny chunk | under 40 tokens | A heading with at most a line or two; always merged into its own body. |
+| Embedding limit | 2,000 tokens | Well under the embedding model's input limit, leaving room for the heading-path prefix. A block over it is split. |
+| Wall of text | 5,000 characters, cut at about 3,000 | A paragraph of about 1,000 words with no blank line to cut at. Experiment: set from one documentation corpus. |
+
+Token counts use `cl100k_base`, with special-token strings such as `<|endoftext|>` encoded as ordinary text (a page about language models mentions them).
 
 ## Corpus Audit (2026-09-22)
 

@@ -1,9 +1,5 @@
 """Token counting with tiktoken (cl100k_base), shared by every chunking step."""
-import logging
-
 import tiktoken
-
-logger = logging.getLogger(__name__)
 
 
 class TokenCounter:
@@ -11,10 +7,11 @@ class TokenCounter:
         self.encoding = tiktoken.get_encoding(encoding_name)
 
     def count_tokens(self, text: str) -> int:
+        """
+        Special-token strings such as <|endoftext|> are ordinary text in a document (a page about
+        LLMs mentions them), so they are encoded as text. tiktoken refuses them by default, which
+        used to make the count 0 and the chunk look empty.
+        """
         if not text:
             return 0
-        try:
-            return len(self.encoding.encode(text))
-        except Exception as e:
-            logger.error(f"Error counting tokens: {e}")
-            return 0
+        return len(self.encoding.encode(text, disallowed_special=()))

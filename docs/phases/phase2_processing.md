@@ -36,6 +36,18 @@ A block is removed if it passes an objective, data-driven threshold:
 
 > **Corpus-Independence Rule:** No specific text, heading title, or keyword (e.g., "Related Links") is ever hardcoded as a removal trigger. Removal is always driven by statistical evidence from the corpus itself.
 
+### Evidence Required Before Frequency Counts
+Document frequency is only evidence when enough documents were compared. A block must appear in **at least 3 documents** (`MIN_SHARING_DOCUMENTS`) before its frequency is used at all. With two documents, any shared sentence has a frequency of 100%, and sharing a sentence between a pair is common for real content (a quoted definition, a licence line), so the ratio alone cannot separate chrome from coincidence. With fewer than three sharing documents, the block is kept. *Experiment:* three is the smallest count that is a pattern rather than a pair; it was set by reasoning, not tuned on a corpus. Measure removals per document on each new corpus before raising it.
+
+### Shared Block Protection
+Fenced code and tables are hidden behind placeholders while text is split by headings and blank lines, so a `#` inside a code block never reads as a heading and a blank line inside a fence never ends a block. One implementation (`src/protected_markdown.py`) serves both the cleaner and the chunker, so they cannot disagree about what a block is. Placeholders are delimited by NUL, which is stripped from the document first: no document can contain one, so text that merely looks like a placeholder is left alone. (Postgres cannot store NUL in text, so stripping it is required in any case.) The pattern for a table stops before the newline that ends its last row, which keeps a heading next to a table on its own line.
+
+### Fake Headings
+Bold-only lines are promoted to headings only in a document that has **no** real headings (outside code fences). Where the parser recovered a structure, a bold line is emphasis inside it, and promoting it would invent sections the author did not make.
+
+### Pages Are Not Dropped For Being Short
+A fetched page is rejected only when it has no words at all. Length is not evidence that content is useless, and a login wall or bot block that comes back for many URLs is recognised structurally instead: within one fetch job, a page whose text (ignoring whitespace) is identical to one already fetched is skipped and audited as `duplicate_content`. A single short page is kept.
+
 ### Inspecting What Was Removed
 Every document logs its word count before and after cleaning and how many blocks were removed (`CLEAN | <url> | words 1200 -> 1105 | blocks removed 4/61`). At DEBUG level each removed block is logged with the signals that removed it and its first 80 characters, so a removal can always be traced to measured evidence. When cleaning leaves under 50 characters, the raw Markdown is chunked instead: that outcome is treated as a cleaner failure, not as an empty document.
 

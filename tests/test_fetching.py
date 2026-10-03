@@ -82,12 +82,18 @@ async def test_firecrawl_is_not_used_without_a_key(web):
     assert [r.url.host for r in seen] == ["r.jina.ai"]
 
 
-@pytest.mark.parametrize("response", [jina_page(content="Access denied"), jina_page(http_status=404)])
-async def test_an_unreadable_page_is_an_error_not_a_short_document(web, response):
+@pytest.mark.parametrize("response", [jina_page(content="  "), jina_page(http_status=404)])
+async def test_an_empty_or_missing_page_is_an_error(web, response):
     routes, _ = web
     routes["r.jina.ai"].append(response)
     with pytest.raises(ReaderError):
         await read_page("https://a.example/x")
+
+
+async def test_a_short_page_is_kept_because_short_is_not_evidence_of_uselessness(web):
+    routes, _ = web
+    routes["r.jina.ai"].append(jina_page(content="Access denied"))
+    assert (await read_page("https://a.example/x")).markdown == "Access denied"
 
 
 # ── Sitemaps ─────────────────────────────────────────────────────────────────
