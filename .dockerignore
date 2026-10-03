@@ -12,6 +12,8 @@ logs.txt
 retrieval/
 scratch/
 evaluations/
+evaluation_datasets/
+.claude/
 test_results_*.json
 
 # Development-only files
@@ -19,8 +21,8 @@ test_results_*.json
 .github/
 .venv/
 venv/
-__pycache__/
-*.py[cod]
+**/__pycache__/
+**/*.py[cod]
 .pytest_cache/
 .ruff_cache/
 .coverage
@@ -29,7 +31,7 @@ htmlcov/
 .idea/
 tests/
 docs/
-*.md
-*.pptx
+**/*.md
+**/*.pptx
 Dockerfile*
 .dockerignore

@@ -53,6 +53,27 @@ def test_judgement_ranks_the_first_relevant_and_first_exact_chunk():
     assert j.matches == [NONE, PARTIAL, EXACT] and (j.rank, j.exact_rank) == (2, 3)
 
 
+def test_chunk_level_relevance_counts_only_the_named_source_chunks():
+    q = query(["3.13.html"], source_chunk_ids=["c2"])
+    j = judge([chunk("c1"), chunk("c2"), chunk("c3")], q, relevance="chunk")
+    assert j.matches == [NONE, EXACT, NONE] and (j.rank, j.exact_rank) == (2, 2)
+    assert judge([chunk("c1")], q).rank == 1  # document-level relevance still accepts the right document
+
+
+def test_chunk_level_relevance_needs_ground_truth_on_every_query():
+    with_ids, without = query(source_chunk_ids=["c1"]), EvaluationQuery(query="other", acceptable_documents=["d"])
+    assert integrity_problems([with_ids, without]) == []
+    assert any("source_chunk_ids" in p for p in integrity_problems([with_ids, without], relevance="chunk"))
+
+
+def test_an_experiment_defaults_to_document_relevance_and_rejects_unknown_modes():
+    base = {"name": "x", "dataset": "d.json", "tenant_id": "demo", "trials": {"a": {}}}
+    assert ExperimentSpec(**base).relevance == "document"
+    assert ExperimentSpec(**base, relevance="chunk").relevance == "chunk"
+    with pytest.raises(ValidationError):
+        ExperimentSpec(**base, relevance="paragraph")
+
+
 # ── Metrics ───────────────────────────────────────────────────────────────────
 
 def run(rank, **extra):

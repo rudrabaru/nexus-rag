@@ -15,10 +15,10 @@ A dataset is a JSON list of queries. Each names the documents that would answer 
  "acceptable_headings": ["PEP 594: Remove"], "difficulty": "Easy", "category": "technical_docs"}
 ```
 
-Relevance is judged by document and heading, never by chunk id, so a dataset survives re-chunking and re-embedding, and a query can have several valid sources. An experiment copies its queries into its own row and records the file's SHA-256, so editing the file later cannot change what an experiment measured. Empty or duplicate queries are rejected before anything runs.
+By default relevance is judged by document and heading, never by chunk id, so a dataset survives re-chunking and re-embedding, and a query can have several valid sources. Optional fields: `source_chunk_ids` (the exact chunks that answer it, for chunk-level relevance), `reference_answer`, `origin` (`"synthetic"` for generated queries, see Synthetic Test Sets) and `lexical_overlap`. An experiment copies its queries into its own row and records the file's SHA-256, so editing the file later cannot change what an experiment measured. Empty or duplicate queries are rejected before anything runs.
 
 ### Relevance
-A retrieved chunk is relevant when an acceptable document matches its source (a substring, or a contiguous run of the document's alphanumeric tokens: `3.13.html` matches `.../whatsnew/3.13.html`). With acceptable headings, the match is *exact* when a heading also appears in the chunk's section title or heading path, and *partial* when only the document matched. Both count as relevant; *exact* also sets an exact rank. These are the previous harness's rules unchanged, so results stay comparable.
+A retrieved chunk is relevant when an acceptable document matches its source (a substring, or a contiguous run of the document's alphanumeric tokens: `3.13.html` matches `.../whatsnew/3.13.html`). With acceptable headings, the match is *exact* when a heading also appears in the chunk's section title or heading path, and *partial* when only the document matched. Both count as relevant; *exact* also sets an exact rank. These are the previous harness's rules unchanged, so results stay comparable. An experiment can instead set `"relevance": "chunk"`: a chunk is relevant only if its id is in the query's `source_chunk_ids` (see Synthetic Test Sets for when that is the right tool).
 
 ### Experiments
 A spec file describes one experiment; each trial is a full `RetrievalConfig` (Phase 5):
@@ -81,6 +81,45 @@ With `generation` in the spec, each valid run is also answered (Phase 7's contex
 - **Caches in Postgres.** An answer is keyed by (tenant, model, full prompt) and a verdict by (tenant, metric, judge model, question, answer, sorted context chunk ids). Configurations that retrieve the same context build the same prompt, so it is generated and judged once: for example, two `top_k` values that end with the same chunks after reranking. Hit counts are recorded with the experiment. A cached answer still carries its original cost, so each configuration shows what it costs. The tenant is part of every key, so cached content never crosses workspaces.
 - **Judge choice.** Defaults to the configured chat model. A judge from a different model family than the generator is better practice (self-preference bias). The judge is the single-score faithfulness prompt for now; RAGAS metrics are item 12.
 
+## Synthetic Test Sets
+A hand-written benchmark does not scale to a new corpus, and the prototype's was too easy to see real defects (below). `src/testsets/` has an LLM write questions from the corpus's own chunks, so every question has **exact ground truth: the chunk it was written from**. It runs on the laptop, calls only the LLM provider, and makes no embedding calls (Voyage's 3 requests a minute is not touched).
+
+```
+python -m src.testsets generate --tenant demo --count 50      # chunks -> a draft of questions   (--dry-run, --show-prompt)
+python -m src.testsets review evaluation_datasets/demo.draft.json   # accept / edit / reject / skip each one
+python -m src.testsets finalize evaluation_datasets/demo.draft.json evaluation_datasets/demo.json
+python -m src.testsets verify evaluation_datasets/demo.json --tenant demo
+```
+Then point an experiment spec at the dataset, with `"relevance": "chunk"` to score by exact chunk or the default `"document"`. A report labels a set whose queries are all synthetic as *SYNTHETIC*.
+
+### How a question is made
+1. **Sampling.** The tenant's chunks of one embedding index are grouped by identical text. A group is one question source, and **every chunk in the group is ground truth** (`source_chunk_ids`, and all their documents in `acceptable_documents`): any of them answers the question equally well, so naming only one would score a correct retrieval as a miss. Nothing is dropped as a duplicate. Groups are interleaved round-robin across documents (seeded), so a long document cannot dominate the set.
+2. **Generation.** One call per group with a structured reply (`answerable`, `question`, `answer`). The model may **abstain**: whether a passage holds a question worth asking is the model's call, so no length or keyword rule decides which parts of the corpus get tested. Difficulty tiers cycle `easy` (may reuse the passage's terms), `medium` (paraphrase) and `hard` (no distinctive terms: synonyms, indirect descriptions, the reader's situation instead of the feature name), the stress-test tier AGENTS.md asks for. The prompt contains nothing about any corpus; `category` is structural (`code`, `table` or `prose`, from what the chunk holds).
+3. **Quality signal.** Each question records its **lexical overlap** with its source chunk (the share of its words that also appear there). It is a signal, never a filter. A tier that is not less lexical than the one before it is reported as a warning at the end of `generate`: the tiers are claims to verify, not facts.
+4. **Review.** A person sees each question beside its source chunk and accepts, edits (overlap is recomputed) or rejects it. Questions can be unanswerable from the chunk, ambiguous without context, or answered as well by another passage; only a reader catches that. Every decision is saved at once, so reviews and generation are resumable (a failed call is retried on resume, a handled chunk is not asked again).
+5. **Finalize.** Accepted questions become a JSON list in the engine's format (extra fields: `source_chunk_ids`, `reference_answer`, `origin: "synthetic"`, `lexical_overlap`), hashed like any dataset. The draft file (chunk text, rejected questions) is working state and is git-ignored; the dataset is the artifact.
+
+### Chunk-level relevance
+Document/heading relevance cannot tell two chunks of the right section apart, which is why the prototype benchmark missed defects that moved 10 of 38 top-1 chunks. With `"relevance": "chunk"` a chunk is relevant only if its id is one of the query's `source_chunk_ids`.
+
+Tradeoffs, stated plainly:
+- **Strict, therefore a lower bound.** A different chunk may answer the question as well (near-duplicates, overlapping sections) and still count as a miss. Only identical texts are grouped. Run both modes and read the gap: a large gap means the right content is being found in the wrong chunk, or that the set has ambiguous questions.
+- **Tied to this chunking.** Chunk ids come from the URL and the chunk's position, so re-chunking invalidates them (document/heading ground truth survives). `python -m src.evaluation run` refuses a chunk-mode experiment whose source chunks are missing from the tenant, and `src.testsets verify` checks a dataset at any time. After re-chunking, regenerate; do not edit ids by hand.
+- **Synthetic bias.** Questions come from the corpus's own passages and an LLM's phrasing. Absolute scores are optimistic; use the set to compare configurations, and read the hard tier on its own.
+
+### Parameters (each an experiment, none tuned on a corpus yet)
+| Parameter | Value | Why | Cost of being wrong |
+|---|---|---|---|
+| generation temperature | 0.3 | each call is a different passage, so little extra randomness is needed; low keeps the question tied to the text | too low gives stiff phrasing; too high invents facts (the reviewer is the guard) |
+| call spacing | 1.1 s | Mistral's free tier allows 1 request a second; 10% margin | slower than needed on a provider with a higher limit (`--min-interval`) |
+| abort after | 5 consecutive failures | the client already retries a transient error three times with backoff, so five failed chunks in a row means the provider is down, not unlucky | a flaky provider stops a run that would have finished; it resumes where it stopped |
+| overlap word length | 3+ characters | sets short function words aside without a language-specific stop list | a crude measure: it only compares tiers on one corpus |
+
+The model is **pinned** (no fallback): a test set's character must not depend on which provider happened to be up. The draft records the model, seed, index and tiers, and refuses to resume with different ones.
+
+### Not yet validated
+The code is covered by unit and integration tests with a fake LLM; **no live generation has run**, because the database holds no corpus yet and no Mistral key is configured. The first job on a real corpus is therefore the acceptance test: ingest a small public corpus, generate about 50 questions, check the tier warning and the per-tier overlap, review them, and run a first experiment in both relevance modes. Expect to adjust the prompt after reading real questions.
+
 ## Prototype-Corpus Results (retired 2026-09-28)
 The first corpus (2,284 chunks across about 60 documents) was deleted as prototype data, along with its frozen baselines and the file-based harness that measured them. Findings worth keeping:
 
@@ -93,5 +132,5 @@ The first corpus (2,284 chunks across about 60 documents) was deleted as prototy
 ## Design Philosophy & Tradeoffs
 - **Evidence over point estimates.** A 2-point difference on 40 queries is often noise. The report always gives the paired sample size, the number of queries that actually differ, and an adjusted p-value next to the means.
 - **Judge fallibility.** An LLM judge can be wrong; pinning it per experiment at least keeps it consistently wrong, so comparisons between trials stay fair. The single 0 / 0.5 / 1 faithfulness score is coarse.
-- **Document-level relevance.** Judging by document and heading tolerates re-chunking, but it cannot tell two chunks of the right section apart. Chunk-level ground truth arrives with synthetic test sets (item 11).
+- **Document-level relevance.** Judging by document and heading tolerates re-chunking, but it cannot tell two chunks of the right section apart. Chunk-level relevance can, at the price of ground truth that dies with a re-chunk (see Synthetic Test Sets). The two modes bracket the truth: document level is the lenient upper bound, chunk level the strict lower bound.
 - **Concurrency vs latency fidelity.** Concurrent queries finish an experiment faster but contend for the same CPU, database and rate limits, which inflates latency. The concurrency is recorded with every experiment.

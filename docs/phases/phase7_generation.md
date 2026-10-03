@@ -18,6 +18,8 @@ The prompt has four parts: grounding rules, the last five turns of conversation 
 ### LLM Calls, Fallback and Per-Call Accounting (`src/generating/llm_client.py`)
 Calls go through LiteLLM with our own retry and fallback: transient errors (429, 5xx, connection) are retried with backoff, then the configured fallback model answers; a dead model or a timeout falls back immediately. Streaming falls back only before the first token.
 
+Providers are `gemini`, `groq`, `openai` and `mistral`; each needs only its own API key (`src/config.py` maps provider to key and fails fast when the chosen one is missing). Mistral's free plan is the bulk pool for test-set generation and judging (Phase 6), where an experiment pins the model and never falls back. `extract_json_object` (`src/generating/structured.py`) reads a JSON object out of a reply that may be wrapped in prose or a code fence; the faithfulness judge and the test-set generator share it.
+
 Every call returns its own `LLMCall` record: the text, prompt and completion tokens, cost, and the provider and model that **actually answered** (after a fallback, the fallback's). One client serves every concurrent request, so this record is per call, never stored on the client: when usage lived on the shared client, concurrent queries could log one another's tokens and cost. A streamed answer fills a record owned by its request as tokens arrive; if the provider sends no usage block, tokens are estimated at ~4 characters per token.
 
 ### Streaming Generation

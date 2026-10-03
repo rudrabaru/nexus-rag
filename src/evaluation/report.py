@@ -8,6 +8,7 @@ from typing import Dict, List
 from sqlalchemy.engine import Engine
 
 from src.evaluation import store
+from src.evaluation.dataset import SYNTHETIC
 from src.evaluation.metrics import by_group, is_valid, metric_names, summarize, value
 from src.evaluation.significance import compare, decide
 from src.evaluation.spec import ExperimentSpec
@@ -46,6 +47,8 @@ def build_report(engine: Engine, experiment_id: str) -> dict:
             "experiment_id", "name", "tenant_id", "dataset_name", "dataset_hash", "status", "created_at", "finished_at", "summary"
         )},
         "queries": len(queries),
+        "synthetic": all(q.get("origin") == SYNTHETIC for q in queries),
+        "relevance": spec.relevance,
         "baseline": spec.baseline,
         "alpha": spec.alpha,
         "trials": [],
@@ -95,7 +98,8 @@ def render(report: dict, details: bool = False) -> str:
     e = report["experiment"]
     lines = [
         f"Experiment {e['name']!r} ({e['experiment_id']}) - {e['status']}",
-        f"  tenant {e['tenant_id']} | dataset {e['dataset_name']} (sha256 {e['dataset_hash'][:12]}) | {report['queries']} queries",
+        f"  tenant {e['tenant_id']} | dataset {e['dataset_name']} (sha256 {e['dataset_hash'][:12]}) | {report['queries']} "
+        f"{'SYNTHETIC ' if report['synthetic'] else ''}queries | {report['relevance']}-level relevance",
         f"  conditions: {e.get('summary') or {}}",
         "",
     ]

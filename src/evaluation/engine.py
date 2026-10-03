@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 
 
 async def run_query(
-    pipeline: RetrievalPipeline, query: EvaluationQuery, tenant_id: str, stage: Optional[GenerationStage]
+    pipeline: RetrievalPipeline, query: EvaluationQuery, tenant_id: str, stage: Optional[GenerationStage],
+    relevance: str = "document",
 ) -> Dict[str, Any]:
     """The run row for one query. Retrieval failures become an invalid run, not a crash."""
     try:
@@ -37,11 +38,11 @@ async def run_query(
         logger.warning(f"EVAL | retrieval failed for {query.query!r}: {e}")
         return {"retrieved": [], "latency_ms": 0.0, "error": f"retrieval failed: {type(e).__name__}: {e}"}
 
-    judgement = judge(result.chunks, query)
+    judgement = judge(result.chunks, query, relevance)
     row: Dict[str, Any] = {
         "rank": judgement.rank,
         "exact_rank": judgement.exact_rank,
-        "first_stage_rank": judge(result.candidates, query).rank if result.candidates else None,
+        "first_stage_rank": judge(result.candidates, query, relevance).rank if result.candidates else None,
         "retrieved": [
             {"chunk_id": c.chunk_id, "source": c.metadata.get("source_url") or c.source_document,
              "score": c.similarity_score, "match": m}
@@ -90,7 +91,7 @@ async def run_experiment(
 
         async def one(i: int) -> None:
             async with semaphore:
-                row = await run_query(pipeline, queries[i], spec.tenant_id, stage)
+                row = await run_query(pipeline, queries[i], spec.tenant_id, stage, spec.relevance)
                 await asyncio.to_thread(store.save_run, engine, trial["trial_id"], i, row)
 
         outcomes = await asyncio.gather(*(one(i) for i in pending), return_exceptions=True)
@@ -112,6 +113,7 @@ def _summary(spec: ExperimentSpec, stage: Optional[GenerationStage], index_chang
     """Run conditions a report needs to interpret its numbers (cache counters are this session's)."""
     return {
         "concurrency": spec.concurrency,
+        "relevance": spec.relevance,
         "generation_model": stage.model if stage else None,
         "judge_model": stage.judge.model if stage else None,
         "cache": dict(stage.counters) if stage else {},

@@ -21,6 +21,7 @@ from src.config import get_settings  # noqa: E402
 from src.evaluation import store  # noqa: E402
 from src.evaluation.dataset import load_dataset  # noqa: E402
 from src.evaluation.engine import run_experiment  # noqa: E402
+from src.evaluation.ground_truth import missing_chunk_ids  # noqa: E402
 from src.evaluation.report import build_report, regressions, render  # noqa: E402
 from src.evaluation.spec import ExperimentSpec  # noqa: E402
 from src.registry.engine import dispose_engines, get_async_engine, get_sync_engine  # noqa: E402
@@ -68,7 +69,13 @@ def main(argv=None) -> int:
 
     if args.command == "run":
         spec = ExperimentSpec(**json.loads(Path(args.spec).read_text(encoding="utf-8")))
-        dataset = load_dataset(spec.dataset)
+        dataset = load_dataset(spec.dataset, spec.relevance)
+        if spec.relevance == "chunk":
+            missing = missing_chunk_ids(engine, spec.tenant_id, (i for q in dataset.queries for i in q.source_chunk_ids))
+            if missing:
+                print(f"{len(missing)} source chunks are not in tenant {spec.tenant_id!r} (re-chunked or re-ingested since "
+                      f"the test set was made?): {missing[:5]}. Regenerate the test set, or use relevance=document.")
+                return 2
         experiment_id = store.create_experiment(engine, spec, dataset)
         print(f"experiment {experiment_id}: {len(spec.trials)} trials x {len(dataset.queries)} queries")
     else:

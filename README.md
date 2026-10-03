@@ -19,7 +19,7 @@ Nexus RAG takes your files (PDFs, URLs, text) and turns them into a searchable k
 - **Parsing**: [Docling](https://docling.org/) for PDF and DOCX (layout, tables, OCR of scanned pages)
 - **Web pages**: hosted reader APIs only (keyless Jina Reader, optional Firecrawl). No process we host contacts the target site
 - **APIs**: Gemini / Groq (generation), Voyage AI (embeddings; local Ollama optional)
-- **Reranking**: [FlashRank](https://github.com/PrithivirajDamodaran/FlashRank), a small ONNX cross-encoder on CPU inside the API (default); Jina's hosted reranker as an option
+- **Reranking**: [FlashRank](https://github.com/PrithivirajDamodaran/FlashRank), a small ONNX cross-encoder on CPU inside the API (default); Jina's or Voyage's hosted rerankers as options
 
 **2. Environment Setup**
 Create a `.env` file in the root directory and populate it with your API keys:
@@ -37,10 +37,11 @@ DATABASE_URL="postgresql://user:password@ep-xxxx.region.aws.neon.tech/neondb?ssl
 ADMIN_API_KEY="your-admin-key"
 
 # Optional Settings
+MISTRAL_API_KEY="..."       # only for generating test sets (python -m src.testsets); free plan, no card
 WORKER_CONCURRENCY=2
 ENABLE_QUERY_GENERALISATION=false
 RETRIEVAL_STRATEGY=hybrid   # dense | sparse | hybrid
-RERANKER=flashrank          # flashrank | jina | none (applied when a query asks for reranking)
+RERANKER=flashrank          # flashrank | jina | voyage | none (applied when a query asks for reranking)
 ```
 `.env.example` lists every variable. The API and the worker each refuse to start and name each missing or invalid one.
 
@@ -87,7 +88,7 @@ streamlit run scripts/chat_ui.py
 ### Search Engine
 - **Hybrid Search:** Combines meaning-based search (Dense Vectors) with exact keyword matching (Sparse Text) so it never misses a relevant detail.
 - **Configurable retrieval:** Every search knob (strategy, result count, fusion constant and weights, reranker, rerank pool size) is one `RetrievalConfig`. Chat runs the default configuration; the evaluator runs any configuration through the same code, so what is measured is what is served.
-- **Reranking:** Re-sorts a pool of candidates with a cross-encoder that reads the question and each passage together. FlashRank runs locally for $0; Jina's hosted reranker is an option. It is a per-query toggle, because on the earlier prototype benchmark a reranker traded Recall@1 (0.974 → 0.816) for Recall@5 (0.974 → 1.000). If a reranker or the query embedding fails, the answer says so in its retrieval record instead of silently degrading.
+- **Reranking:** Re-sorts a pool of candidates with a cross-encoder that reads the question and each passage together. FlashRank runs locally for $0; Jina's and Voyage's hosted rerankers are options (Voyage's free tier allows 3 reranks a minute). It is a per-query toggle, because on the earlier prototype benchmark a reranker traded Recall@1 (0.974 → 0.816) for Recall@5 (0.974 → 1.000). If a reranker or the query embedding fails, the answer says so in its retrieval record instead of silently degrading.
 - **Private Workspaces:** Every search is scoped to the workspace of your API key, and a request with no workspace returns nothing without touching the database. Keys are stored only as hashes and can be revoked individually.
 
 ### Chat & Memory
@@ -99,6 +100,7 @@ streamlit run scripts/chat_ui.py
 ### Testing & Monitoring
 - **Performance Tracking:** Built-in logs track exactly how long each step (searching, ranking, generating) takes.
 - **Evaluation with evidence:** `python -m src.evaluation run spec.json` runs several retrieval configurations over the same questions, stores every per-question result in Postgres, and reports whether each one is significantly better or worse than a baseline (or that the question set is too small to tell). Optionally it also generates answers and has a pinned judge model score their faithfulness, with answers and verdicts cached so identical work is never paid for twice.
+- **Synthetic test sets:** `python -m src.testsets generate --tenant T` has an LLM write questions from your ingested chunks (easy, paraphrased and hard indirect ones), each with the exact chunk it came from as ground truth. You review them (`review`), freeze the accepted ones as a dataset (`finalize`), and an experiment can then score retrieval by exact chunk (`"relevance": "chunk"`) instead of by document. Reports label such sets *SYNTHETIC*, and `verify` tells you when re-chunking has made a set's ground truth stale.
 
 ## Pipeline Architecture
 

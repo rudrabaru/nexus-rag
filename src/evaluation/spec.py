@@ -6,6 +6,7 @@ An experiment specification: which queries, which workspace, which configuration
       "dataset": "evaluation_datasets/my_queries.json",
       "tenant_id": "demo",
       "baseline": "dense",
+      "relevance": "document",
       "trials": {
         "dense": {"strategy": "dense"},
         "hybrid": {"strategy": "hybrid"},
@@ -17,7 +18,7 @@ An experiment specification: which queries, which workspace, which configuration
 Each trial is a RetrievalConfig (src/retrieving/config.py). Without "generation" the
 experiment is retrieval-only and calls no LLM at all.
 """
-from typing import Dict, Optional
+from typing import Dict, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -55,6 +56,9 @@ class ExperimentSpec(BaseModel):
     # Queries run at once per trial. Latency percentiles are measured under this concurrency;
     # set 1 for latency-faithful numbers. Query embedding is paced to the provider's limits anyway.
     concurrency: int = Field(4, ge=1, le=16)
+    # "document": a chunk is relevant when it comes from an acceptable document and heading (survives
+    # re-chunking). "chunk": only the query's source_chunk_ids count (strict; needs those ids).
+    relevance: Literal["document", "chunk"] = "document"
     alpha: float = Field(0.05, gt=0, lt=1)
     generation: Optional[GenerationSpec] = None
 

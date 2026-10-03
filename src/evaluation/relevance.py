@@ -10,6 +10,10 @@ same rules the previous harness used, so results stay comparable across the two:
 
 "exact" = right document and heading; "partial" = right document, heading constraint unmet.
 Both count as relevant for rank; "exact" also sets exact_rank.
+
+With relevance="chunk" a chunk is relevant only when its id is one of the query's
+source_chunk_ids: a stricter test that can tell two chunks of the right section apart, at the
+price of ground truth that is tied to this chunking (see Phase 6). Only "exact" exists there.
 """
 import json
 import re
@@ -40,7 +44,9 @@ def heading_path(chunk: RetrievedChunk) -> List[str]:
         return [s.strip() for s in str(raw).split(" > ") if s.strip()]
 
 
-def match(chunk: RetrievedChunk, query: EvaluationQuery) -> str:
+def match(chunk: RetrievedChunk, query: EvaluationQuery, relevance: str = "document") -> str:
+    if relevance == "chunk":
+        return EXACT if chunk.chunk_id in query.source_chunk_ids else NONE
     source = chunk.metadata.get("source_url") or chunk.source_document
     document_ok = any(
         acceptable in source or contains_run(tokens(acceptable), tokens(source))
@@ -62,8 +68,8 @@ class Judgement:
     exact_rank: Optional[int]
 
 
-def judge(chunks: List[RetrievedChunk], query: EvaluationQuery) -> Judgement:
-    matches = [match(c, query) for c in chunks]
+def judge(chunks: List[RetrievedChunk], query: EvaluationQuery, relevance: str = "document") -> Judgement:
+    matches = [match(c, query, relevance) for c in chunks]
     rank = next((i + 1 for i, m in enumerate(matches) if m != NONE), None)
     exact_rank = next((i + 1 for i, m in enumerate(matches) if m == EXACT), None)
     return Judgement(matches, rank, exact_rank)

@@ -1,12 +1,11 @@
-import json
 import logging
-import re
 from typing import Tuple
 
 from pydantic import BaseModel
 
 from .llm_client import LLMClient
 from .models import GenerationConfig, GenerationResult
+from .structured import extract_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -52,15 +51,9 @@ class JudgeOutputError(ValueError):
 
 def parse_verdict(text: str) -> Tuple[float, str]:
     try:
-        evaluation = json.loads(text.strip())
-    except json.JSONDecodeError:
-        found = re.search(r"(\{.*\})", text, re.DOTALL)
-        if not found:
-            raise JudgeOutputError(f"no JSON in the judge's output: {text[:200]!r}")
-        try:
-            evaluation = json.loads(found.group(1))
-        except json.JSONDecodeError as e:
-            raise JudgeOutputError(f"unparseable judge output: {e}") from e
+        evaluation = extract_json_object(text)
+    except ValueError as e:
+        raise JudgeOutputError(f"unusable judge output: {e}") from e
     try:
         return float(evaluation["score"]), str(evaluation.get("reasoning", ""))
     except (KeyError, TypeError, ValueError) as e:
