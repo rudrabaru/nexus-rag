@@ -13,12 +13,15 @@ which matters here: per-query hit rates are 0/1 and reciprocal ranks are lumpy.
   the statistic; what limits power is m, the number of queries that differ. The smallest
   p-value m differing queries can ever produce is 2 / 2^m, so with m < 6 no difference can
   reach p < 0.05. That case is reported as "insufficient evidence" rather than "no difference".
-- Several configurations compared with one baseline are several tests; Holm's step-down
-  correction keeps the chance of any false "better/worse" at alpha across one metric's family.
+- Every comparison of a report (each candidate, each metric) is one family, and Holm's step-down
+  correction keeps the chance of any false "better/worse" at alpha across all of it. Metrics of one
+  ranking are correlated, so this is conservative: it can miss a real difference, and will not invent
+  one. Whether a family of k tests can reach significance at all depends on k as well as on how many
+  queries differ: the best adjusted p-value is k times the smallest attainable one.
 """
 import itertools
 from dataclasses import asdict, dataclass
-from typing import Dict, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 import numpy as np
 
@@ -94,18 +97,14 @@ def compare(metric: str, baseline: str, candidate: str, paired: List[tuple]) -> 
 
 
 def decide(comparisons: List[Comparison], alpha: float = DEFAULT_ALPHA) -> List[Comparison]:
-    """Applies Holm's correction within each metric's family and sets each verdict."""
-    families: Dict[str, List[Comparison]] = {}
-    for c in comparisons:
-        if c.p_value is not None:
-            families.setdefault(c.metric, []).append(c)
-    for family in families.values():
-        for c, adjusted in zip(family, holm([c.p_value for c in family])):
-            c.p_adjusted = adjusted
-            if smallest_attainable_p(c.differing_queries) > alpha:
-                c.verdict = f"insufficient evidence: only {c.differing_queries} queries differ"
-            elif adjusted < alpha:
-                c.verdict = "better" if c.difference > 0 else "worse"
-            else:
-                c.verdict = "no significant difference"
+    """Applies Holm's correction across all comparisons and sets each verdict."""
+    tested = [c for c in comparisons if c.p_value is not None]
+    for c, adjusted in zip(tested, holm([c.p_value for c in tested])):
+        c.p_adjusted = adjusted
+        if smallest_attainable_p(c.differing_queries) * len(tested) > alpha:
+            c.verdict = f"insufficient evidence: {c.differing_queries} queries differ, too few for {len(tested)} tests at alpha {alpha}"
+        elif adjusted < alpha:
+            c.verdict = "better" if c.difference > 0 else "worse"
+        else:
+            c.verdict = "no significant difference"
     return comparisons

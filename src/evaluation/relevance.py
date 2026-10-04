@@ -9,7 +9,7 @@ same rules the previous harness used, so results stay comparable across the two:
   in the chunk's section title or heading path.
 
 "exact" = right document and heading; "partial" = right document, heading constraint unmet.
-Both count as relevant for rank; "exact" also sets exact_rank.
+Both count as relevant for rank; the label is kept on each retrieved chunk for drill-downs.
 
 With relevance="chunk" a chunk is relevant only when its id is one of the query's
 source_chunk_ids: a stricter test that can tell two chunks of the right section apart, at the
@@ -59,11 +59,9 @@ def match(chunk: RetrievedChunk, query: EvaluationQuery, relevance: str = "docum
 class Judgement:
     matches: List[str]  # one per retrieved chunk, in rank order
     rank: Optional[int]  # 1-based rank of the first relevant chunk, None if none
-    exact_rank: Optional[int]
 
 
 def judge(chunks: List[RetrievedChunk], query: EvaluationQuery, relevance: str = "document") -> Judgement:
     matches = [match(c, query, relevance) for c in chunks]
     rank = next((i + 1 for i, m in enumerate(matches) if m != NONE), None)
-    exact_rank = next((i + 1 for i, m in enumerate(matches) if m == EXACT), None)
-    return Judgement(matches, rank, exact_rank)
+    return Judgement(matches, rank)

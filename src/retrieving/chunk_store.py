@@ -84,9 +84,11 @@ class ChunkStore:
         self.index_id = index_id
         self.distance_metric = "cosine"
 
-    def get_collection_size(self) -> int:
-        """Chunks in this store's index, across all tenants."""
+    def get_collection_size(self, tenant_id: Optional[str] = None) -> int:
+        """Chunks in this store's index: one tenant's when given, otherwise across all tenants."""
         stmt = select(func.count()).select_from(chunks).where(chunks.c.index_id == self.index_id)
+        if tenant_id:
+            stmt = stmt.where(chunks.c.tenant_id == tenant_id)
         with self._sync_engine.connect() as conn:
             return conn.execute(stmt).scalar_one()
 

@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import math
 from typing import Tuple
@@ -50,8 +51,19 @@ ANSWER:
 """
 
 
+# Identifies the judging instrument: a cached verdict is only reused for the same prompt text.
+JUDGE_PROMPT_VERSION = hashlib.sha256(FAITHFULNESS_PROMPT_TEMPLATE.encode("utf-8")).hexdigest()[:12]
+
+
 class JudgeUnavailable(RuntimeError):
-    """The judge model could not be called (rate limit, outage). Retrying later can succeed."""
+    """
+    The judge model could not be called. Usually a rate limit or an outage, which a later retry can
+    outlast (permanent False); with permanent True (unknown model, bad key) no retry can help.
+    """
+
+    def __init__(self, message: str, permanent: bool = False):
+        super().__init__(message)
+        self.permanent = permanent
 
 
 class JudgeOutputError(ValueError):
@@ -100,7 +112,7 @@ class FaithfulnessEvaluator:
         try:
             call = self.llm_client.call_llm(prompt, response_schema=EvaluationResponse)
         except GenerationError as e:
-            raise JudgeUnavailable(str(e)) from e
+            raise JudgeUnavailable(str(e), permanent=e.permanent) from e
         score, reasoning = parse_verdict(call.text)
         logger.info(f"Faithfulness judge -> score {score} | {reasoning}")
         return score, reasoning, call.cost_usd

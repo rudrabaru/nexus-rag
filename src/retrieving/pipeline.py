@@ -92,8 +92,9 @@ class RetrievalPipeline:
 
     async def _first_stage(self, query, tenant_id, pipeline_logger) -> RetrievalResult:
         limit = self.config.candidate_count
-        dense = lambda: self.dense.retrieve(query, top_k=limit, tenant_id=tenant_id)  # noqa: E731
-        sparse = lambda: self.sparse.retrieve(query, top_k=limit, tenant_id=tenant_id, pipeline_logger=pipeline_logger)  # noqa: E731
+        depth = self.config.fusion_depth or limit if self.config.strategy == "hybrid" else limit
+        dense = lambda: self.dense.retrieve(query, top_k=depth, tenant_id=tenant_id)  # noqa: E731
+        sparse = lambda: self.sparse.retrieve(query, top_k=depth, tenant_id=tenant_id, pipeline_logger=pipeline_logger)  # noqa: E731
         if self.config.strategy == "dense":
             return await dense()
         if self.config.strategy == "sparse":
@@ -101,8 +102,8 @@ class RetrievalPipeline:
 
         use_dense, use_sparse = self.config.dense_weight > 0, self.config.sparse_weight > 0
         dense_result, sparse_result = await asyncio.gather(
-            dense() if use_dense else _nothing(query, limit),
-            sparse() if use_sparse else _nothing(query, limit),
+            dense() if use_dense else _nothing(query, depth),
+            sparse() if use_sparse else _nothing(query, depth),
             return_exceptions=True,
         )
         if isinstance(sparse_result, BaseException):
@@ -110,6 +111,7 @@ class RetrievalPipeline:
         if isinstance(dense_result, BaseException):
             logger.warning(f"HYBRID | query embedding failed, serving the sparse ranking only: {dense_result}")
             sparse_result.degraded.append(f"dense search failed ({dense_result}); sparse ranking only")
+            sparse_result.chunks = sparse_result.chunks[:limit]
             return sparse_result
 
         return RetrievalResult(

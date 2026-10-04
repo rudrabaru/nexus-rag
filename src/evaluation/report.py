@@ -3,7 +3,7 @@ An experiment's report, computed from its stored runs (never from in-memory stat
 rebuilt at any time): per-trial metrics, reranker forensics, and every trial compared with the
 baseline under significance tests.
 """
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from sqlalchemy.engine import Engine
 
@@ -51,6 +51,9 @@ def build_report(engine: Engine, experiment_id: str) -> dict:
         "relevance": spec.relevance,
         "baseline": spec.baseline,
         "alpha": spec.alpha,
+        "primary_metric": spec.primary_metric,
+        "min_valid": spec.min_valid,
+        "comparison_top_k": None,
         "trials": [],
         "comparisons": [],
     }
@@ -67,7 +70,9 @@ def build_report(engine: Engine, experiment_id: str) -> dict:
         report["trials"].append(entry)
 
     if spec.baseline in runs:
+        # One cutoff for every trial: a hit at rank 7 counts for a top-10 trial and not for a top-5 one.
         shared_top_k = min(t["config"]["top_k"] for t in trials)
+        report["comparison_top_k"] = shared_top_k
         baseline = {r["query_index"]: r for r in runs[spec.baseline] if is_valid(r)}
         comparisons = []
         for trial in trials:
@@ -76,14 +81,44 @@ def build_report(engine: Engine, experiment_id: str) -> dict:
             candidate = {r["query_index"]: r for r in runs[trial["label"]] if is_valid(r)}
             shared = sorted(baseline.keys() & candidate.keys())
             for metric in metric_names(shared_top_k, with_generation):
-                paired = [(value(baseline[i], metric), value(candidate[i], metric)) for i in shared]
+                paired = [(value(baseline[i], metric, shared_top_k), value(candidate[i], metric, shared_top_k)) for i in shared]
                 comparisons.append(compare(metric, spec.baseline, trial["label"], [p for p in paired if None not in p]))
         report["comparisons"] = [c.as_dict() for c in decide(comparisons, spec.alpha)]
     return report
 
 
 def regressions(report: dict) -> List[dict]:
-    return [c for c in report["comparisons"] if c["verdict"] == "worse"]
+    """Candidates significantly worse than the baseline on the experiment's primary metric."""
+    return [c for c in report["comparisons"] if c["verdict"] == "worse" and c["metric"] == report["primary_metric"]]
+
+
+def gate_failures(report: dict, min_valid: Optional[float] = None) -> List[str]:
+    """
+    Why a regression gate must not pass. An experiment is only evidence when it finished, enough of every
+    trial's queries produced a valid run, and each trial could be compared; a trial that is entirely
+    broken has no paired queries, which must read as a failure and not as "no regression".
+    """
+    threshold = report["min_valid"] if min_valid is None else min_valid
+    failures = []
+    status = report["experiment"]["status"]
+    if status != "complete":
+        failures.append(f"the experiment is {status}, not complete")
+    for trial in report["trials"]:
+        m = trial["metrics"]
+        if m["queries"] == 0 or m["valid"] / m["queries"] < threshold:
+            failures.append(
+                f"trial {trial['label']!r}: {m['valid']}/{m['queries']} runs are valid (degraded {m['degraded']}, "
+                f"errors {m['errors']}), below the required {threshold:.0%}"
+            )
+    compared = {c["candidate"] for c in report["comparisons"] if c["verdict"] != "no paired queries"}
+    for trial in report["trials"]:
+        if trial["label"] != report["baseline"] and trial["label"] not in compared:
+            failures.append(f"trial {trial['label']!r} could not be compared with the baseline: no query was valid in both")
+    failures += [
+        f"{c['candidate']} is significantly worse than {c['baseline']} on {c['metric']} ({c['baseline_mean']:.4f} -> {c['candidate_mean']:.4f}, p adjusted {c['p_adjusted']:.4f})"
+        for c in regressions(report)
+    ]
+    return failures
 
 
 def _fmt(x) -> str:
@@ -106,17 +141,18 @@ def render(report: dict, details: bool = False) -> str:
     for t in report["trials"]:
         m = t["metrics"]
         headline = "  ".join(f"{k}={_fmt(v)}" for k, v in m.items() if k == "mrr" or k.startswith(("hit_rate", "faithfulness")))
-        lines.append(f"[{t['label']}] index {t['index_id']} ({t['index_count']} chunks) | valid {m['valid']}/{m['queries']}"
-                     f" (degraded {m['degraded']}, errors {m['errors']})")
+        lines.append(f"[{t['label']}] index {t['index_id']} ({t['index_count']} workspace chunks) | valid {m['valid']}/{m['queries']}"
+                     f" (degraded {m['degraded']}, errors {m['errors']}, no context {m['empty_context']})")
         lines.append(f"  {headline}")
-        lines.append(f"  latency p50 {_fmt(m['latency_p50_ms'])} ms, p95 {_fmt(m['latency_p95_ms'])} ms | cost/query ${m['cost_per_query_usd']:.6f}")
+        lines.append(f"  latency (without query embedding) p50 {_fmt(m['latency_p50_ms'])} ms, p95 {_fmt(m['latency_p95_ms'])} ms | cost/query ${m['cost_per_query_usd']:.6f}")
         if "reranker" in t:
             lines.append(f"  reranker moved the first relevant chunk: {t['reranker']}")
         if details:
             for group, summary in t["by_difficulty"].items():
                 lines.append(f"    difficulty {group}: n={summary['valid']} mrr={_fmt(summary['mrr'])}")
     if report["comparisons"]:
-        lines += ["", f"Compared with baseline {report['baseline']!r} (paired randomization test, Holm-corrected, alpha {report['alpha']}):"]
+        lines += ["", f"Compared with baseline {report['baseline']!r} at top_k {report['comparison_top_k']} (paired randomization test, "
+                      f"one Holm family over all {len(report['comparisons'])} comparisons, alpha {report['alpha']}; primary metric {report['primary_metric']}):"]
         for c in report["comparisons"]:
             lines.append(
                 f"  {c['candidate']:<24} {c['metric']:<14} {_fmt(c['baseline_mean'])} -> {_fmt(c['candidate_mean'])}"

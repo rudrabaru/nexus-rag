@@ -105,10 +105,10 @@ runs = Table(
     Column("trial_id", Text, ForeignKey("trials.trial_id", ondelete="CASCADE"), nullable=False),
     Column("query_index", Integer, nullable=False),
     Column("rank", Integer),  # 1-based rank of the first relevant chunk; NULL = none retrieved
-    Column("exact_rank", Integer),  # same, counting only chunks whose heading also matched
     Column("first_stage_rank", Integer),  # before reranking (reranked trials only)
     Column("retrieved", Json, nullable=False),  # [{chunk_id, source, score, match}] in rank order
-    Column("latency_ms", Float, nullable=False),
+    Column("latency_ms", Float, nullable=False),  # retrieval and rerank, WITHOUT the query embedding (which depends on cache order)
+    Column("embedding_latency_ms", Float, nullable=False, server_default="0"),  # 0 when the query embedding was cached
     Column("embedding_tokens", Integer, nullable=False, server_default="0"),  # as if uncached
     Column("embedding_cost_usd", Float, nullable=False, server_default="0"),
     Column("rerank_cost_usd", Float, nullable=False, server_default="0"),
@@ -123,6 +123,8 @@ runs = Table(
     Column("faithfulness_reasoning", Text),
     Column("judge_model", Text),
     Column("judge_cached", Boolean),
+    Column("judge_cost_usd", Float),  # NULL when the verdict was cached or there was no judging
+    Column("empty_context", Boolean),  # no chunk reached the prompt: nothing was generated or judged
     Column("error", Text),  # set = this run is invalid (generation failed) and is retried on resume
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=now()),
     PrimaryKeyConstraint("trial_id", "query_index"),
@@ -131,7 +133,7 @@ runs = Table(
 generation_cache = Table(
     "generation_cache",
     metadata,
-    Column("cache_key", Text, primary_key=True),  # sha256(tenant, model, prompt)
+    Column("cache_key", Text, primary_key=True),  # sha256(tenant, model, temperature, max tokens, prompt)
     Column("model", Text, nullable=False),
     Column("answer", Text, nullable=False),
     Column("input_tokens", Integer, nullable=False),
@@ -143,7 +145,7 @@ generation_cache = Table(
 judge_cache = Table(
     "judge_cache",
     metadata,
-    Column("cache_key", Text, primary_key=True),  # sha256(tenant, metric, judge model, question, answer, context ids)
+    Column("cache_key", Text, primary_key=True),  # sha256(tenant, metric, judge model, judge prompt version, judge sampling, question, answer, context text)
     Column("metric", Text, nullable=False),
     Column("judge_model", Text, nullable=False),
     Column("score", Float, nullable=False),

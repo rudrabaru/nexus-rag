@@ -49,16 +49,16 @@ def test_a_chunk_without_a_url_falls_back_to_its_document_name():
     assert match(upload, query()) == EXACT
 
 
-def test_judgement_ranks_the_first_relevant_and_first_exact_chunk():
+def test_judgement_ranks_the_first_relevant_chunk_and_labels_each_match():
     q = query(headings=["Setup"])
     j = judge([chunk("a", url="https://x/other"), chunk("b", path=["Intro"]), chunk("c", path=["Setup"])], q)
-    assert j.matches == [NONE, PARTIAL, EXACT] and (j.rank, j.exact_rank) == (2, 3)
+    assert j.matches == [NONE, PARTIAL, EXACT] and j.rank == 2
 
 
 def test_chunk_level_relevance_counts_only_the_named_source_chunks():
     q = query(["3.13.html"], source_chunk_ids=["c2"])
     j = judge([chunk("c1"), chunk("c2"), chunk("c3")], q, relevance="chunk")
-    assert j.matches == [NONE, EXACT, NONE] and (j.rank, j.exact_rank) == (2, 2)
+    assert j.matches == [NONE, EXACT, NONE] and j.rank == 2
     assert judge([chunk("c1")], q).rank == 1  # document-level relevance still accepts the right document
 
 
@@ -140,7 +140,7 @@ def test_holm_adjusts_in_step_down_order():
 def test_too_few_differing_queries_is_insufficient_evidence_not_no_difference():
     assert smallest_attainable_p(5) > 0.05 >= smallest_attainable_p(6)
     [c] = decide([compare("mrr", "a", "b", [(0, 1)] * 5 + [(1, 1)] * 30)])
-    assert c.verdict == "insufficient evidence: only 5 queries differ"
+    assert c.verdict.startswith("insufficient evidence: 5 queries differ")
 
 
 def test_clear_differences_are_called_better_or_worse():

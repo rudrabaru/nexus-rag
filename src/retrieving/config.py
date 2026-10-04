@@ -32,11 +32,17 @@ class RetrievalConfig(BaseModel):
     # How many first-stage candidates the reranker reorders. Chat uses top_k * 4 (the depth
     # the reranker has always seen); deeper pools cost rerank latency linearly.
     rerank_candidates: int = Field(20, ge=1, le=MAX_CANDIDATES)
+    # Hybrid only: how many results each of dense and sparse returns before fusion. Fusing two lists of
+    # top_k can never surface a chunk that one list ranked top_k + 1, whatever the other said; a deeper
+    # first stage lets agreement between the lists promote it. None = candidate_count (no extra depth).
+    fusion_depth: Optional[int] = Field(None, ge=1, le=MAX_CANDIDATES)
 
     @model_validator(mode="after")
     def consistent(self):
         if self.reranker and self.rerank_candidates < self.top_k:
             raise ValueError("rerank_candidates must be at least top_k.")
+        if self.fusion_depth is not None and self.fusion_depth < self.candidate_count:
+            raise ValueError("fusion_depth must be at least the number of candidates it feeds (top_k, or rerank_candidates).")
         if self.strategy == "hybrid" and self.dense_weight == 0 and self.sparse_weight == 0:
             raise ValueError("A hybrid configuration needs a non-zero dense or sparse weight.")
         return self

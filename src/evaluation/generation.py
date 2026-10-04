@@ -25,7 +25,7 @@ from sqlalchemy.engine import Engine
 
 from src.config import Settings
 from src.evaluation.spec import GenerationSpec, ModelSpec
-from src.generating.evaluator import FaithfulnessEvaluator, JudgeOutputError
+from src.generating.evaluator import JUDGE_PROMPT_VERSION, FaithfulnessEvaluator, JudgeOutputError
 from src.generating.generator import RAGGenerator
 from src.generating.models import GenerationConfig, GenerationResult
 from src.llm.errors import GenerationError
@@ -57,7 +57,11 @@ class GenerationStage:
         self.engine = engine
         self.generator = RAGGenerator(_config(spec.model, settings, "chat"))  # fallback_config is None: pinned
         self.judge = FaithfulnessEvaluator(_config(spec.judge, settings, "judge"))
-        self.model = f"{self.generator.config.provider}/{self.generator.config.model_name}"
+        self.model = self.generator.config.model_string
+        if self.judge.model == self.model:
+            raise ValueError(f"The judge is the model it judges ({self.model}): it would favour its own answers. Name a different judge.")
+        self._generation_params = f"t={self.generator.config.temperature};max={self.generator.config.max_output_tokens}"
+        self._judge_params = f"{JUDGE_PROMPT_VERSION};t={self.judge.config.temperature};max={self.judge.config.max_output_tokens}"
         self.counters: Counter = Counter()
         self._lock = threading.Lock()
 
@@ -70,9 +74,11 @@ class GenerationStage:
         prepared = self.generator.prepare(query, retrieval)
         row: Dict[str, Any] = {"generation_model": self.model}
         if prepared.diagnostic:  # no chunk survived context building: nothing to generate or judge
-            return {**row, "answer": prepared.diagnostic, "generation_cost_usd": 0.0, "generation_cached": False}
+            return {**row, "answer": prepared.diagnostic, "generation_cost_usd": 0.0, "generation_cached": False, "empty_context": True}
 
-        answer_key = cache_key(self.tenant_id, self.model, prepared.prompt)
+        # Everything that determines the answer is in the key: the model, how it samples, and the prompt
+        # (which holds the context text), so a change to any of them is a new answer, not a stale hit.
+        answer_key = cache_key(self.tenant_id, self.model, self._generation_params, prepared.prompt)
         cached = self._get(generation_cache, answer_key)
         if cached:
             self._count("generation_cache_hits")
@@ -95,8 +101,12 @@ class GenerationStage:
                 generation_cost_usd=call.cost_usd, generation_cached=False,
             )
 
-        context_ids = ",".join(sorted(c.chunk_id for c in prepared.context_window.included_chunks))
-        verdict_key = cache_key(self.tenant_id, FAITHFULNESS, self.judge.model, query, answer, context_ids)
+        # The context TEXT, not chunk ids: an id can name different text after a re-ingest, and the verdict
+        # is about the text the answer was checked against. The judge prompt version and sampling are
+        # part of the instrument, so changing the instrument invalidates its verdicts.
+        verdict_key = cache_key(
+            self.tenant_id, FAITHFULNESS, self.judge.model, self._judge_params, query, answer, prepared.context_window.context_text
+        )
         verdict = self._get(judge_cache, verdict_key)
         if verdict:
             self._count("judge_cache_hits")
@@ -105,15 +115,15 @@ class GenerationStage:
 
         self._count("judge_calls")
         try:
-            score, reasoning, _ = self.judge.judge(
+            score, reasoning, judge_cost = self.judge.judge(
                 GenerationResult(query=query, answer=answer, context_window=prepared.context_window)
             )
         except JudgeOutputError as e:
-            return {**row, "judge_model": self.judge.model, "error": f"judge output unusable: {e}"}
+            return {**row, "judge_model": self.judge.model, "error": f"judge output unusable: {e}"}  # one bad reply invalidates this run only
         self._put(judge_cache, cache_key=verdict_key, metric=FAITHFULNESS, judge_model=self.judge.model,
                   score=score, reasoning=reasoning)
         return {**row, "faithfulness": score, "faithfulness_reasoning": reasoning,
-                "judge_model": self.judge.model, "judge_cached": False}
+                "judge_model": self.judge.model, "judge_cached": False, "judge_cost_usd": judge_cost}
 
     def _get(self, table, key: str) -> Optional[Dict[str, Any]]:
         with self.engine.connect() as conn:

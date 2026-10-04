@@ -15,8 +15,21 @@ class EmptyResponseError(Exception):
     """HTTP 200 with no usable message content (a reasoning model can spend its whole budget thinking)."""
 
 
+# Errors that no later attempt can fix: the model does not exist, or the key is wrong or not allowed
+# to use it. A timeout or a rate limit is not here: the same call can succeed once the provider recovers.
+PERMANENT_ERRORS = (litellm.NotFoundError, litellm.AuthenticationError, litellm.PermissionDeniedError)
+
+
 class GenerationError(RuntimeError):
-    """The model could not produce an answer after retries and any fallback. The message is for logs, not for callers."""
+    """
+    The model could not produce an answer after retries and any fallback. The message is for logs, not
+    for callers. `permanent` is True when retrying later cannot help, so a long run should stop and say so
+    instead of waiting for the provider to recover.
+    """
+
+    def __init__(self, message: str, permanent: bool = False):
+        super().__init__(message)
+        self.permanent = permanent
 
 
 def is_retryable(error: Exception) -> bool:

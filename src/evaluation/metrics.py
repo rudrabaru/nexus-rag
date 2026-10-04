@@ -8,6 +8,13 @@ Per-query values and their aggregates.
 
 A run is valid when it ran the configuration as specified: not degraded (Phase 5) and no
 generation error. Metrics are computed over valid runs; invalid ones are counted, never mixed in.
+A valid run with no context has no answer and no faithfulness score: it is left out of the
+faithfulness mean and counted separately (empty_context), so a trial that retrieves nothing cannot
+look more faithful than one that answers.
+
+Comparing trials whose top_k differ needs one cutoff for all of them: a hit at rank 7 is a hit for a
+top-10 trial and a miss for a top-5 trial, so metrics compared across trials are computed at the
+shared (smallest) top_k.
 """
 import math
 from collections import defaultdict
@@ -24,13 +31,16 @@ def reciprocal_rank(rank: Optional[int]) -> float:
     return 1.0 / rank if rank else 0.0
 
 
-def value(run: dict, metric: str) -> Optional[float]:
-    """One query's value of a metric, or None when the run has no value for it."""
+def value(run: dict, metric: str, cutoff: Optional[int] = None) -> Optional[float]:
+    """One query's value of a metric, or None when the run has no value for it. `cutoff` ignores ranks beyond it."""
+    rank = run.get("rank")
+    if cutoff is not None and rank and rank > cutoff:
+        rank = None
     if metric == "mrr":
-        return reciprocal_rank(run.get("rank"))
+        return reciprocal_rank(rank)
     if metric.startswith("hit_rate@"):
         k = int(metric.split("@")[1])
-        return 1.0 if run.get("rank") and run["rank"] <= k else 0.0
+        return 1.0 if rank and rank <= k else 0.0
     if metric == "faithfulness":
         return run.get("faithfulness")
     raise ValueError(f"Unknown metric {metric!r}")
@@ -50,7 +60,7 @@ def percentile(values: List[float], p: float) -> float:
 
 
 def run_cost(run: dict) -> float:
-    return (run.get("embedding_cost_usd") or 0.0) + (run.get("rerank_cost_usd") or 0.0) + (run.get("generation_cost_usd") or 0.0)
+    return sum(run.get(k) or 0.0 for k in ("embedding_cost_usd", "rerank_cost_usd", "generation_cost_usd", "judge_cost_usd"))
 
 
 def summarize(runs: Iterable[dict], metrics: List[str]) -> Dict[str, float]:
@@ -61,6 +71,7 @@ def summarize(runs: Iterable[dict], metrics: List[str]) -> Dict[str, float]:
         "valid": len(valid),
         "degraded": sum(1 for r in runs if r.get("degraded")),
         "errors": sum(1 for r in runs if r.get("error")),
+        "empty_context": sum(1 for r in valid if r.get("empty_context")),
     }
     for metric in metrics:
         values = [v for v in (value(r, metric) for r in valid) if v is not None]

@@ -23,6 +23,7 @@ Every query-time retrieval knob lives in one `RetrievalConfig`:
 | `dense_weight`, `sparse_weight` | 1.0, 1.0 | weight of each ranking in the fusion; 0 skips that search |
 | `reranker` | none | `flashrank`, `jina` or `voyage` |
 | `rerank_candidates` | 20 | first-stage pool the reranker reorders (≤ 80, see ef_search below) |
+| `fusion_depth` | none | hybrid only: how many results dense and sparse each return before fusion. Fusing two lists of `top_k` cannot surface a chunk that one list ranked `top_k + 1`; a deeper first stage lets agreement between the lists promote it. Must be at least the candidates it feeds. An experiment knob; chat does not set it |
 | `index_id` | configured index | which embedding index to search |
 
 `build_pipeline(config, resources)` assembles a pipeline from process-wide resources that are built once: per-index retrievers (with their query-embedding cache) and loaded rerankers. Pipelines are cheap, so **chat builds one per request** from the default configuration (`RETRIEVAL_STRATEGY`, `RERANKER`) plus the request's `top_k` and reranker toggle, and **an evaluation builds one per configuration** (each trial of an experiment spec, Phase 6). There is no retriever fixed at startup any more, so a configuration measured offline is exactly the one chat serves.

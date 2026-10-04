@@ -36,13 +36,14 @@ class GenerationSpec(BaseModel):
     """
     Answers are generated and judged with pinned models: an experiment never falls back to
     another model, because a different model mid-experiment changes what is being measured.
-    None = the model of the role (LLM_CHAT for answers, LLM_JUDGE for the judge). Prefer a judge from a
-    different model family than the generator (self-preference bias).
+    The judge is named in the spec, so what judged an experiment is part of what was asked for and
+    cannot change with an environment variable; it must not be the model it judges (self-preference
+    bias), and should come from a different model family. `model` None = the chat role (LLM_CHAT).
     """
 
     model_config = ConfigDict(extra="forbid")
     model: Optional[ModelSpec] = None
-    judge: Optional[ModelSpec] = None
+    judge: ModelSpec
 
 
 class ExperimentSpec(BaseModel):
@@ -60,6 +61,13 @@ class ExperimentSpec(BaseModel):
     # re-chunking). "chunk": only the query's source_chunk_ids count (strict; needs those ids).
     relevance: Literal["document", "chunk"] = "document"
     alpha: float = Field(0.05, gt=0, lt=1)
+    # The metric the regression gate looks at. The report tests every metric (one Holm family), but a
+    # gate that fires on any of five correlated metrics fires by chance; one is named in advance.
+    primary_metric: str = "mrr"
+    # The share of a trial's queries that must produce a valid run for the experiment to count. Below it
+    # the metrics describe the surviving queries, not the trial, so the gate fails instead of passing on
+    # whatever was left. 0.9 tolerates a few transient failures; it is not tuned on a corpus.
+    min_valid: float = Field(0.9, gt=0, le=1)
     generation: Optional[GenerationSpec] = None
 
     @model_validator(mode="after")

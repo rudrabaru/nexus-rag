@@ -4,8 +4,11 @@
     python -m src.evaluation report EXPERIMENT_ID [--json FILE] [--details] [--fail-on-regression]
     python -m src.evaluation list [--tenant T]
 
-Results live in Postgres (DATABASE_URL); --json exports a report. --fail-on-regression exits 1
-when any trial is significantly worse than the baseline: a regression gate for CI.
+Results live in Postgres (DATABASE_URL); --json exports a report. --fail-on-regression is a gate for
+CI and exits 1 unless the experiment is evidence: it must be complete, at least --min-valid of every
+trial's queries must have produced a valid run (default: the spec's min_valid), every trial must be
+comparable with the baseline, and none may be significantly worse on the spec's primary metric. A
+broken trial fails the gate; it is never read as "no regression".
 """
 import argparse
 import asyncio
@@ -18,8 +21,10 @@ from src.evaluation import store
 from src.evaluation.dataset import resolve_dataset
 from src.evaluation.engine import run_experiment
 from src.evaluation.ground_truth import missing_chunk_ids
-from src.evaluation.report import build_report, regressions, render
+from src.evaluation.report import build_report, gate_failures, render
 from src.evaluation.spec import ExperimentSpec
+from src.llm.config import parse_model
+from src.llm.roles import role_model
 from src.db.engine import dispose_engines, get_async_engine, get_sync_engine
 from src.retrieving.pipeline import RetrievalResources
 from src.runtime import ConfigurationError, bootstrap
@@ -34,6 +39,18 @@ async def _execute(experiment_id: str) -> str:
         await dispose_engines()  # pooled async connections belong to this event loop
 
 
+def missing_keys(spec: ExperimentSpec, settings) -> list:
+    """Providers the experiment's models need and have no key for, found before any query runs."""
+    if not spec.generation:
+        return []
+    models = [spec.generation.judge.provider, spec.generation.model.provider if spec.generation.model else role_provider(settings, "chat")]
+    return sorted({f"{p.upper()}_API_KEY" for p in models if not settings.has_llm_key(p)})
+
+
+def role_provider(settings, role: str) -> str:
+    return parse_model(role_model(settings, role))[0]
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -46,7 +63,8 @@ def main(argv=None) -> int:
     for command in (run, resume, report):
         command.add_argument("--json", help="also write the report to this file")
         command.add_argument("--details", action="store_true", help="include per-difficulty breakdowns")
-        command.add_argument("--fail-on-regression", action="store_true", help="exit 1 if a trial is significantly worse")
+        command.add_argument("--fail-on-regression", action="store_true", help="exit 1 unless the experiment passes the gate (see above)")
+        command.add_argument("--min-valid", type=float, help="share of a trial's queries that must be valid (default: the spec's)")
     listing = commands.add_parser("list", help="recent experiments")
     listing.add_argument("--tenant")
     args = parser.parse_args(argv)
@@ -65,6 +83,10 @@ def main(argv=None) -> int:
 
     if args.command == "run":
         spec = ExperimentSpec(**json.loads(Path(args.spec).read_text(encoding="utf-8")))
+        absent = missing_keys(spec, get_settings())
+        if absent:
+            print(f"The experiment's models need keys that are not set: {', '.join(absent)}. Nothing was created or run.")
+            return 2
         dataset = resolve_dataset(engine, spec.tenant_id, spec.dataset, spec.relevance)
         if spec.relevance == "chunk":
             missing = missing_chunk_ids(engine, spec.tenant_id, (i for q in dataset.queries for i in q.source_chunk_ids))
@@ -77,6 +99,12 @@ def main(argv=None) -> int:
     else:
         experiment_id = args.experiment_id
 
+    if args.command == "resume":
+        absent = missing_keys(ExperimentSpec(**store.get_experiment(engine, experiment_id)["spec"]), get_settings())
+        if absent:
+            print(f"The experiment's models need keys that are not set: {', '.join(absent)}.")
+            return 2
+
     if args.command in ("run", "resume"):
         status = asyncio.run(_execute(experiment_id))
         print(f"experiment {experiment_id}: {status}")
@@ -85,7 +113,11 @@ def main(argv=None) -> int:
     print(render(result, details=args.details))
     if args.json:
         Path(args.json).write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
-    return 1 if args.fail_on_regression and regressions(result) else 0
+    failures = gate_failures(result, args.min_valid)
+    if args.fail_on_regression and failures:
+        print("\nGate failed:\n  " + "\n  ".join(failures))
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -81,7 +81,7 @@ def write_dataset(path: str, queries: List[EvaluationQuery]) -> None:
 
 
 def integrity_problems(queries: List[EvaluationQuery], relevance: str = "document") -> List[str]:
-    """Problems that make metrics meaningless: no queries, duplicates, empty text, or no chunk ground truth."""
+    """Problems that make metrics meaningless: no queries, duplicates, empty text, blank matchers, or no chunk ground truth."""
     if not queries:
         return ["it contains no queries"]
     problems, seen = [], set()
@@ -92,6 +92,10 @@ def integrity_problems(queries: List[EvaluationQuery], relevance: str = "documen
         elif text.lower() in seen:
             problems.append(f"query {i} duplicates an earlier query: {text!r}")
         seen.add(text.lower())
+        # A blank acceptable document or heading is a substring of every source, so it would make every
+        # retrieved chunk "relevant" and every metric 1.0.
+        if any(not d.strip() for d in q.acceptable_documents) or any(not h.strip() for h in q.acceptable_headings):
+            problems.append(f"query {i} lists a blank acceptable document or heading, which matches everything: {text!r}")
         if relevance == "chunk" and not q.source_chunk_ids:
             problems.append(f"query {i} has no source_chunk_ids, which chunk-level relevance needs: {text!r}")
     return problems
