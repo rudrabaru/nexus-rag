@@ -74,7 +74,7 @@ A startup fail-fast guard validates the whole configuration (`src/config.py`) an
 **Tradeoff:** The check validates the address at request time only. Redirects and DNS rebinding are not covered and are addressed by fetching through a hosted reader service rather than from this process.
 
 ## 12. LLM Access: One SDK Call Path, Explicit Retry, Fallback and Timeouts
-**Decision:** LiteLLM is used as an SDK (`litellm.completion` / `litellm.acompletion`) for request formatting, response parsing and per-call cost lookup. Retry, fallback and timeouts are one explicit loop in `src/generating/llm_client.py`, not `litellm.Router`.
+**Decision:** LiteLLM is used as an SDK (`litellm.completion` / `litellm.acompletion`) for request formatting, response parsing and per-call cost lookup. Retry, fallback and timeouts are one explicit loop in `src/llm/client.py`, not `litellm.Router`.
 **Rationale:** When this was built, Router's mid-stream fallback had open bugs (LiteLLM issues #28216 and #40404). Using the plain SDK for both streaming and non-streaming calls keeps one call path. Errors are classified by what a retry can achieve:
 - *Transient* (429, 5xx, connection errors, and a 200 with an empty body, which Gemini's thinking mode can produce) are retried with exponential backoff, then fall back.
 - *Permanent for this request* (404 dead model, 400, auth errors) are not retried locally, because an identical request cannot succeed; they go straight to the fallback.

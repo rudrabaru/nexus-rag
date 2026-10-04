@@ -20,7 +20,8 @@ from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
 from src.config import Settings, get_settings
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.generator import RAGGenerator
-from src.generating.llm_client import GenerationError, LLMCall
+from src.llm.client import LLMCall
+from src.llm.errors import GenerationError
 from src.generating.models import GenerationResult
 from src.generating.query_rewriter import QueryRewriter
 from src.retrieving.config import RetrievalConfig

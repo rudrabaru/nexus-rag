@@ -10,6 +10,7 @@ class RetrievedChunk(BaseModel):
     text: str
     similarity_score: float
     heading_path: List[str] = Field(default_factory=list)
+    token_count: int = 0  # the chunker's tiktoken count; 0 when unknown (the estimator is used then)
     metadata: Dict[str, Any]
 
 

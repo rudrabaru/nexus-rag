@@ -5,81 +5,27 @@ Separates data shapes from logic to keep all other modules lean and testable.
 """
 
 from typing import List, Optional
+
 from pydantic import BaseModel, Field
 
-
-DEFAULT_GEMINI_MODEL = "gemini-3.5-flash"
-# llama-3.1-8b-instant was retired from Groq (404 NotFoundError, confirmed live
-# 2026-09-22 against the project's key; the key's /models list no longer carries it).
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
+from src.llm.config import LLMConfig
 
 
-def default_model_name(provider: str) -> str:
-    defaults = {"gemini": DEFAULT_GEMINI_MODEL, "groq": DEFAULT_GROQ_MODEL}
-    if provider not in defaults:
-        raise ValueError(f"No default model for provider {provider!r}; set LLM_MODEL_NAME (or pass --model).")
-    return defaults[provider]
-
-
-class GenerationConfig(BaseModel):
+class GenerationConfig(LLMConfig):
     """
-    Configuration for the generation phase.
-
-    All parameters are corpus-agnostic and control LLM behavior
-    or token budget management only.
+    The generation phase: which model (LLMConfig) plus how much retrieved context it is given.
+    Nothing here depends on the corpus.
     """
 
-    # LLM selection
-    provider: str = Field(
-        "gemini",
-        description="LLM provider: 'gemini', 'groq' or 'openai'",
-    )
-    model_name: str = Field(
-        "gemini-3.5-flash",
-        description="Model identifier passed to the provider API",
-    )
-
-    # Token budgeting for context assembly
     max_context_tokens: int = Field(
         5000,
         description=(
-            "Maximum tokens to allocate to retrieved context. "
-            "Controls how many chunks can be included in the prompt. "
-            "Set to 8000 to safely fit within standard 32k-128k context windows while leaving room for generation."
+            "Maximum tokens of retrieved context in the prompt. With the instructions and chat history "
+            "one request is about 5.5K tokens, which fits Groq's free limit of 8K tokens a minute. "
+            "Experiment: a search knob (item 13), not tuned on retrieval results."
         ),
     )
-    max_output_tokens: int = Field(
-        4096,
-        description="Maximum tokens the LLM may generate in its response",
-    )
-    temperature: float = Field(
-        0.1,
-        description=(
-            "LLM sampling temperature. Low values (0.0–0.2) reduce hallucinations "
-            "and make the model stay closer to retrieved context."
-        ),
-    )
-
-    # Behavior flags
-    cite_sources: bool = Field(
-        True,
-        description="Instruct the LLM to cite source URLs in its answer",
-    )
-
-    request_timeout_seconds: float = Field(
-        60.0,
-        description=(
-            "Upper bound on one LLM call. litellm's default is 6000 s, so without this a "
-            "provider that hangs holds a query slot for up to 100 minutes and the fallback "
-            "never fires. 60 s covers a full answer (max_output_tokens=4096 at the ~100 "
-            "tokens/s of flash-class models is ~40 s) with headroom for queueing."
-        ),
-    )
-    fallback_config: Optional[dict] = Field(
-        None,
-        description="Optional GenerationConfig dictionary to use if primary fails.",
-    )
-
+    cite_sources: bool = Field(True, description="Instruct the model to cite the [Source: ...] markers of the context")
     min_similarity_score: float = Field(
         0.0,
         description=(
@@ -87,9 +33,6 @@ class GenerationConfig(BaseModel):
             "Set above 0 only when the score scale is known to be calibrated."
         ),
     )
-
-    class Config:
-        validate_assignment = True
 
 
 class ContextChunk(BaseModel):
@@ -114,8 +57,9 @@ class ContextWindow(BaseModel):
     included_chunks: List[ContextChunk] = Field(default_factory=list)
     excluded_chunks: List[ContextChunk] = Field(
         default_factory=list,
-        description="Chunks retrieved but dropped due to token budget",
+        description="Chunks retrieved but not given to the model: below the score floor, a duplicate of an included chunk, or over the token budget",
     )
+    exclusion_reasons: dict = Field(default_factory=dict, description="chunk_id -> why it was excluded: score | duplicate | budget")
     total_context_tokens: int = 0
     context_text: str = ""
 
@@ -147,6 +91,7 @@ class GenerationResult(BaseModel):
     generation_cost_usd: float = Field(
         0.0, description="Real per-call cost from litellm.completion_cost(), not an estimate"
     )
+    generation_cost_known: bool = Field(True, description="False when litellm has no price for the model: the cost is 0 because unknown, not because free")
 
     # Model used
     model_name: str = ""

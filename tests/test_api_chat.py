@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from src.generating.llm_client import GenerationError
+from src.llm.errors import GenerationError
 from src.generating.models import ContextChunk, ContextWindow, GenerationResult
 from src.retrieving.models import RetrievalResult, RetrievedChunk
 

@@ -9,7 +9,7 @@ from typing import Optional
 
 from pydantic import BaseModel
 
-from src.generating.structured import extract_json_object
+from src.llm.structured import extract_json_object
 from src.testsets.sampling import ChunkGroup
 
 DIFFICULTY_INSTRUCTIONS = {

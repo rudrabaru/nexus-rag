@@ -36,7 +36,7 @@ class GenerationSpec(BaseModel):
     """
     Answers are generated and judged with pinned models: an experiment never falls back to
     another model, because a different model mid-experiment changes what is being measured.
-    None = the configured chat model (LLM_PROVIDER / LLM_MODEL_NAME). Prefer a judge from a
+    None = the model of the role (LLM_CHAT for answers, LLM_JUDGE for the judge). Prefer a judge from a
     different model family than the generator (self-preference bias).
     """
 

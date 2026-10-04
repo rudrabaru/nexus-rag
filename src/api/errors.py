@@ -18,7 +18,7 @@ from pydantic import BaseModel
 from slowapi.errors import RateLimitExceeded
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from src.generating.llm_client import GenerationError
+from src.llm.errors import GenerationError
 from src.services.errors import InvalidRequest, PayloadTooLarge, QuotaExceeded, ServiceError, Unavailable
 
 logger = logging.getLogger(__name__)

@@ -5,8 +5,9 @@ import pytest
 
 from src.config import Settings
 from src.evaluation.dataset import SYNTHETIC, load_dataset, write_dataset
-from src.generating.llm_client import FAILURE_PREFIX, LLMCall
-from src.generating.structured import extract_json_object
+from src.llm.client import LLMCall
+from src.llm.errors import GenerationError
+from src.llm.structured import extract_json_object
 from src.testsets.generator import MAX_CONSECUTIVE_FAILURES, GenerationAborted, generate
 from src.stores.testsets import ACCEPTED, PENDING, REJECTED
 from src.testsets.models import Draft, DraftItem
@@ -28,6 +29,9 @@ def group(chunk_id, **kwargs) -> ChunkGroup:
     return ChunkGroup((source_chunk(chunk_id, **kwargs),))
 
 
+FAILURE = object()  # a scripted reply that makes the call raise, as the real client does once retries are spent
+
+
 class FakeClient:
     """Answers each call from a script of replies (a dict becomes JSON); records the prompts it saw."""
 
@@ -37,6 +41,8 @@ class FakeClient:
     def call_llm(self, prompt, is_fallback=False, response_schema=None, max_retries=3):
         self.prompts.append(prompt)
         reply = self.replies.pop(0)
+        if reply is FAILURE:
+            raise GenerationError("RateLimitError: slow down")
         return LLMCall(text=reply if isinstance(reply, str) else json.dumps(reply))
 
 
@@ -164,7 +170,7 @@ def test_a_resumed_run_skips_chunks_already_handled_and_continues_the_tier_cycle
 
 
 def test_failed_calls_are_retried_later_and_a_dead_provider_aborts_the_run():
-    failure = f"{FAILURE_PREFIX} RateLimitError: slow down]"
+    failure = FAILURE
     groups = [group(f"c{i}") for i in range(MAX_CONSECUTIVE_FAILURES + 1)]
     draft = Draft()
     with pytest.raises(GenerationAborted):

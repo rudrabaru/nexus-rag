@@ -1,17 +1,26 @@
 import logging
+import math
 from typing import Tuple
 
 from pydantic import BaseModel
 
-from .llm_client import LLMClient
+from src.llm.client import LLMClient
+from src.llm.errors import GenerationError
+from src.llm.structured import extract_json_object
+
 from .models import GenerationConfig, GenerationResult
-from .structured import extract_json_object
 
 logger = logging.getLogger(__name__)
+
+# The only scores the prompt below allows. A judge that answers 0.75 or 7 has not followed the
+# instrument, and a score it did not mean must not be averaged into a result.
+VALID_SCORES = (0.0, 0.5, 1.0)
+
 
 class EvaluationResponse(BaseModel):
     score: float
     reasoning: str
+
 
 FAITHFULNESS_PROMPT_TEMPLATE = """You are an impartial judge evaluating the faithfulness of an AI-generated answer.
 You will be provided with:
@@ -55,9 +64,12 @@ def parse_verdict(text: str) -> Tuple[float, str]:
     except ValueError as e:
         raise JudgeOutputError(f"unusable judge output: {e}") from e
     try:
-        return float(evaluation["score"]), str(evaluation.get("reasoning", ""))
+        score = float(evaluation["score"])
     except (KeyError, TypeError, ValueError) as e:
         raise JudgeOutputError(f"the judge's JSON has no numeric score: {evaluation!r}") from e
+    if not math.isfinite(score) or score not in VALID_SCORES:
+        raise JudgeOutputError(f"the judge's score {score!r} is not one of {VALID_SCORES}")
+    return score, str(evaluation.get("reasoning", ""))
 
 
 class FaithfulnessEvaluator:
@@ -66,7 +78,8 @@ class FaithfulnessEvaluator:
 
     judge() is strict and is what evaluations use: a failed call raises JudgeUnavailable and a
     malformed verdict raises JudgeOutputError, so neither is ever recorded as a score.
-    evaluate() is the lenient form chat uses: any failure becomes score 0 with the reason.
+    evaluate() is the lenient form chat uses: a failure leaves the score empty (None) with the reason,
+    never 0.0, which would read as "the answer was a hallucination".
     """
 
     def __init__(self, config: GenerationConfig = None):
@@ -77,16 +90,17 @@ class FaithfulnessEvaluator:
 
     @property
     def model(self) -> str:
-        return f"{self.config.provider}/{self.config.model_name}"
+        return self.config.model_string
 
     def judge(self, result: GenerationResult) -> Tuple[float, str, float]:
         """(score, reasoning, cost of the judge call). Raises JudgeUnavailable or JudgeOutputError."""
         prompt = FAITHFULNESS_PROMPT_TEMPLATE.format(
             context=result.context_window.context_text, question=result.query, answer=result.answer,
         )
-        call = self.llm_client.call_llm(prompt, response_schema=EvaluationResponse)
-        if call.failed:
-            raise JudgeUnavailable(call.text)
+        try:
+            call = self.llm_client.call_llm(prompt, response_schema=EvaluationResponse)
+        except GenerationError as e:
+            raise JudgeUnavailable(str(e)) from e
         score, reasoning = parse_verdict(call.text)
         logger.info(f"Faithfulness judge -> score {score} | {reasoning}")
         return score, reasoning, call.cost_usd
@@ -96,8 +110,9 @@ class FaithfulnessEvaluator:
         try:
             result.faithfulness_score, result.faithfulness_reasoning, _ = self.judge(result)
         except JudgeUnavailable as e:
-            result.faithfulness_score, result.faithfulness_reasoning = 0.0, str(e)
+            logger.warning(f"Faithfulness judge unavailable: {e}")
+            result.faithfulness_score, result.faithfulness_reasoning = None, "The judge model was unavailable; no score."
         except JudgeOutputError as e:
             logger.error(f"Faithfulness judge output unusable: {e}")
-            result.faithfulness_score, result.faithfulness_reasoning = 0.0, f"Parse error: {e}"
+            result.faithfulness_score, result.faithfulness_reasoning = None, "The judge's reply could not be used; no score."
         return result

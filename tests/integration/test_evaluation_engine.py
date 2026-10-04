@@ -115,9 +115,9 @@ def fake_llm(monkeypatch):
         usage = SimpleNamespace(prompt_tokens=10, completion_tokens=5)
         return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=content), finish_reason="stop")], usage=usage)
 
-    monkeypatch.setattr("src.generating.llm_client.litellm.completion", completion)
-    monkeypatch.setattr("src.generating.llm_client.litellm.completion_cost", lambda **kw: 0.001)
-    monkeypatch.setattr("src.generating.llm_client.time.sleep", lambda *_: None)
+    monkeypatch.setattr("src.llm.client.litellm.completion", completion)
+    monkeypatch.setattr("src.llm.client.litellm.completion_cost", lambda **kw: 0.001)
+    monkeypatch.setattr("src.llm.client.time.sleep", lambda *_: None)
     return calls
 
 

@@ -25,6 +25,8 @@ import httpx
 from src.config import Settings
 from src.embedding.pacing import WINDOW_SECONDS, RateWindow
 from src.db.schema import EMBEDDING_DIMENSION
+from src.retry import RetryableError, retry_async
+from src.tokens import estimate_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +38,7 @@ DEFAULT_MODELS = {"voyage": "voyage-4", "ollama": "bge-m3"}
 # model are free, so this is what the usage would cost once that grant is spent.
 LIST_PRICE_PER_MILLION = {"voyage-4-large": 0.12, "voyage-4": 0.06, "voyage-4-lite": 0.02}
 
-# Pacing needs a token estimate before the provider has counted anything, and the API image
-# carries no tokenizer. ~3 characters per token over-estimates English (~4), so pacing errs
-# toward waiting rather than toward a 429.
-CHARS_PER_TOKEN_ESTIMATE = 3
 MAX_ATTEMPTS = 4
-MAX_BACKOFF_SECONDS = 60.0
 RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
 
 
@@ -112,28 +109,24 @@ class Embedder:
         return groups
 
     async def _post_paced(self, client: httpx.AsyncClient, texts: List[str], input_type: InputType) -> EmbeddingBatch:
-        for attempt in range(MAX_ATTEMPTS):
+        async def send() -> EmbeddingBatch:
             await self._wait_for_window(sum(estimate_tokens(t) for t in texts))
             try:
                 response = await client.post(self.endpoint, headers=self.headers, json=self.request_body(texts, input_type))
             except httpx.TransportError as e:
-                error, delay = EmbeddingError(f"{self.provider} unreachable: {e}", retryable=True), 2.0 ** attempt
-            else:
-                if response.status_code < 400:
-                    return self._validated(self.read_response(response.json()), len(texts))
-                retryable = response.status_code in RETRYABLE_STATUS
-                error = EmbeddingError(
-                    f"{self.provider} embeddings HTTP {response.status_code}: {response.text[:200]}", retryable,
-                    status=response.status_code,
-                )
-                if not retryable:
-                    raise error
-                delay = self._rate_limit_wait(response) if response.status_code == 429 else _retry_after(response) or 2.0 ** (attempt + 1)
-            if attempt == MAX_ATTEMPTS - 1:
+                raise RetryableError(EmbeddingError(f"{self.provider} unreachable: {e}", retryable=True))
+            if response.status_code < 400:
+                return self._validated(self.read_response(response.json()), len(texts))
+            retryable = response.status_code in RETRYABLE_STATUS
+            error = EmbeddingError(
+                f"{self.provider} embeddings HTTP {response.status_code}: {response.text[:200]}", retryable,
+                status=response.status_code,
+            )
+            if not retryable:
                 raise error
-            logger.warning(f"EMBED | {error} | retry {attempt + 1}/{MAX_ATTEMPTS - 1} in {delay:.1f}s")
-            await asyncio.sleep(min(delay, MAX_BACKOFF_SECONDS))
-        raise AssertionError("unreachable")
+            raise RetryableError(error, delay=self._rate_limit_wait(response) if response.status_code == 429 else _retry_after(response))
+
+        return await retry_async(send, MAX_ATTEMPTS, "EMBED")
 
     def _rate_limit_wait(self, response: httpx.Response) -> float:
         """
@@ -162,10 +155,6 @@ class Embedder:
                 f"column holds {EMBEDDING_DIMENSION}. Choose a model with that output size.", retryable=False
             )
         return batch
-
-
-def estimate_tokens(text: str) -> int:
-    return max(1, len(text) // CHARS_PER_TOKEN_ESTIMATE)
 
 
 def _retry_after(response: httpx.Response) -> Optional[float]:

@@ -2,22 +2,21 @@
 RAG generator: retrieved chunks -> context window -> prompt -> LLM answer.
 
 All intelligence lives in context_builder.py and prompt_template.py; LLM access (retries,
-fallback, cost) in llm_client.py. Every step is timed and recorded for observability.
+fallback, cost) in src/llm/client.py. Every step is timed and recorded for observability.
 """
 import logging
 import time
 from dataclasses import dataclass
 from typing import AsyncIterator, List, Optional
 
-from .context_builder import ContextBuilder
-from .llm_client import GenerationError, LLMCall, LLMClient
+from src.llm.client import LLMCall, LLMClient
+from src.tokens import estimate_tokens
+
+from .context_builder import BELOW_SCORE, DUPLICATE, OVER_BUDGET, ContextBuilder
 from .models import ContextWindow, GenerationConfig, GenerationResult
 from .prompt_template import build_prompt
 
 logger = logging.getLogger(__name__)
-
-# Streams whose provider sent no usage block are estimated at ~4 characters per token.
-CHARS_PER_TOKEN_ESTIMATE = 4
 
 
 @dataclass
@@ -47,21 +46,30 @@ class RAGGenerator:
 
         included, excluded = len(context_window.included_chunks), len(context_window.excluded_chunks)
         logger.info(f"Context: {included} chunks included (~{context_window.total_context_tokens} tokens), {excluded} dropped")
-        if included == 0 and excluded > 0:
-            scores = [f"{c.similarity_score:.4f}" for c in context_window.excluded_chunks]
-            logger.warning(
-                f"EMPTY CONTEXT: All {excluded} retrieved chunks were excluded. "
-                f"min_similarity_score={self.config.min_similarity_score}. Excluded scores: [{', '.join(scores[:20])}]"
-            )
-            prepared.diagnostic = (
-                f"Retrieval returned no relevant context for this query "
-                f"(all {excluded} chunks scored below {self.config.min_similarity_score}). "
-                f"This may indicate a document quality, embedding, or retrieval configuration issue."
-            )
+        if included == 0:
+            prepared.diagnostic = self._empty_context_diagnostic(context_window)
+            logger.warning(f"EMPTY CONTEXT: {prepared.diagnostic}")
             return prepared
 
         prepared.prompt = build_prompt(query, context_window.context_text, self.config, chat_history=chat_history)
         return prepared
+
+    def _empty_context_diagnostic(self, window: ContextWindow) -> str:
+        """Why no model call was made: nothing was retrieved, or every chunk was excluded, and for which reason."""
+        if not window.excluded_chunks:
+            return "Retrieval returned no chunks for this query, so there is nothing to answer from. The index may be empty or the query unrelated to it."
+        counts = {reason: list(window.exclusion_reasons.values()).count(reason) for reason in (BELOW_SCORE, DUPLICATE, OVER_BUDGET)}
+        parts = []
+        if counts[BELOW_SCORE]:
+            parts.append(f"{counts[BELOW_SCORE]} scored below the minimum similarity of {self.config.min_similarity_score}")
+        if counts[OVER_BUDGET]:
+            parts.append(f"{counts[OVER_BUDGET]} did not fit the {self.config.max_context_tokens}-token context budget")
+        if counts[DUPLICATE]:
+            parts.append(f"{counts[DUPLICATE]} repeated an earlier chunk")
+        return (
+            f"All {len(window.excluded_chunks)} retrieved chunks were left out of the context: {'; '.join(parts)}. "
+            "This points at the retrieval settings, chunk sizes or the context budget rather than at the model."
+        )
 
     def generate(self, query: str, retrieval_result, chat_history: List[dict] = None) -> GenerationResult:
         total_start = time.time()
@@ -79,14 +87,12 @@ class RAGGenerator:
             return result
 
         gen_start = time.time()
-        call = self.llm_client.call_llm(prepared.prompt)
-        if call.failed:
-            raise GenerationError(call.text)
+        call = self.llm_client.call_llm(prepared.prompt)  # raises GenerationError once retries and the fallback are spent
         result.generation_latency_ms = (time.time() - gen_start) * 1000
         result.total_latency_ms = (time.time() - total_start) * 1000
         result.answer = call.text
         result.prompt_tokens, result.completion_tokens = call.prompt_tokens, call.completion_tokens
-        result.generation_cost_usd = call.cost_usd
+        result.generation_cost_usd, result.generation_cost_known = call.cost_usd, call.cost_known
         result.provider, result.model_name = call.provider, call.model
 
         logger.info(f"Generated answer in {result.generation_latency_ms:.1f}ms. Total: {result.total_latency_ms:.1f}ms")
@@ -102,6 +108,6 @@ class RAGGenerator:
         async for piece in self.llm_client.call_llm_stream(prepared.prompt, call):
             yield piece
         if not call.prompt_tokens:
-            call.prompt_tokens = len(prepared.prompt) // CHARS_PER_TOKEN_ESTIMATE
+            call.prompt_tokens = estimate_tokens(prepared.prompt)
         if not call.completion_tokens:
-            call.completion_tokens = len(call.text) // CHARS_PER_TOKEN_ESTIMATE
+            call.completion_tokens = estimate_tokens(call.text)

@@ -41,6 +41,7 @@ _METADATA_COLUMNS = (
     chunks.c.title,
     chunks.c.section_title,
     chunks.c.heading_path,
+    chunks.c.token_count,
     chunks.c.content_type,
     chunks.c.contains_code,
     chunks.c.contains_table,
@@ -63,8 +64,10 @@ def vector_literal(values: Sequence[float]) -> str:
 def _to_retrieved_chunk(row, score: float) -> RetrievedChunk:
     metadata = {column.name: row[column.name] for column in _METADATA_COLUMNS}
     metadata.pop("heading_path")
+    token_count = metadata.pop("token_count") or 0
     return RetrievedChunk(
         heading_path=[str(h) for h in (row["heading_path"] or [])],
+        token_count=token_count,
         chunk_id=row["chunk_id"],
         source_document=row["source_document"],
         source_url=row["source_url"],

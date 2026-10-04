@@ -6,11 +6,15 @@ SYSTEM_PROMPT = """You are a precise technical assistant. Your task is to answer
 
 Rules you must follow:
 1. Base your answer exclusively on the provided context. Do not use prior knowledge.
-2. When the context contains the answer, cite the source by mentioning the [Source: ...] URL.
-3. If the context does not contain enough information to answer the question, respond with:
+2. If the context does not contain enough information to answer the question, respond with:
    "I don't have enough information in the provided context to answer this question."
-4. Do not speculate, extrapolate, or invent information not present in the context.
-5. Keep your answer concise and structured. Use bullet points or numbered steps where appropriate."""
+3. Do not speculate, extrapolate, or invent information not present in the context.
+4. Keep your answer concise and structured. Use bullet points or numbered steps where appropriate."""
+
+# Added only when config.cite_sources is on; without it the model is not asked to mention sources.
+CITATION_INSTRUCTION = (
+    "\nWhen the context contains the answer, cite where it came from by mentioning the [Source: ...] URL of the passage you used."
+)
 
 
 def build_prompt(
@@ -34,11 +38,7 @@ def build_prompt(
     Returns:
         A single string prompt ready to pass to any LLM provider.
     """
-    citation_instruction = (
-        "\nWhen answering, reference the [Source: ...] markers from the context to cite where your information came from."
-        if config.cite_sources
-        else ""
-    )
+    citation_instruction = CITATION_INSTRUCTION if config.cite_sources else ""
 
     history_str = ""
     if chat_history:

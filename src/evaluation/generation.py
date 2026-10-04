@@ -27,7 +27,9 @@ from src.config import Settings
 from src.evaluation.spec import GenerationSpec, ModelSpec
 from src.generating.evaluator import FaithfulnessEvaluator, JudgeOutputError
 from src.generating.generator import RAGGenerator
-from src.generating.models import GenerationConfig, GenerationResult, default_model_name
+from src.generating.models import GenerationConfig, GenerationResult
+from src.llm.errors import GenerationError
+from src.llm.roles import role_fields
 from src.db.schema import generation_cache, judge_cache
 from src.retrieving.models import RetrievalResult
 
@@ -40,19 +42,21 @@ def cache_key(*parts: str) -> str:
     return hashlib.sha256("\x1f".join(parts).encode("utf-8")).hexdigest()
 
 
-def _config(model: Optional[ModelSpec], settings: Settings) -> GenerationConfig:
+def _config(model: Optional[ModelSpec], settings: Settings, role: str) -> GenerationConfig:
+    """The spec's pinned model, or the role's model from settings, never with a fallback."""
     if model:
         return GenerationConfig(provider=model.provider, model_name=model.model_name)
-    provider = settings.llm_provider
-    return GenerationConfig(provider=provider, model_name=settings.llm_model_name or default_model_name(provider))
+    fields = role_fields(settings, role)
+    fields.pop("fallback_config", None)
+    return GenerationConfig(**fields)
 
 
 class GenerationStage:
     def __init__(self, spec: GenerationSpec, tenant_id: str, engine: Engine, settings: Settings):
         self.tenant_id = tenant_id
         self.engine = engine
-        self.generator = RAGGenerator(_config(spec.model, settings))  # fallback_config is None: pinned
-        self.judge = FaithfulnessEvaluator(_config(spec.judge, settings))
+        self.generator = RAGGenerator(_config(spec.model, settings, "chat"))  # fallback_config is None: pinned
+        self.judge = FaithfulnessEvaluator(_config(spec.judge, settings, "judge"))
         self.model = f"{self.generator.config.provider}/{self.generator.config.model_name}"
         self.counters: Counter = Counter()
         self._lock = threading.Lock()
@@ -79,9 +83,10 @@ class GenerationStage:
             )
         else:
             self._count("generation_calls")
-            call = self.generator.llm_client.call_llm(prepared.prompt)
-            if call.failed:
-                return {**row, "error": f"generation failed: {call.text}"}
+            try:
+                call = self.generator.llm_client.call_llm(prepared.prompt)
+            except GenerationError as e:
+                return {**row, "error": f"generation failed: {e}"}
             answer = call.text
             self._put(generation_cache, cache_key=answer_key, model=self.model, answer=answer,
                       input_tokens=call.prompt_tokens, output_tokens=call.completion_tokens, cost_usd=call.cost_usd)

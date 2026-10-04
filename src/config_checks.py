@@ -12,6 +12,7 @@ from typing import List, Literal
 from sqlalchemy.engine import make_url
 
 from src.config import LLM_PROVIDER_KEY_FIELDS, Settings
+from src.llm.config import parse_model
 
 Role = Literal["api", "worker", "cli"]
 
@@ -29,6 +30,8 @@ REMOVED_VARIABLES = {
     "ENABLE_RERANKER": "use RERANKER=flashrank | jina | voyage | none",
     "TRUST_PROXIES": "use TRUSTED_PROXY_HOPS (the number of reverse proxies in front of the API)",
     "MISTRAL_API_KEY": "Mistral is no longer a supported provider",
+    "LLM_PROVIDER": "use LLM_CHAT=provider/model (for example gemini/gemini-3.5-flash)",
+    "LLM_MODEL_NAME": "use LLM_CHAT=provider/model (for example gemini/gemini-3.5-flash)",
 }
 
 
@@ -53,6 +56,25 @@ def _embedding_problems(settings: Settings) -> List[str]:
     if provider == "voyage" and not settings.voyage_api_key.get_secret_value():
         return ["VOYAGE_API_KEY (EMBEDDING_PROVIDER=voyage)"]
     return []
+
+
+def _llm_problems(settings: Settings) -> List[str]:
+    """Every role's model must be 'provider/model'; chat, which every request needs, must also have its provider's key."""
+    problems = []
+    for variable in ("llm_chat", "llm_chat_fallback", "llm_rewrite", "llm_judge", "llm_testset"):
+        value = getattr(settings, variable)
+        if not value and variable == "llm_chat_fallback":
+            continue
+        try:
+            provider, _ = parse_model(value)
+        except ValueError:
+            problems.append(f"{variable.upper()} (provider/model, for example gemini/gemini-3.5-flash)")
+            continue
+        if variable == "llm_chat" and provider not in LLM_PROVIDER_KEY_FIELDS:
+            problems.append(f"LLM_CHAT (provider must be one of {', '.join(LLM_PROVIDER_KEY_FIELDS)})")
+        elif variable == "llm_chat" and not settings.has_llm_key(provider):
+            problems.append(LLM_PROVIDER_KEY_FIELDS[provider].upper())
+    return problems
 
 
 def _retrieval_problems(settings: Settings) -> List[str]:
@@ -90,9 +112,7 @@ def config_problems(settings: Settings, role: Role) -> List[str]:
                 "generate one with: python -c \"import secrets; print(secrets.token_urlsafe(32))\")"
             )
         problems += _retrieval_problems(settings)
-        provider = settings.llm_provider.lower()
-        if not settings.has_llm_key(provider):
-            problems.append(LLM_PROVIDER_KEY_FIELDS[provider].upper())
+        problems += _llm_problems(settings)
     if role == "cli":
         problems += _retrieval_problems(settings)
     return problems

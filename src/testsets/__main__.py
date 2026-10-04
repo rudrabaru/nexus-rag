@@ -1,5 +1,5 @@
 """
-    python -m src.testsets generate --tenant T --set NAME [--count 50] [--provider gemini|groq] [--dry-run] [--show-prompt]
+    python -m src.testsets generate --tenant T --set NAME [--count 50] [--model provider/model] [--dry-run] [--show-prompt]
     python -m src.testsets review   --tenant T --set NAME
     python -m src.testsets freeze   --tenant T --set NAME
     python -m src.testsets verify   --tenant T --set NAME
@@ -41,8 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     generate = command("generate", "write questions from the workspace's chunks into a draft set")
     generate.add_argument("--count", type=int, default=50)
-    generate.add_argument("--provider", default="gemini")
-    generate.add_argument("--model", help="default: the provider's default model")
+    generate.add_argument("--model", help="provider/model (default: LLM_TESTSET)")
     generate.add_argument("--index", help="embedding index to read chunks from (default: the configured one)")
     generate.add_argument("--difficulties", default="easy,medium,hard", help="tiers, cycled in order")
     generate.add_argument("--seed", type=int, default=0)

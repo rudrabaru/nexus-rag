@@ -8,7 +8,7 @@ from src.embedding.pacing import RateWindow
 from src.retrieving.config import RetrievalConfig
 from src.retrieving.models import RetrievedChunk
 from src.retrieving.rerankers import build_reranker
-from src.retrieving.voyage_reranker import VoyageReranker
+from src.retrieving.rerankers.voyage import VoyageReranker
 
 
 def chunk(chunk_id: str) -> RetrievedChunk:
@@ -25,12 +25,12 @@ def served(monkeypatch):
         return state["responses"].pop(0)
 
     real = httpx.AsyncClient
-    monkeypatch.setattr("src.retrieving.voyage_reranker.httpx.AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
+    monkeypatch.setattr("src.retrieving.rerankers.voyage.httpx.AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler), **kw))
 
     async def no_wait(seconds):
         state.setdefault("slept", []).append(seconds)
 
-    monkeypatch.setattr("src.retrieving.voyage_reranker.asyncio.sleep", no_wait)
+    monkeypatch.setattr("src.retrieving.rerankers.voyage.asyncio.sleep", no_wait)
     return state
 
 
@@ -63,7 +63,7 @@ async def test_a_rate_limited_request_waits_one_request_slot_and_is_retried(serv
 
 async def test_persistent_rate_limiting_raises_instead_of_returning_the_first_stage_order(served):
     served["responses"] += [httpx.Response(429, json={"detail": "3 RPM"})] * 3
-    with pytest.raises(Exception, match="voyage: failed after 3 attempts.*429"):
+    with pytest.raises(Exception, match="voyage: HTTP 429"):
         await reranker().rerank("q", [chunk("a")], top_k=1)
 
 
@@ -82,7 +82,7 @@ async def test_its_pacing_window_makes_a_second_request_wait_for_a_free_slot(ser
         waited.append(seconds)
         window._sent.clear()  # a minute passing
 
-    monkeypatch.setattr("src.retrieving.voyage_reranker.asyncio.sleep", sleep_until_the_slot_frees)
+    monkeypatch.setattr("src.retrieving.rerankers.voyage.asyncio.sleep", sleep_until_the_slot_frees)
     r = VoyageReranker("key", "https://api.voyageai.com/v1", "rerank-3", window)
     served["responses"] += [httpx.Response(200, json=OK)] * 2
     await r.rerank("q", [chunk("a"), chunk("b"), chunk("c")], top_k=2)

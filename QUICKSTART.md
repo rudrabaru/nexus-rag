@@ -11,7 +11,7 @@ This is a production-grade, no-framework RAG (Retrieval-Augmented Generation) sy
 
 Create a `.env` file in the root directory:
 ```env
-LLM_PROVIDER=gemini
+LLM_CHAT=gemini/gemini-3.5-flash
 GEMINI_API_KEY=your_gemini_api_key_here
 # Optional: GROQ_API_KEY=your_groq_api_key_here
 ADMIN_API_KEY=your_admin_api_key_here

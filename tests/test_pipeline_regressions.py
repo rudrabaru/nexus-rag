@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.generating.evaluator import FaithfulnessEvaluator
-from src.generating.llm_client import LLMCall
+from src.llm.client import LLMCall
 from src.generating.models import ContextWindow, GenerationConfig, GenerationResult
 from src.ingestion.embedding_worker import EmbeddingUnavailableError, EmbeddingWorker
 

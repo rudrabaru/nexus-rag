@@ -4,7 +4,7 @@ Pydantic schemas for chunk representation and metadata.
 
 from typing import List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChunkMetadata(BaseModel):
@@ -56,6 +56,5 @@ class ChunkingConfig(BaseModel):
     source_version: str = Field("unknown", description="Version of input docs")
     output_version: str = Field("unknown", description="Version of output chunks")
 
-    class Config:
-        validate_assignment = True
+    model_config = ConfigDict(validate_assignment=True)
 

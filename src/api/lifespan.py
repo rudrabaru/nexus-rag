@@ -58,7 +58,7 @@ def _initialize(app: FastAPI) -> None:
     index_id = components.retrieval.default_index_id
     index_size = components.retrieval.chunk_store().get_collection_size()
     logger.info(
-        f"RAG Pipeline API ready. Provider: {components.provider}, Model: {components.model_name}, "
+        f"RAG Pipeline API ready. Chat model: {components.model}, "
         f"index: {index_id} ({index_size} chunks)"
     )
     if index_size == 0:

@@ -49,7 +49,7 @@ def make_row(chunk_id="md5_chunk_000", **overrides):
     row = {
         "chunk_id": chunk_id, "tenant_id": "tenant-1", "index_id": "voyage:voyage-4", "doc_id": "doc-1", "source_document": "Doc",
         "source_url": "https://a.example", "title": "Doc", "section_title": "S", "heading_path": ["H1", "H2"],
-        "content_type": "text", "contains_code": False, "contains_table": False, "chunk_version": "v",
+        "content_type": "text", "contains_code": False, "contains_table": False, "chunk_version": "v", "token_count": 12,
         "document_version": "v", "chunk_text": "hello world", "distance": 0.25, "score": 0.5,
     }
     row.update(overrides)

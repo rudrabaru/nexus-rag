@@ -47,9 +47,9 @@ def test_embedding_key_requirement_follows_the_embedding_provider(monkeypatch):
     assert any("EMBEDDING_PROVIDER" in p for p in config_problems(make_settings(monkeypatch, EMBEDDING_PROVIDER="jina"), "api"))
 
 
-def test_provider_key_requirement_follows_llm_provider(monkeypatch):
+def test_provider_key_requirement_follows_the_chat_model(monkeypatch):
     monkeypatch.delenv("GEMINI_API_KEY")
-    reported = config_problems(make_settings(monkeypatch, LLM_PROVIDER="groq"), "api")
+    reported = config_problems(make_settings(monkeypatch, LLM_CHAT="groq/openai/gpt-oss-20b"), "api")
     assert "GROQ_API_KEY" in reported and "GEMINI_API_KEY" not in reported
 
 
@@ -59,7 +59,7 @@ def test_the_admin_key_must_be_long_enough_to_resist_guessing(monkeypatch):
     assert config_problems(make_settings(monkeypatch, ADMIN_API_KEY="x" * MIN_ADMIN_KEY_LENGTH), "api") == []
 
 
-@pytest.mark.parametrize("name", ["RAG_API_KEY", "ENABLE_RERANKER", "TRUST_PROXIES", "MISTRAL_API_KEY"])
+@pytest.mark.parametrize("name", ["RAG_API_KEY", "ENABLE_RERANKER", "TRUST_PROXIES", "MISTRAL_API_KEY", "LLM_PROVIDER", "LLM_MODEL_NAME"])
 def test_a_removed_variable_still_set_stops_the_process_instead_of_being_ignored(monkeypatch, name):
     monkeypatch.setenv(name, "false")
     reported = " ".join(problems())

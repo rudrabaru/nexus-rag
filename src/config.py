@@ -36,8 +36,13 @@ class Settings(BaseSettings):
     groq_api_key: SecretStr = SecretStr("")
     openai_api_key: SecretStr = SecretStr("")
 
-    llm_provider: str = "gemini"
-    llm_model_name: str = ""
+    # Which model plays which role, as 'provider/model' (src/llm/roles.py). The judge defaults to a
+    # different family than chat, because a judge that shares the generator's family favours its answers.
+    llm_chat: str = "gemini/gemini-3.5-flash"
+    llm_chat_fallback: str = "groq/openai/gpt-oss-20b"  # used only when that provider's key is set; empty disables it
+    llm_rewrite: str = "groq/openai/gpt-oss-20b"
+    llm_judge: str = "groq/openai/gpt-oss-20b"
+    llm_testset: str = "gemini/gemini-3.5-flash"
 
     # One index = one embedding model (src/embedding/providers.py). Ingestion writes to, and
     # queries read from, the index of this provider + model.

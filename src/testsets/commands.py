@@ -9,8 +9,9 @@ from src.db.engine import get_sync_engine
 from src.embedding.providers import build_embedder
 from src.evaluation.dataset import SYNTHETIC
 from src.evaluation.ground_truth import missing_chunk_ids
-from src.generating.llm_client import LLMClient
-from src.generating.models import GenerationConfig, default_model_name
+from src.llm.client import LLMClient
+from src.generating.models import GenerationConfig
+from src.llm.config import parse_model
 from src.stores.testsets import PENDING, TestSetError, TestSetStore
 from src.testsets.generator import GenerationAborted, generate
 from src.testsets.models import Draft
@@ -45,8 +46,11 @@ def _find(args) -> dict:
 
 def command_generate(args) -> int:
     settings = get_settings()
-    provider = args.provider
-    model_name = args.model or default_model_name(provider)
+    try:
+        provider, model_name = parse_model(args.model or settings.llm_testset)
+    except ValueError as e:
+        print(e)
+        return 2
     if not settings.has_llm_key(provider):
         print(f"No API key for {provider}: set {provider.upper()}_API_KEY.")
         return 2

@@ -15,7 +15,8 @@ import time
 from typing import Callable, Sequence
 
 from src.evaluation.dataset import SYNTHETIC
-from src.generating.llm_client import LLMClient
+from src.llm.client import LLMClient
+from src.llm.errors import GenerationError
 from src.testsets.models import Draft, DraftItem
 from src.testsets.prompt import GeneratedQuestion, build_prompt, parse_generated
 from src.testsets.quality import lexical_overlap
@@ -56,14 +57,17 @@ def generate(
         if last_call is not None:
             sleep(max(0.0, min_interval_seconds - (time.monotonic() - last_call)))
         difficulty = difficulties[len(draft.items) % len(difficulties)]
-        call = client.call_llm(build_prompt(group, difficulty), response_schema=GeneratedQuestion)
+        try:
+            reply = client.call_llm(build_prompt(group, difficulty), response_schema=GeneratedQuestion).text
+        except GenerationError as e:
+            reply = f"[call failed: {e}]"
         last_call = time.monotonic()
-        generated = None if call.failed else parse_generated(call.text)
+        generated = parse_generated(reply)
         if generated is None:
             failures += 1
-            progress(f"  {group.chunk_ids[0]}: no usable reply ({call.text[:120]!r})")
+            progress(f"  {group.chunk_ids[0]}: no usable reply ({reply[:120]!r})")
             if failures >= MAX_CONSECUTIVE_FAILURES:
-                raise GenerationAborted(f"{failures} failures in a row; the last: {call.text[:200]!r}")
+                raise GenerationAborted(f"{failures} failures in a row; the last: {reply[:200]!r}")
             continue
         failures = 0
 
