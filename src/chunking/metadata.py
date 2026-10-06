@@ -50,7 +50,7 @@ class ChunkingConfig(BaseModel):
 
     chunk_size: int = Field(600, description="Target chunk size in tokens")
     overlap: int = Field(125, description="Overlap between chunks in tokens")
-    embedding_hard_limit: int = Field(2000, description="Maximum tokens allowed before hard truncation to prevent embedding API failures")
+    embedding_hard_limit: int = Field(2000, description="Largest chunk sent to the embedding model; a block over it is split, never cut")
     min_chunk_tokens: int = Field(150, description="Minimum tokens per chunk")
     max_chunk_tokens: int = Field(800, description="Maximum tokens per chunk")
     source_version: str = Field("unknown", description="Version of input docs")

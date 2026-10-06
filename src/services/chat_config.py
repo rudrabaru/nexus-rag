@@ -12,7 +12,7 @@ from src.config import Settings
 from src.retrieving.config import MAX_CANDIDATES, RetrievalConfig
 
 # The reranker is given this many results per requested result to reorder, unless the workspace
-# chose a pool size. It has always been 4; deeper pools cost rerank latency linearly.
+# chose a pool size. Four balances candidate depth against rerank latency, which grows linearly with the pool. Experiment: not tuned on a corpus.
 DEFAULT_RERANK_POOL_FACTOR = 4
 
 # The fields a workspace may set. index_id and top_k are not among them: the index is the

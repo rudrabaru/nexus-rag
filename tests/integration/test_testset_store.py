@@ -12,7 +12,7 @@ from tests.integration.helpers import Stores
 from src.retrieving.chunk_writes import write_chunks
 from src.retrieving.pipeline import RetrievalResources
 from src.testsets.sampling import group_identical, load_chunks
-from tests.integration.test_postgres import TEST_INDEX, AxisEmbedder, add_document, chunk, unit_vector
+from tests.support.postgres import TEST_INDEX, AxisEmbedder, add_document, chunk, unit_vector
 
 pytestmark = pytest.mark.usefixtures("clean_tables")
 

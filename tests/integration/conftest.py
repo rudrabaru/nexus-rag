@@ -30,6 +30,10 @@ from sqlalchemy.pool import NullPool
 from src.db.engine import async_connect_args, async_url, libpq_url, session_options, sync_url
 from src.db.schema import metadata
 from src.db.schema_version import ALEMBIC_INI
+from src.retrieving.chunk_store import ChunkStore
+from src.retrieving.chunk_writes import write_chunks
+from tests.integration.helpers import Stores
+from tests.support.postgres import TEST_INDEX
 
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
@@ -164,3 +168,22 @@ def clean_tables(pg_engine, test_schema):
     qualified = ", ".join(f'"{test_schema}"."{name}"' for name in metadata.tables)
     with pg_engine.begin() as conn:
         conn.execute(text(f"TRUNCATE {qualified} RESTART IDENTITY CASCADE"))
+
+
+@pytest.fixture
+def registry(pg_engine):
+    return Stores(pg_engine)
+
+
+@pytest.fixture
+def store(pg_engine, pg_async_engine):
+    return ChunkStore(pg_engine, pg_async_engine, TEST_INDEX)
+
+
+@pytest.fixture
+def load(pg_engine):
+    """Writes chunks in their own transaction, the way src/jobs/commit.py does inside its own."""
+    def _load(embedded):
+        with pg_engine.begin() as conn:
+            write_chunks(conn, embedded)
+    return _load

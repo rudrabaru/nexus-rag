@@ -5,7 +5,7 @@ from src.ingestion.embedding_worker import EmbeddingOutcome
 from src.jobs.commit import commit_ingestion
 from src.stores.checkpoints import CheckpointStore
 from tests.integration.helpers import Stores
-from tests.integration.test_job_queue import chunk, request
+from tests.support.job_queue import chunk, request
 
 pytestmark = pytest.mark.usefixtures("clean_tables")
 

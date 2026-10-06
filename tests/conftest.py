@@ -5,9 +5,11 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.pool import StaticPool
 
-from src.config import Settings, get_settings  # noqa: E402
-from src.stores.api_keys import AuthStore  # noqa: E402
-from src.db.schema import api_keys  # noqa: E402
+from src.config import Settings, get_settings
+from src.db.schema import api_keys
+from src.stores.api_keys import AuthStore
+
+pytest_plugins = ["tests.support.embedding", "tests.support.fetching"]
 
 ADMIN_KEY = "test-admin-key-0123456789-abcdefghijklmnop"
 
