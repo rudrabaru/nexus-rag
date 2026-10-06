@@ -36,7 +36,8 @@ class RAGGenerator:
 
     def prepare(self, query: str, retrieval_result, chat_history: List[dict] = None) -> PreparedPrompt:
         query_log_str = query[:60] + "..." if len(query) > 60 else query
-        logger.info(f"Retrieved {len(retrieval_result.chunks)} chunks for query: '{query_log_str}'")
+        logger.info(f"Retrieved {len(retrieval_result.chunks)} chunks for a query of {len(query)} characters")
+        logger.debug(f"Query: '{query_log_str}'")
         for i, chunk in enumerate(retrieval_result.chunks):
             logger.debug(f"  Chunk [{i+1}] score={chunk.similarity_score:.4f} id={chunk.chunk_id}")
 
@@ -96,7 +97,7 @@ class RAGGenerator:
         result.provider, result.model_name = call.provider, call.model
 
         logger.info(f"Generated answer in {result.generation_latency_ms:.1f}ms. Total: {result.total_latency_ms:.1f}ms")
-        logger.info(f"Answer: {call.text[:200]}{'...' if len(call.text) > 200 else ''}")
+        logger.debug(f"Answer: {call.text[:200]}{'...' if len(call.text) > 200 else ''}")
         return result
 
     async def stream(self, prepared: PreparedPrompt, call: LLMCall) -> AsyncIterator[str]:

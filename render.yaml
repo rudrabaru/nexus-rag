@@ -1,0 +1,44 @@
+# Render Blueprint for the API. Only the API is hosted: the fetch and parse workers run on demand
+# on a laptop (scripts/run_workers.ps1 / .sh) against the same database, so chat keeps working while
+# they are off. Secrets are never written here: `sync: false` makes Render ask for each in its dashboard.
+#
+# Two choices worth knowing:
+# - healthCheckPath is /health, not /ready. /ready queries the database, and a platform probes every
+#   few seconds, which would keep Neon's compute awake around the clock and spend its monthly
+#   compute hours. /health touches nothing; it answers 503 once start-up has failed, so a broken
+#   instance is still replaced.
+# - There is no pre-deploy command: it is not available on the free plan. Apply migrations from your
+#   machine before each deploy that adds one:  alembic upgrade head   (with DATABASE_URL pointing at
+#   Neon's direct endpoint). The API refuses to start on a database that has not been migrated.
+services:
+  - type: web
+    name: nexus-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile.api
+    plan: free
+    region: singapore # next to the Neon project (ap-southeast-1)
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: VOYAGE_API_KEY
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: TRUSTED_PROXY_HOPS
+        value: "1" # Render's load balancer is one hop in front of the API
+      - key: LOG_FORMAT
+        value: json
+      - key: SENTRY_ENVIRONMENT
+        value: production
+      - key: EMBEDDING_PROVIDER
+        value: voyage

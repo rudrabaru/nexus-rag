@@ -107,3 +107,64 @@ A startup fail-fast guard validates the whole configuration (`src/config.py`) an
 **Decision:** The plain and the streaming answer endpoints share one service (`src/services/chat_service.py`): prepare (retrieve) first, then either `answer` or `events`. Retrieval runs before the streaming response starts, so a retrieval failure is an HTTP error and a failure after tokens have flowed is a typed `error` event. A workspace may store its own retrieval settings (`PUT /v1/workspace/settings`); chat runs the environment defaults, then the workspace's choices, then the request's `top_k` and reranker switch, through the same pipeline an experiment trial uses.
 **Rationale:** Two copies of the same logic would have to be kept in step by hand: a fix to one (for example releasing the capacity slot) would have to be repeated in the other. Per-workspace settings are what let an experiment's winner be applied to chat without a deployment.
 **Tradeoff:** Settings are validated as a whole `RetrievalConfig` before they are stored, so a combination that cannot run is refused when it is set, not when the next question arrives.
+
+## 17. Observability: One Log Pipeline, Request Ids, Optional Error Reports
+**Decision:** Every log line, from our code and from libraries, is one structured record written by one handler (`src/observability/logging_setup.py`, structlog's `ProcessorFormatter` over the standard `logging` module). It is JSON when stderr is not a terminal and readable text when it is (`LOG_FORMAT` forces either). The request middleware gives each request an id (the caller's `X-Request-ID` when well-formed), binds it to a context variable so every line written while serving the request carries it, including lines from threads started with `asyncio.to_thread`, echoes it in the response, and writes one access line per request: method, path, status and duration. Pipeline events (`src/observability/logger.py`) go through the same handler. Error reporting to Sentry is off unless `SENTRY_DSN` is set and sends exceptions only.
+**Rationale:**
+- *One handler.* The pipeline logger used to own a handler of its own while the root logger had another, so each event was printed twice. A single configuration, applied idempotently, cannot stack handlers; a test asserts one line per event.
+- *Request ids in the log, not at call sites.* Binding the id once in the middleware means no function signature carries it, and a user-reported `request_id` (it is in every error body) finds every line of that request.
+- *Questions and answers stay out of logs.* Logs are copied to third-party collectors. The log line for an event shows the length of a question, not its text, and the question and answer text of the generator and the rewriter are written only at debug level. The persisted `pipeline_events` row keeps the question text for debugging and is pruned after 14 days (section 14); `query_logs` keeps the query for the dashboard for 90.
+- *Access lines never carry the query string*, which can hold tokens. Probes (`/health`, `/ready`) are logged at debug level because a platform polls them every few seconds.
+- *Error reports carry no personal data.* PII collection is off, request bodies are never captured, local variables are not attached, and a `before_send` hook removes request headers (they hold the API key), cookies, body, query string and the user from every event. What is sent is the exception, its stack and the request id tag. Tracing is off. Sentry's FastAPI integration reports only server errors (5xx), so a 401 or a 429 is not an event.
+**Tradeoff:** Structured logs are harder to read in a raw terminal, which is why a terminal gets the text renderer. Error reports and request ids cannot see a failure in a worker that never reaches Sentry's integration points; workers log through the same pipeline and report unhandled exceptions when `SENTRY_DSN` is set for them too.
+
+## 18. Hosting the API: What Is and Is Not on Render
+**Decision:** Only the API is hosted (`render.yaml`, free web service, Singapore, next to the Neon project). Workers run on demand on a laptop against the same database, so chat, stored results and the document list keep working while they are off. The platform health check is `/health`, which touches nothing; `/ready` (it queries the database) is for people and for a deployment that can afford to keep the database awake. Migrations are applied by hand before a deploy that adds one (`alembic upgrade head`, direct Neon endpoint), because a pre-deploy command is not available on the free plan, and the API refuses to start on a database that has not been migrated.
+**Rationale:** A platform probes a health check every few seconds. If that check queried Neon, the compute would never reach its idle suspend and would spend its monthly compute hours doing nothing; `/health` still lets the platform replace an instance whose start-up failed, because it answers 503 in that case. `TRUSTED_PROXY_HOPS=1` is set because Render's load balancer is one hop in front of the API (section 6).
+**Tradeoff:** A free web service sleeps after a period without traffic, so the first request after a pause waits for the instance to start and, if Neon was also idle, for its compute to resume (a few seconds each; both are Tier 1 costs the README states). The manual migration step is a way to forget something; the startup schema check turns forgetting into a clear refusal to start, not a failure at the first query.
+
+### Neon compute hours: how to measure
+Neon's free plan bounds compute time as well as storage, and the figure that matters is how many hours the compute was active, not how many requests were served. Read it in the Neon console (Monitoring, or the project's usage page) once a day for a week after deploying, with the workers off except when a document is ingested, and record each reading below. A reading that projects above the plan's monthly allowance means something is keeping the compute awake (a probe on `/ready`, a worker left running, a dashboard polling); find it before adding features.
+
+| Date | Compute hours so far this month | Hours since the last reading | What ran |
+|---|---|---|---|
+| | | | |
+
+## 19. Limits and Thresholds
+Every limit the system enforces, where it lives, and why it has the value it has. *Fixed by a provider* means the value follows a documented or measured external limit; *operational* means a safety bound chosen to be generous for one person using the system, not tuned on a corpus; *experiment* means a starting point that retrieval or evaluation results have not validated.
+
+| Limit | Value | Where | Kind and rationale |
+|---|---|---|---|
+| JSON request body | 256 KB | `src/api/app.py` | Operational: the largest valid chat request is a 2,000-character question plus 20 turns |
+| Upload size | 20 MB (plus 1 MB framing) | `src/services/uploads.py` | Operational: bounds memory per upload; the body is read in chunks and refused past the limit |
+| Chat question / history | 2,000 characters; 20 turns of 4,000 characters | `src/api/schemas/chat.py` | Operational: bounds what a caller can make us pay for in prompt tokens |
+| `top_k` | 1 to 20 | `src/api/schemas/chat.py` | Operational; the HNSW `ef_search` of 100 covers the largest rerank pool (`top_k` x 4) |
+| Rerank pool | 1 to 80 (chat: `top_k` x 4) | `src/retrieving/config.py`, `src/services/chat_config.py` | Experiment: depth against rerank latency |
+| Context budget | 5,000 tokens | `src/generating/models.py` | Experiment: one request near 5.5K tokens fits Groq's free 8K tokens a minute |
+| Answer requests | 5 a minute per key or address | `src/api/rate_limit.py` | Operational: each answer spends free-tier LLM quota |
+| Ingest requests | 10 a minute | `src/api/rate_limit.py` | Operational |
+| Read requests | 60 a minute | `src/api/rate_limit.py` | Operational |
+| Admin requests | 10 a minute | `src/api/rate_limit.py` | Operational |
+| Rejected credentials | 10 a minute per address, then 429 | `src/api/rate_limit.py` | Operational: slows key guessing without locking out a real user for long |
+| Concurrent answers | 4 (`QUERY_CONCURRENCY`); excess is 503 with `Retry-After` | `src/config.py` | Operational: bounds memory and spend on a small host |
+| Workspace chunks | 2,000 | `src/services/ingestion_service.py` | Operational: keeps one workspace within Neon's free storage |
+| Jobs queued or running per workspace | 10 | `src/services/ingestion_service.py` | Operational: workers run on demand, so work can wait for days; this bounds the pile |
+| Pending upload bytes per workspace | 200 MB | `src/services/ingestion_service.py` | Operational: leaves most of Neon's 1 GB for vectors |
+| Web pages fetched per workspace per day | 200 (`FETCH_DAILY_PAGE_QUOTA`) | `src/config.py` | Fixed by a provider: protects the shared free reader allowances |
+| Pages per sitemap job; child sitemaps | 50; 10 | `src/crawling/sitemap.py` | Operational: bounds one job's reader calls |
+| Fetch pacing | one request per domain every 3 s | `src/config.py` | Fixed by a provider: keyless Jina allows about 20 requests a minute |
+| PDF pages through Docling; parse timeout | 50; 900 s | `src/config.py` | Measured: worst rate about 8.5 s a page (Phase 1) |
+| Unpacked DOCX size | 200 MiB | `src/parsing/child.py` | Experiment: 10 x the upload cap |
+| Embedding requests (Voyage, no payment method) | 3 a minute, 10K tokens a minute | `src/config.py` | Fixed by a provider (measured 2026-10-02) |
+| LLM call timeout | 60 s; 3 retries with 1, 2, 4 s backoff, then the fallback | `src/llm/client.py`, `src/llm/config.py` | Operational: a hung provider must not hold a slot for minutes |
+| Database statement / lock timeout | 60 s / 10 s | `src/db/engine.py` | Operational: one stuck query must not hold a pooled connection |
+| Database pool | 5 per engine (`DB_POOL_SIZE`) | `src/config.py` | Operational: Neon's free compute has few connections |
+| Key validation cache | 60 s, 10,000 entries | `src/stores/api_keys.py` | Operational: bounds how long a revoked key can still work in another process |
+| Query-embedding cache | 500 entries per index | `src/retrieving/dense.py` | Experiment |
+| Retention | events 14 days; query log and fetch log 90; failed queue rows 30 | `src/maintenance.py` | Operational: Neon's 1 GB |
+| Stalled-job threshold | 30 s of silence | `src/jobs/recovery.py` | Operational: three heartbeats, so a Neon resume is not read as a dead worker |
+| Chunk sizes, overlap | 600 target, 800 max, 125 overlap, 150 min | Phase 3 | Experiment (table in Phase 3) |
+| Cleaner scores and tiers | see Phase 2 | `src/processing/cleaner.py` | Experiment (table in Phase 2) |
+| Regression gate | 90% valid runs; primary metric `mrr`; alpha 0.05 | Phase 6 | Operational: chosen in advance, not tuned |
+
+Provider limits that shape the design, all from this project's own measurements or the providers' pages on the dates given in the phase documents, and all liable to change without notice: Voyage's card-free embedding and rerank limits (Phases 4 and 5), Groq's 8K tokens a minute and 200K a day, Gemini's few requests a minute (unpublished; check AI Studio), keyless Jina Reader's roughly 20 requests a minute, Firecrawl's 1,000 credits a month, and Neon's free storage and compute hours. Check each in its provider console before depending on it.

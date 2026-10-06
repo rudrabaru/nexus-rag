@@ -1,5 +1,10 @@
 """
-Structured pipeline events: printed as JSON log lines and persisted to pipeline_events.
+Structured pipeline events: written to the log and persisted to pipeline_events.
+
+The log line goes through the process's one logging pipeline (src/observability/logging_setup.py),
+so it carries the request id and is never printed twice. It shows the length of a question, not its
+text, because logs are copied to third-party collectors; the persisted row keeps the text for
+debugging and is pruned after 14 days (src/maintenance.py).
 
 Persistence runs on one background thread. log_event is called from request handlers on the
 event loop, and a synchronous insert there would stall every concurrent request for a full
@@ -8,12 +13,12 @@ Delivery is best-effort: events still queued when the process is killed are lost
 flushes them on a normal shutdown.
 """
 import json
-import logging
 import queue
 import threading
 from datetime import datetime, timezone
 from typing import Optional
 
+import structlog
 from sqlalchemy import insert
 from sqlalchemy.engine import Engine
 
@@ -21,17 +26,21 @@ from src.db.schema import pipeline_events
 
 MAX_BATCH_SIZE = 100
 _STOP = object()
+TEXT_FIELDS = ("query_text",)  # shown in the log as a length, kept in full in the row
+
+
+def loggable(details: dict) -> dict:
+    """The event's details as they may appear in a log line: free text replaced by its length."""
+    shown = dict(details)
+    for field in TEXT_FIELDS:
+        if field in shown:
+            shown[field.replace("_text", "_chars")] = len(str(shown.pop(field)))
+    return shown
 
 
 class PipelineLogger:
     def __init__(self, name: str, engine: Optional[Engine] = None):
-        self.logger = logging.getLogger(name)
-        self.logger.setLevel(logging.INFO)
-        if not self.logger.handlers:
-            handler = logging.StreamHandler()
-            handler.setFormatter(logging.Formatter("%(message)s"))
-            self.logger.addHandler(handler)
-
+        self.logger = structlog.get_logger(name)
         self._engine = engine
         self._queue: "queue.SimpleQueue" = queue.SimpleQueue()
         self._writer: Optional[threading.Thread] = None
@@ -42,7 +51,7 @@ class PipelineLogger:
     def log_event(self, event: str, **kwargs) -> None:
         timestamp = datetime.now(timezone.utc)
         details = json.loads(json.dumps(kwargs, default=str))
-        self.logger.info(json.dumps({"event": event, "timestamp": timestamp.isoformat(), **details}))
+        self.logger.info(event, **loggable(details))
 
         if self._writer is not None:
             self._queue.put(
@@ -82,6 +91,6 @@ class PipelineLogger:
                 with self._engine.begin() as conn:
                     conn.execute(insert(pipeline_events), batch)
             except Exception as e:
-                self.logger.warning(f"PipelineLogger failed to persist {len(batch)} events: {e}")
+                self.logger.warning("pipeline_events_not_persisted", events=len(batch), error=str(e))
             if stop:
                 return

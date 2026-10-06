@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api import errors
 from src.api.lifespan import lifespan
-from src.api.middleware import BodyLimitMiddleware, RequestIdMiddleware
+from src.api.middleware import BodyLimitMiddleware, RequestContextMiddleware
 from src.api.rate_limit import limiter
 from src.api.routes import admin, chat, documents, health, workspace
 from src.config import get_settings
@@ -49,7 +49,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
         expose_headers=["X-Request-ID", "Retry-After"],
     )
-    app.add_middleware(RequestIdMiddleware)
+    app.add_middleware(RequestContextMiddleware)
 
     app.state.limiter = limiter
     errors.register(app)

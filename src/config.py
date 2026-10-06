@@ -1,6 +1,6 @@
 import logging
 from functools import lru_cache
-from typing import List
+from typing import List, Literal
 
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -85,6 +85,13 @@ class Settings(BaseSettings):
     worker_concurrency: int = Field(2, ge=1, le=8)
 
     allowed_origins: str = ""
+
+    # Observability (src/observability). LOG_FORMAT: auto = JSON unless stderr is a terminal.
+    # Error reporting is off unless a Sentry DSN is set; it sends exceptions only, no request data.
+    log_format: Literal["auto", "json", "console"] = "auto"
+    sentry_dsn: SecretStr = SecretStr("")
+    sentry_environment: str = "local"
+
     # How many reverse proxies in front of the API append to X-Forwarded-For. 0 = the peer address is
     # the client. Render's load balancer is one hop. Entries further left are client-supplied.
     trusted_proxy_hops: int = Field(0, ge=0, le=5)

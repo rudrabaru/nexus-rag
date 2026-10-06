@@ -274,6 +274,14 @@ graph LR
 
 Both workers follow the same rule on their own startup (config, then schema), and each refuses to start if it holds a task from another queue.
 
+## Hosting the API
+
+`render.yaml` is a Render Blueprint for the API only (free web service). Workers are not hosted: run them on demand from a laptop against the same database (`scripts/run_workers.ps1` or `.sh`), and chat keeps working while they are off.
+- Secrets are entered in Render's dashboard (`sync: false`); nothing secret is in the file.
+- The health check is `/health`, not `/ready`: `/ready` queries the database, and a platform probes every few seconds, which would keep Neon's compute awake and spend its monthly compute hours.
+- Apply migrations from your machine before a deploy that adds one: `alembic upgrade head` with `DATABASE_URL` set to Neon's direct endpoint. The free plan has no pre-deploy command, and the API refuses to start on a database that has not been migrated.
+- Logs are JSON with a request id on every line (`LOG_FORMAT`); set `SENTRY_DSN` to report unhandled exceptions (no request data is sent). Every limit and threshold, and how to measure Neon compute hours, is in [Phase 9](docs/phases/phase9_production_tradeoffs.md).
+
 ## Setup & Hosting Notes
 
 **Storage:**

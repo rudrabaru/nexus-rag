@@ -69,7 +69,7 @@ class QueryRewriter:
     def generalise(self, query: str) -> str:
         rewritten = self._ask(GENERALISE_PROMPT.format(query=query), query)
         if rewritten != query:
-            logger.info(f"Generalised query from '{query}' to '{rewritten}'")
+            logger.debug(f"Generalised query from '{query}' to '{rewritten}'")
         return rewritten
 
     def rewrite(self, query: str, history: List[Dict[str, str]]) -> str:
@@ -78,5 +78,5 @@ class QueryRewriter:
         lines = [f"{m.get('role', 'user').capitalize()}: {m.get('content', '')}" for m in history[-MAX_HISTORY_MESSAGES:]]
         rewritten = self._ask(REWRITE_PROMPT.format(history="\n".join(lines), query=query), query)
         if rewritten != query:
-            logger.info(f"Rewrote query from '{query}' to '{rewritten}'")
+            logger.debug(f"Rewrote query from '{query}' to '{rewritten}'")
         return rewritten

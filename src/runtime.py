@@ -7,7 +7,6 @@ once, explicitly, as its first act. That keeps modules importable in tests and t
 effects, and gives configuration problems one place to be reported.
 """
 import asyncio
-import logging
 import sys
 from pathlib import Path
 
@@ -17,6 +16,8 @@ from src.config import Settings, get_settings
 from src.config_checks import Role, config_problems
 from src.db.engine import get_sync_engine
 from src.db.schema_version import assert_schema_current
+from src.observability.error_reporting import init_error_reporting
+from src.observability.logging_setup import configure_logging as configure_process_logging
 
 ENV_FILE = Path(__file__).resolve().parents[1] / ".env"
 
@@ -32,7 +33,14 @@ def load_environment() -> None:
 
 
 def configure_logging() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s - %(message)s")
+    """Structured logging in the format LOG_FORMAT asks for, and error reporting when a Sentry DSN is set."""
+    try:
+        settings = get_settings()
+    except ValueError:  # an invalid environment is reported by check_configuration; log it readably meanwhile
+        configure_process_logging()
+        return
+    configure_process_logging(settings.log_format)
+    init_error_reporting(settings.sentry_dsn.get_secret_value(), settings.sentry_environment)
 
 
 def check_configuration(role: Role) -> Settings:
