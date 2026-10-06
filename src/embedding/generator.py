@@ -4,7 +4,7 @@ from typing import Dict, List, Optional, Tuple
 
 from src.chunking.metadata import ChunkMetadata
 from src.embedding.models import EmbeddedChunk
-from src.embedding.providers import EmbeddingError, Embedder
+from src.embedding.embedder import Embedder, EmbeddingError
 from src.errors import EmbeddingRejectedError
 from src.stores.checkpoints import Checkpoint, CheckpointStore
 

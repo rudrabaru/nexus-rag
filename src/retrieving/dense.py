@@ -4,7 +4,7 @@ import time
 from collections import OrderedDict
 from typing import Any, List, Optional, Tuple
 
-from src.embedding.providers import Embedder
+from src.embedding.embedder import Embedder
 from src.retrieving.chunk_store import ChunkStore
 from src.retrieving.models import RetrievalResult
 

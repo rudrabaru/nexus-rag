@@ -24,7 +24,7 @@ from src.retrieving.config import RetrievalConfig
 from src.retrieving.dense import DenseRetriever
 from src.retrieving.pipeline import RetrievalPipeline
 from src.retrieving.sparse import SparseRetriever
-from src.embedding.providers import EmbeddingBatch
+from src.embedding.embedder import EmbeddingBatch
 
 pytestmark = pytest.mark.usefixtures("clean_tables")
 

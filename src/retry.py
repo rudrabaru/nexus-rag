@@ -15,6 +15,9 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+# HTTP statuses a provider uses for "try again": timeouts, rate limits and server-side failures.
+RETRYABLE_STATUS = {408, 429, 500, 502, 503, 504}
+
 MAX_BACKOFF_SECONDS = 90.0  # longer than a rate-limit window, so a provider's own wait is honoured in full
 
 

@@ -6,10 +6,12 @@ import httpx
 import pytest
 
 from src.config import get_settings
+from src.embedding import embedder as embedder_module
 from src.embedding import providers
 from src.embedding.generator import EmbeddingGenerator, apportion, embedding_input, input_hash
 from src.embedding.pacing import WINDOW_SECONDS, RateWindow
-from src.embedding.providers import EmbeddingError, build_embedder
+from src.embedding.embedder import EmbeddingError
+from src.embedding.providers import build_embedder
 from src.retrieving.dense import DenseRetriever
 from src.db.schema import EMBEDDING_DIMENSION
 from src.errors import EmbeddingRejectedError
@@ -59,8 +61,8 @@ class FakeServer:
 def server(monkeypatch):
     fake = FakeServer()
     real_client = httpx.AsyncClient
-    monkeypatch.setattr(providers.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(fake.handler), **kw))
-    monkeypatch.setattr(providers.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(embedder_module.httpx, "AsyncClient", lambda **kw: real_client(transport=httpx.MockTransport(fake.handler), **kw))
+    monkeypatch.setattr(embedder_module.asyncio, "sleep", _no_sleep)
     return fake
 
 
@@ -171,7 +173,7 @@ def test_a_429_waits_for_the_whole_window_not_a_few_seconds(server, monkeypatch)
     async def record(seconds):
         sleeps.append(seconds)
 
-    monkeypatch.setattr(providers.asyncio, "sleep", record)
+    monkeypatch.setattr(embedder_module.asyncio, "sleep", record)
     server.responses = [httpx.Response(429, json={"detail": "3 RPM"})]
     embedder = voyage(monkeypatch)
     embedder.window.reserve = lambda tokens, now=None: 0.0  # pacing is not what is being tested

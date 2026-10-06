@@ -14,7 +14,7 @@ import httpx
 
 from src.config import Settings
 from src.embedding.pacing import WINDOW_SECONDS, RateWindow
-from src.embedding.providers import RETRYABLE_STATUS
+from src.retry import RETRYABLE_STATUS
 from src.retrieving.models import RetrievalResult, RetrievedChunk
 from src.retrieving.rerankers.base import RerankError, rescored, result
 from src.retry import RetryableError, retry_async

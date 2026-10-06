@@ -4,7 +4,7 @@ from typing import List
 
 import httpx
 
-from src.embedding.providers import RETRYABLE_STATUS
+from src.retry import RETRYABLE_STATUS
 from src.retrieving.models import RetrievalResult, RetrievedChunk
 from src.retrieving.rerankers.base import RerankError, rescored, result
 from src.retry import RetryableError, retry_async
