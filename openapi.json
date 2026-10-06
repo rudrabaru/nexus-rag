@@ -252,6 +252,135 @@
         "title": "ErrorBody",
         "type": "object"
       },
+      "ExperimentReport": {
+        "description": "What an experiment found: per-trial metrics and, for each trial against the baseline, a verdict\n(better, worse, no significant difference, or insufficient evidence) with its adjusted p-value.\nMetric names depend on the trials' `top_k` (hit_rate@k) and on whether answers were judged, so\nmetrics, breakdowns and comparisons are objects keyed by metric name.",
+        "properties": {
+          "alpha": {
+            "title": "Alpha",
+            "type": "number"
+          },
+          "baseline": {
+            "title": "Baseline",
+            "type": "string"
+          },
+          "comparison_top_k": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The one cutoff every comparison is computed at.",
+            "title": "Comparison Top K"
+          },
+          "comparisons": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Comparisons",
+            "type": "array"
+          },
+          "experiment": {
+            "additionalProperties": true,
+            "title": "Experiment",
+            "type": "object"
+          },
+          "min_valid": {
+            "title": "Min Valid",
+            "type": "number"
+          },
+          "primary_metric": {
+            "title": "Primary Metric",
+            "type": "string"
+          },
+          "queries": {
+            "title": "Queries",
+            "type": "integer"
+          },
+          "relevance": {
+            "title": "Relevance",
+            "type": "string"
+          },
+          "synthetic": {
+            "description": "Every question was written by a model, so absolute scores are optimistic.",
+            "title": "Synthetic",
+            "type": "boolean"
+          },
+          "trials": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Trials",
+            "type": "array"
+          }
+        },
+        "required": [
+          "experiment",
+          "queries",
+          "synthetic",
+          "relevance",
+          "baseline",
+          "alpha",
+          "primary_metric",
+          "min_valid",
+          "comparison_top_k",
+          "trials",
+          "comparisons"
+        ],
+        "title": "ExperimentReport",
+        "type": "object"
+      },
+      "ExperimentSummary": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "dataset_name": {
+            "title": "Dataset Name",
+            "type": "string"
+          },
+          "experiment_id": {
+            "title": "Experiment Id",
+            "type": "string"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "status": {
+            "description": "running | complete | paused | failed",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "experiment_id",
+          "name",
+          "dataset_name",
+          "status",
+          "created_at"
+        ],
+        "title": "ExperimentSummary",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -541,6 +670,171 @@
           "similarity_score"
         ],
         "title": "Source",
+        "type": "object"
+      },
+      "TestQuestionView": {
+        "properties": {
+          "category": {
+            "title": "Category",
+            "type": "string"
+          },
+          "difficulty": {
+            "title": "Difficulty",
+            "type": "string"
+          },
+          "lexical_overlap": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Share of the question's words that also appear in its source passage.",
+            "title": "Lexical Overlap"
+          },
+          "position": {
+            "title": "Position",
+            "type": "integer"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "reference_answer": {
+            "default": "",
+            "title": "Reference Answer",
+            "type": "string"
+          },
+          "review_status": {
+            "description": "pending | accepted | rejected",
+            "title": "Review Status",
+            "type": "string"
+          },
+          "source_chunk_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Chunk Ids",
+            "type": "array"
+          },
+          "source_text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The passage the question was written from, for review.",
+            "title": "Source Text"
+          }
+        },
+        "required": [
+          "position",
+          "query",
+          "difficulty",
+          "category",
+          "review_status"
+        ],
+        "title": "TestQuestionView",
+        "type": "object"
+      },
+      "TestSetDetail": {
+        "properties": {
+          "abstained": {
+            "description": "Passages the model declined to write a question for.",
+            "title": "Abstained",
+            "type": "integer"
+          },
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "meta": {
+            "additionalProperties": true,
+            "description": "The model, seed, index and tiers the set was generated with.",
+            "title": "Meta",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/TestQuestionView"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "meta",
+          "abstained",
+          "questions"
+        ],
+        "title": "TestSetDetail",
+        "type": "object"
+      },
+      "TestSetSummary": {
+        "properties": {
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "questions": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "description": "How many questions are pending, accepted and rejected.",
+            "title": "Questions",
+            "type": "object"
+          },
+          "status": {
+            "description": "draft | frozen",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "status",
+          "created_at",
+          "questions"
+        ],
+        "title": "TestSetSummary",
         "type": "object"
       },
       "UsageEntry": {
@@ -1699,6 +1993,145 @@
         ]
       }
     },
+    "/v1/experiments": {
+      "get": {
+        "description": "The workspace's experiments, newest first.",
+        "operationId": "list_experiments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExperimentSummary"
+                  },
+                  "title": "Response List Experiments",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "List Experiments",
+        "tags": [
+          "experiments"
+        ]
+      }
+    },
+    "/v1/experiments/{experiment_id}": {
+      "get": {
+        "description": "The experiment's report: metrics per trial and each trial's verdict against the baseline.",
+        "operationId": "get_experiment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Experiment",
+        "tags": [
+          "experiments"
+        ]
+      }
+    },
     "/v1/jobs/{job_id}": {
       "get": {
         "description": "Progress of an ingestion job.",
@@ -1910,6 +2343,145 @@
         "tags": [
           "health",
           "system"
+        ]
+      }
+    },
+    "/v1/test-sets": {
+      "get": {
+        "description": "The workspace's test sets with how many questions are pending, accepted and rejected.",
+        "operationId": "list_test_sets",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TestSetSummary"
+                  },
+                  "title": "Response List Test Sets",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "List Test Sets",
+        "tags": [
+          "experiments"
+        ]
+      }
+    },
+    "/v1/test-sets/{name}": {
+      "get": {
+        "description": "One test set with every question, its review status and the passage it was written from.",
+        "operationId": "get_test_set",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "name",
+            "required": true,
+            "schema": {
+              "title": "Name",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestSetDetail"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A valid credential is required."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "A rate limit or quota was reached."
+          },
+          "500": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorBody"
+                }
+              }
+            },
+            "description": "Unexpected failure; quote request_id."
+          }
+        },
+        "security": [
+          {
+            "APIKeyHeader": []
+          }
+        ],
+        "summary": "Get Test Set",
+        "tags": [
+          "experiments"
         ]
       }
     },

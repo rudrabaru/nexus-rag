@@ -3,7 +3,7 @@
 ## Overview
 Evaluation answers one question with evidence: is configuration B better than configuration A on these queries, or is the difference noise? An **experiment** runs one or more retrieval configurations (**trials**) over a frozen query set, stores every per-query result (**run**) in Postgres, and compares each trial with a baseline under a significance test. Generation and faithfulness judging are an optional second stage.
 
-The engine is `src/evaluation/`; it is run from the command line. Starting experiments through the API and job queue comes with configuration search (item 13).
+The engine is `src/evaluation/`; it is run from the command line. The API gives read access, scoped to the caller's workspace (another workspace's experiment or test set answers 404): `GET /v1/experiments`, `GET /v1/experiments/{id}` (the report described below), `GET /v1/test-sets` and `GET /v1/test-sets/{name}` (every question with its review status and source passage). Starting, resuming and cancelling experiments through the API and job queue comes with configuration search (item 13).
 
 ## Core Implementation Logic
 

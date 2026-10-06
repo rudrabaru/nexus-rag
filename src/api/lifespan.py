@@ -15,6 +15,7 @@ from src.stores.documents import DocumentStore
 from src.stores.fetches import FetchStore
 from src.stores.jobs import JobStore
 from src.stores.system import SystemStore
+from src.stores.testsets import TestSetStore
 from src.stores.workspace import WorkspaceSettingsStore
 from src.db.engine import dispose_engines, get_sync_engine
 from src.stores.query_log import QueryLogStore
@@ -50,6 +51,8 @@ def _initialize(app: FastAPI) -> None:
     app.state.documents = DocumentStore(sync_engine)
     app.state.workspace = WorkspaceSettingsStore(sync_engine)
     app.state.system = SystemStore(sync_engine)
+    app.state.testsets = TestSetStore(sync_engine)
+    app.state.engine = sync_engine
     app.state.jobs = JobStore(sync_engine)
     app.state.ingestion = IngestionService(
         app.state.job_queue, app.state.documents, app.state.jobs, FetchStore(sync_engine), settings

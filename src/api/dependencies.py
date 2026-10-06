@@ -10,6 +10,7 @@ from src.stores.documents import DocumentStore
 from src.stores.jobs import JobStore
 from src.stores.query_log import QueryLogStore
 from src.stores.system import SystemStore
+from src.stores.testsets import TestSetStore
 from src.stores.workspace import WorkspaceSettingsStore
 
 
@@ -49,6 +50,15 @@ def get_workspace(request: Request) -> WorkspaceSettingsStore:
 
 def get_system(request: Request) -> SystemStore:
     return _state(request, "system")
+
+
+def get_engine(request: Request):
+    """The synchronous database engine, for the evaluation module's functions."""
+    return _state(request, "engine")
+
+
+def get_testsets(request: Request) -> TestSetStore:
+    return _state(request, "testsets")
 
 
 def get_ingestion_service(request: Request) -> IngestionService:

@@ -16,7 +16,7 @@ ADMIN_KEY = "test-admin-key-0123456789-abcdefghijklmnop"
 STATE_KEYS = (
     "ready", "auth_store", "documents", "jobs", "ingestion", "retrieval", "generator",
     "evaluator", "rewriter", "query_log", "pipeline_logger", "query_semaphore",
-    "job_queue",
+    "job_queue", "engine", "testsets",
 )
 
 

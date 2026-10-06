@@ -13,7 +13,7 @@ from src.api import errors
 from src.api.lifespan import lifespan
 from src.api.middleware import BodyLimitMiddleware, RequestContextMiddleware
 from src.api.rate_limit import limiter
-from src.api.routes import admin, chat, documents, health, workspace
+from src.api.routes import admin, chat, documents, experiments, health, workspace
 from src.config import get_settings
 from src.services.uploads import MAX_UPLOAD_BYTES
 
@@ -54,6 +54,6 @@ def create_app() -> FastAPI:
     app.state.limiter = limiter
     errors.register(app)
 
-    for router in (health.router, chat.router, documents.router, workspace.router, admin.router):
+    for router in (health.router, chat.router, documents.router, workspace.router, experiments.router, admin.router):
         app.include_router(router)
     return app
