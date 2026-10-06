@@ -52,10 +52,18 @@ def _config(model: Optional[ModelSpec], settings: Settings, role: str) -> Genera
 
 
 class GenerationStage:
-    def __init__(self, spec: GenerationSpec, tenant_id: str, engine: Engine, settings: Settings):
+    def __init__(
+        self, spec: GenerationSpec, tenant_id: str, engine: Engine, settings: Settings,
+        model: Optional[ModelSpec] = None, max_context_tokens: Optional[int] = None,
+    ):
+        """`model` and `max_context_tokens` are one trial's overrides of the experiment's generation settings."""
         self.tenant_id = tenant_id
         self.engine = engine
-        self.generator = RAGGenerator(_config(spec.model, settings, "chat"))  # fallback_config is None: pinned
+        config = _config(model or spec.model, settings, "chat")  # fallback_config is None: pinned
+        if max_context_tokens:
+            config = config.model_copy(update={"max_context_tokens": max_context_tokens})
+        self.generator = RAGGenerator(config)
+        self.max_context_tokens = config.max_context_tokens
         self.judge = FaithfulnessEvaluator(_config(spec.judge, settings, "judge"))
         self.model = self.generator.config.model_string
         if self.judge.model == self.model:

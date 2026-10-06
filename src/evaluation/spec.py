@@ -46,13 +46,26 @@ class GenerationSpec(BaseModel):
     judge: ModelSpec
 
 
+class TrialSpec(RetrievalConfig):
+    """
+    One trial: a retrieval configuration plus, when the experiment generates answers, the generation
+    knobs a trial may vary. Both are left out to inherit the experiment's generation settings.
+    """
+
+    max_context_tokens: Optional[int] = Field(
+        None, ge=200, le=30_000,
+        description="Tokens of retrieved context the answer prompt may hold; None = the generator's default (5,000).",
+    )
+    generation_model: Optional[ModelSpec] = Field(None, description="The model that answers in this trial; None = the experiment's.")
+
+
 class ExperimentSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(min_length=1)
     dataset: str
     tenant_id: str = Field(pattern=TENANT_ID_PATTERN.pattern)
-    trials: Dict[str, RetrievalConfig] = Field(min_length=1)
+    trials: Dict[str, TrialSpec] = Field(min_length=1)
     baseline: Optional[str] = None  # the trial every other trial is compared with; default: the first
     # Queries run at once per trial. Latency percentiles are measured under this concurrency;
     # set 1 for latency-faithful numbers. Query embedding is paced to the provider's limits anyway.
@@ -69,6 +82,13 @@ class ExperimentSpec(BaseModel):
     # whatever was left. 0.9 tolerates a few transient failures; it is not tuned on a corpus.
     min_valid: float = Field(0.9, gt=0, le=1)
     generation: Optional[GenerationSpec] = None
+
+    @model_validator(mode="after")
+    def generation_knobs_need_generation(self):
+        for label, trial in self.trials.items():
+            if self.generation is None and (trial.max_context_tokens or trial.generation_model):
+                raise ValueError(f"trial {label!r} sets a generation knob, but the experiment has no `generation` section")
+        return self
 
     @model_validator(mode="after")
     def baseline_is_a_trial(self):

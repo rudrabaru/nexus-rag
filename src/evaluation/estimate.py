@@ -121,16 +121,17 @@ def estimate(spec: ExperimentSpec, queries: List[str], settings: Settings) -> Es
             _add(demand, "voyage rerank", _embedding_limits("voyage", settings), n, n * per_call, per_call)
 
     if spec.generation:
-        context = GenerationConfig().max_context_tokens
-        model = spec.generation.model
-        answerer = (model.provider, model.model_name) if model else parse_model(role_model(settings, "chat"))
         judge = (spec.generation.judge.provider, spec.generation.judge.model_name)
-        calls = n * len(spec.trials)
-        answer_call = context + PROMPT_OVERHEAD_TOKENS + ANSWER_TOKENS
-        judge_call = context + ANSWER_TOKENS + JUDGE_OVERHEAD_TOKENS + JUDGE_REPLY_TOKENS
-        # One model answering and judging shares one daily allowance, so both land on the same line.
-        for (provider, name), per_call in ((answerer, answer_call), (judge, judge_call)):
-            _add(demand, f"{provider}/{name}", llm_limits(provider), calls, calls * per_call, per_call)
+        for trial in spec.trials.values():
+            # A trial may answer with its own model and context budget; the judge sees the same context.
+            context = trial.max_context_tokens or GenerationConfig().max_context_tokens
+            model = trial.generation_model or spec.generation.model
+            answerer = (model.provider, model.model_name) if model else parse_model(role_model(settings, "chat"))
+            answer_call = context + PROMPT_OVERHEAD_TOKENS + ANSWER_TOKENS
+            judge_call = context + ANSWER_TOKENS + JUDGE_OVERHEAD_TOKENS + JUDGE_REPLY_TOKENS
+            # One model answering and judging shares one daily allowance, so both land on the same line.
+            for (provider, name), per_call in ((answerer, answer_call), (judge, judge_call)):
+                _add(demand, f"{provider}/{name}", llm_limits(provider), n, n * per_call, per_call)
 
     lines = [Line(label, c, t, limits, big) for (label, limits), (c, t, big) in demand.items()]
     return Estimate(queries=n, trials=len(spec.trials), lines=lines)

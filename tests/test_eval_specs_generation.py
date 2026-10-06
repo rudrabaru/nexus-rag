@@ -4,7 +4,7 @@ from pydantic import ValidationError
 from src.config import Settings
 from src.evaluation.dataset import EvaluationQuery, integrity_problems
 from src.evaluation.generation import GenerationStage
-from src.evaluation.spec import GenerationSpec
+from src.evaluation.spec import ExperimentSpec, GenerationSpec
 from src.llm.client import LLMCall
 from src.retrieving.models import RetrievalResult
 from tests.support.eval_integrity import chunk, query
@@ -94,3 +94,46 @@ def test_a_run_with_no_context_makes_no_calls_and_says_so():
     s = Stage()
     row = s.stage.run("q", RetrievalResult(query="q", top_k=1, latency_ms=1.0, chunks=[]))
     assert row["empty_context"] is True and (s.generator_calls, s.judge_calls) == (0, 0)
+
+
+def spec_with(trials, generation=True):
+    body = {"name": "e", "dataset": "d", "tenant_id": "demo", "trials": trials}
+    if generation:
+        body["generation"] = {"model": {"provider": "gemini", "model_name": "gemini-3.5-flash"},
+                              "judge": {"provider": "groq", "model_name": "openai/gpt-oss-20b"}}
+    return ExperimentSpec(**body)
+
+
+def test_a_trial_may_vary_its_context_budget_and_its_answering_model():
+    spec = spec_with({
+        "wide": {"max_context_tokens": 5000},
+        "narrow": {"top_k": 3, "max_context_tokens": 2000},
+        "other model": {"generation_model": {"provider": "groq", "model_name": "openai/gpt-oss-120b"}},
+        "inherits": {},
+    })
+    assert spec.trials["narrow"].max_context_tokens == 2000 and spec.trials["inherits"].max_context_tokens is None
+    assert spec.trials["other model"].generation_model.model_name == "openai/gpt-oss-120b"
+
+
+def test_a_generation_knob_without_generation_is_refused():
+    with pytest.raises(ValidationError, match="no `generation` section"):
+        spec_with({"narrow": {"max_context_tokens": 2000}}, generation=False)
+
+
+def test_a_stage_uses_its_trials_budget_and_model_and_the_experiments_otherwise():
+    spec = GenerationSpec(model={"provider": "gemini", "model_name": "gemini-3.5-flash"},
+                          judge={"provider": "groq", "model_name": "openai/gpt-oss-20b"})
+    settings = Settings(_env_file=None, gemini_api_key="g", groq_api_key="r")
+    inherited = GenerationStage(spec, "demo", None, settings)
+    narrow = GenerationStage(spec, "demo", None, settings, max_context_tokens=2000)
+    other = GenerationStage(spec, "demo", None, settings, model=spec.judge.model_copy(update={"model_name": "openai/gpt-oss-120b"}))
+    assert (inherited.max_context_tokens, narrow.max_context_tokens) == (5000, 2000)
+    assert other.model == "groq/openai/gpt-oss-120b" and inherited.model == "gemini/gemini-3.5-flash"
+
+
+def test_a_trial_whose_model_is_the_judge_is_refused_before_anything_runs():
+    spec = GenerationSpec(model={"provider": "gemini", "model_name": "gemini-3.5-flash"},
+                          judge={"provider": "groq", "model_name": "openai/gpt-oss-20b"})
+    settings = Settings(_env_file=None, gemini_api_key="g", groq_api_key="r")
+    with pytest.raises(ValueError, match="favour its own answers"):
+        GenerationStage(spec, "demo", None, settings, model=spec.judge)

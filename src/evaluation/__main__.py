@@ -45,7 +45,9 @@ def missing_keys(spec: ExperimentSpec, settings) -> list:
     """Providers the experiment's models need and have no key for, found before any query runs."""
     if not spec.generation:
         return []
-    models = [spec.generation.judge.provider, spec.generation.model.provider if spec.generation.model else role_provider(settings, "chat")]
+    chat = role_provider(settings, "chat")
+    answering = [t.generation_model or spec.generation.model for t in spec.trials.values()]
+    models = [spec.generation.judge.provider, *((m.provider if m else chat) for m in answering)]
     return sorted({f"{p.upper()}_API_KEY" for p in models if not settings.has_llm_key(p)})
 
 

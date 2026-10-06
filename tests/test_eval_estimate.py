@@ -74,3 +74,16 @@ def test_cloudflare_embeddings_are_limited_by_the_day_not_the_minute(monkeypatch
 def test_the_estimate_states_that_it_is_an_upper_bound():
     text = estimate(spec_of(FOUR), QUERIES, get_settings()).render()
     assert "upper bounds" in text and "41 queries x 4 trials" in text
+
+
+def test_a_trial_with_a_smaller_context_asks_for_fewer_tokens_and_a_trial_may_use_another_model():
+    generation = {"model": {"provider": "gemini", "model_name": "gemini-3.5-flash"},
+                  "judge": {"provider": "groq", "model_name": "openai/gpt-oss-20b"}}
+    wide = estimate(spec_of({"a": {}}, generation), QUERIES, get_settings())
+    narrow = estimate(spec_of({"a": {"max_context_tokens": 1000}}, generation), QUERIES, get_settings())
+    assert line(narrow, "groq/").tokens < line(wide, "groq/").tokens
+
+    split = estimate(spec_of({"a": {}, "b": {"generation_model": {"provider": "groq", "model_name": "openai/gpt-oss-120b"}}}, generation),
+                     QUERIES, get_settings())
+    assert line(split, "gemini/").calls == 41 and line(split, "groq/openai/gpt-oss-120b").calls == 41
+    assert line(split, "groq/openai/gpt-oss-20b").calls == 82  # the judge sees both trials

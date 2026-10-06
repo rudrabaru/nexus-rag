@@ -74,4 +74,4 @@ def test_value_rejects_unknown_metrics():
 
 
 def test_a_trial_config_is_a_full_retrieval_config():
-    assert spec().trials["hybrid"] == RetrievalConfig()
+    assert spec().trials["hybrid"].model_dump(include=set(RetrievalConfig.model_fields)) == RetrievalConfig().model_dump()

@@ -15,6 +15,7 @@ Runs an experiment: every trial (retrieval configuration) over every query, one 
 """
 import asyncio
 import logging
+from collections import Counter
 from typing import Any, Callable, Dict, List, Optional
 
 from sqlalchemy.engine import Engine
@@ -74,18 +75,25 @@ async def run_experiment(
         raise ValueError(f"No experiment {experiment_id}")
     spec = ExperimentSpec(**experiment["spec"])
     queries: List[EvaluationQuery] = [EvaluationQuery(**q) for q in experiment["queries"]]
-    stage = GenerationStage(spec.generation, spec.tenant_id, engine, settings) if spec.generation else None
+    # One stage per trial: a trial may answer with its own model and context budget. Built up front, so a
+    # judge that is the model it judges is refused before any query runs.
+    stages: Dict[str, GenerationStage] = {}
+    if spec.generation:
+        stages = {
+            label: GenerationStage(spec.generation, spec.tenant_id, engine, settings, trial.generation_model, trial.max_context_tokens)
+            for label, trial in spec.trials.items()
+        }
     await asyncio.to_thread(store.set_status, engine, experiment_id, "running")
     index_changes: List[str] = []
 
     async def finish(status: str, **extra) -> str:
-        summary = {**_summary(spec, stage, index_changes), **extra}
+        summary = {**_summary(spec, stages, index_changes), **extra}
         await asyncio.to_thread(store.set_status, engine, experiment_id, status, summary)
         return status
 
     try:
         for label, config in spec.trials.items():
-            outage = await _run_trial(engine, resources, spec, stage, experiment_id, label, config, queries, index_changes, progress)
+            outage = await _run_trial(engine, resources, spec, stages.get(label), experiment_id, label, config, queries, index_changes, progress)
             if outage:
                 if outage.permanent:
                     progress(f"judge cannot be used, experiment failed: {outage}")
@@ -134,13 +142,18 @@ async def _run_trial(
     return next((o for o in outages if o.permanent), outages[0] if outages else None)
 
 
-def _summary(spec: ExperimentSpec, stage: Optional[GenerationStage], index_changes: List[str]) -> dict:
+def _summary(spec: ExperimentSpec, stages: Dict[str, GenerationStage], index_changes: List[str]) -> dict:
     """Run conditions a report needs to interpret its numbers (cache counters are this session's)."""
+    models = {label: stage.model for label, stage in stages.items()}
+    counters: Counter = Counter()
+    for stage in stages.values():
+        counters.update(stage.counters)
     return {
         "concurrency": spec.concurrency,
         "relevance": spec.relevance,
-        "generation_model": stage.model if stage else None,
-        "judge_model": stage.judge.model if stage else None,
-        "cache": dict(stage.counters) if stage else {},
+        # One name when every trial answers with the same model, otherwise the model of each trial.
+        "generation_model": next(iter(models.values())) if len(set(models.values())) == 1 else (models or None),
+        "judge_model": next(iter(stages.values())).judge.model if stages else None,
+        "cache": dict(counters),
         "index_changes": index_changes,
     }
