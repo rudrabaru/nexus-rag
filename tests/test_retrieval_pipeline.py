@@ -7,14 +7,11 @@ from pydantic import ValidationError
 from src.config import get_settings
 from src.retrieving.config import RetrievalConfig
 from src.retrieving.fusion import fuse, rrf_scores
-from src.retrieving.models import RetrievalResult, RetrievedChunk
+from src.retrieving.models import RetrievalResult
 from src.retrieving.pipeline import RetrievalPipeline
 from src.retrieving.rerankers import FlashRankReranker, JinaReranker, RerankError
 from src.services.chat_config import chat_retrieval_config
-
-
-def chunk(chunk_id: str, score: float = 1.0) -> RetrievedChunk:
-    return RetrievedChunk(chunk_id=chunk_id, source_document=chunk_id, text=f"text of {chunk_id}", similarity_score=score, metadata={})
+from tests.builders import retrieved_chunk as chunk
 
 
 class FakeRetriever:

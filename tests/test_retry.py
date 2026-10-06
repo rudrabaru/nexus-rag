@@ -4,11 +4,11 @@ import pytest
 
 from src import retry
 from src.embedding.pacing import RateWindow
-from src.retrieving.models import RetrievedChunk
 from src.retrieving.rerankers import RerankError
 from src.retrieving.rerankers.jina import JinaReranker
 from src.retrieving.rerankers.voyage import VoyageReranker
 from src.retry import RetryableError, backoff_seconds, retry_async
+from tests.builders import retrieved_chunk as chunk
 
 
 @pytest.fixture
@@ -72,10 +72,6 @@ def test_backoff_doubles_and_jitter_only_adds():
 
 # ── The HTTP rerankers ───────────────────────────────────────────────────────
 
-def chunk(text="text") -> RetrievedChunk:
-    return RetrievedChunk(chunk_id="a", source_document="a", text=text, similarity_score=0.1, metadata={})
-
-
 def serve(monkeypatch, module, responses):
     requests = []
 
@@ -91,14 +87,14 @@ def serve(monkeypatch, module, responses):
 async def test_jina_does_not_retry_a_client_error(monkeypatch, slept):
     requests = serve(monkeypatch, "jina", [httpx.Response(401, json={"detail": "bad key"})])
     with pytest.raises(RerankError, match="401"):
-        await JinaReranker("key").rerank("q", [chunk()], top_k=1)
+        await JinaReranker("key").rerank("q", [chunk(text='text')], top_k=1)
     assert len(requests) == 1 and slept == []
 
 
 async def test_jina_retries_a_server_error(monkeypatch, slept):
     ok = httpx.Response(200, json={"results": [{"index": 0, "relevance_score": 0.9}], "usage": {"total_tokens": 10}})
     requests = serve(monkeypatch, "jina", [httpx.Response(503, json={}), ok])
-    result = await JinaReranker("key").rerank("q", [chunk()], top_k=1)
+    result = await JinaReranker("key").rerank("q", [chunk(text='text')], top_k=1)
     assert len(requests) == 2 and result.chunks[0].similarity_score == 0.9
 
 
@@ -106,5 +102,5 @@ async def test_voyage_refuses_a_pool_that_cannot_fit_its_token_limit_before_send
     requests = serve(monkeypatch, "voyage", [])
     reranker = VoyageReranker("key", "https://api.voyageai.com/v1", "rerank-3", RateWindow(3, 1_000))
     with pytest.raises(RerankError, match="lower rerank_candidates"):
-        await reranker.rerank("q", [chunk("word " * 400)] * 3, top_k=1)
+        await reranker.rerank("q", [chunk(text="word " * 400)] * 3, top_k=1)
     assert requests == []

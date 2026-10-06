@@ -6,13 +6,9 @@ from src.config_checks import config_problems
 from src.config import Settings
 from src.embedding.pacing import RateWindow
 from src.retrieving.config import RetrievalConfig
-from src.retrieving.models import RetrievedChunk
 from src.retrieving.rerankers import build_reranker
 from src.retrieving.rerankers.voyage import VoyageReranker
-
-
-def chunk(chunk_id: str) -> RetrievedChunk:
-    return RetrievedChunk(chunk_id=chunk_id, source_document=chunk_id, text=f"text of {chunk_id}", similarity_score=0.1, metadata={})
+from tests.builders import retrieved_chunk as chunk
 
 
 @pytest.fixture
