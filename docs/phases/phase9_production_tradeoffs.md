@@ -60,7 +60,7 @@ A startup fail-fast guard validates the whole configuration (`src/config.py`) an
 
 ## 9. In-Memory Query Embedding Cache
 **Decision:** Cache recently computed query embeddings in a fixed-capacity, MD5-keyed in-memory dictionary.
-**Rationale:** Many conversational RAG interactions involve follow-up queries that are semantically similar or even identical to a prior query. Re-embedding the same text via the hosted embedding API is a wasteful, latency-adding round-trip, and with Voyage's no-payment-method limit of 3 requests per minute it is also a scarce one. A 500-entry in-memory cache per embedding index, evicting the oldest entry first (FIFO: a hit does not refresh an entry) eliminates this for repeated queries at the cost of negligible RAM. The cache also remembers each query's token count, so an evaluation still charges every configuration what its embedding costs (Phase 6).
+**Rationale:** Many conversational RAG interactions involve follow-up queries that are semantically similar or even identical to a prior query. Re-embedding the same text via the hosted embedding API is a wasteful, latency-adding round-trip, and with Voyage's no-payment-method limit of 3 requests per minute it is also a scarce one. A 500-entry in-memory cache per embedding index, evicting the oldest entry first (FIFO: a hit does not refresh an entry) eliminates this for repeated queries at the cost of negligible RAM. The cache also remembers each query's token count, so an evaluation still charges every configuration what its embedding costs (Phase 6). The memory cache dies with the process, so experiments additionally keep query embeddings in the `query_embeddings` table (evaluation only; Phase 4); it is bounded by the number of distinct experiment questions and is not pruned.
 **Tradeoff:** Cache entries do not survive server restarts, and the cache is shared across all tenants (keyed purely on the query string hash). This is acceptable — query text itself is not sensitive, and cache misses simply fall back to a live API call with no correctness impact.
 
 ## 10. Admin-Provisioned Workspace Keys
@@ -160,7 +160,7 @@ Every limit the system enforces, where it lives, and why it has the value it has
 | Database statement / lock timeout | 60 s / 10 s | `src/db/engine.py` | Operational: one stuck query must not hold a pooled connection |
 | Database pool | 5 per engine (`DB_POOL_SIZE`) | `src/config.py` | Operational: Neon's free compute has few connections |
 | Key validation cache | 60 s, 10,000 entries | `src/stores/api_keys.py` | Operational: bounds how long a revoked key can still work in another process |
-| Query-embedding cache | 500 entries per index | `src/retrieving/dense.py` | Experiment |
+| Query-embedding cache | 500 entries per index in memory; experiments also keep every query's vector in Postgres | `src/retrieving/dense.py`, `src/stores/query_embeddings.py` | Experiment (the memory size); the stored vectors are bounded by the questions experiments ask |
 | Retention | events 14 days; query log and fetch log 90; failed queue rows 30 | `src/maintenance.py` | Operational: Neon's 1 GB |
 | Stalled-job threshold | 30 s of silence | `src/jobs/recovery.py` | Operational: three heartbeats, so a Neon resume is not read as a dead worker |
 | Chunk sizes, overlap | 600 target, 800 max, 125 overlap, 150 min | Phase 3 | Experiment (table in Phase 3) |

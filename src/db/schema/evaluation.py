@@ -11,6 +11,7 @@ Evaluation (src/evaluation, src/testsets): test sets, experiments and what a wor
   experiment promoted); a workspace without a row uses the environment's defaults.
 """
 from sqlalchemy import (
+    REAL,
     Boolean,
     Column,
     DateTime,
@@ -24,6 +25,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import ARRAY
 
 from src.db.schema.base import Json, metadata, now
 
@@ -151,4 +153,20 @@ judge_cache = Table(
     Column("score", Float, nullable=False),
     Column("reasoning", Text),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=now()),
+)
+
+# A query's embedding, kept for the experiments that re-ask the same questions. At the card-free
+# Voyage limit (3 requests a minute) embedding 40 test questions takes a quarter of an hour, and
+# each rerun, resume or extra experiment would pay it again. Only the evaluation path writes here:
+# a chat question is never stored. The vector is lossless (float4, as the provider returned it) and
+# keyed by a hash of the normalised query text; the token count is kept so that cost stays fair.
+query_embeddings = Table(
+    "query_embeddings",
+    metadata,
+    Column("index_id", Text, nullable=False),
+    Column("query_hash", Text, nullable=False),
+    Column("embedding", ARRAY(REAL), nullable=False),
+    Column("tokens", Integer, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=now()),
+    PrimaryKeyConstraint("index_id", "query_hash"),
 )

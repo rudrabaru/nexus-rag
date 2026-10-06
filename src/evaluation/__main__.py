@@ -34,7 +34,7 @@ from src.runtime import ConfigurationError, bootstrap
 
 async def _execute(experiment_id: str) -> str:
     settings = get_settings()
-    resources = RetrievalResources(settings, get_sync_engine(), get_async_engine())
+    resources = RetrievalResources(settings, get_sync_engine(), get_async_engine(), keep_query_embeddings=True)
     try:
         return await run_experiment(get_sync_engine(), resources, settings, experiment_id)
     finally:

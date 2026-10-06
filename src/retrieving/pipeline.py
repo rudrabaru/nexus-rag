@@ -30,13 +30,15 @@ from src.retrieving.fusion import fuse
 from src.retrieving.models import RetrievalResult
 from src.retrieving.rerankers import Reranker, build_reranker
 from src.retrieving.sparse import SparseRetriever
+from src.stores.query_embeddings import QueryEmbeddingStore
 
 logger = logging.getLogger(__name__)
 
 
 class RetrievalResources:
-    def __init__(self, settings: Settings, sync_engine: Engine, async_engine: AsyncEngine):
+    def __init__(self, settings: Settings, sync_engine: Engine, async_engine: AsyncEngine, keep_query_embeddings: bool = False):
         self._settings = settings
+        self._keep_query_embeddings = keep_query_embeddings  # experiments only
         self._sync_engine = sync_engine
         self._async_engine = async_engine
         self.default_index_id = build_embedder(settings).index_id
@@ -50,7 +52,8 @@ class RetrievalResources:
             if index_id not in self._retrievers:
                 store = ChunkStore(self._sync_engine, self._async_engine, index_id)
                 embedder = build_embedder(self._settings, index_id)
-                self._retrievers[index_id] = (DenseRetriever(store, embedder), SparseRetriever(store))
+                saved = QueryEmbeddingStore(self._sync_engine) if self._keep_query_embeddings else None
+                self._retrievers[index_id] = (DenseRetriever(store, embedder, saved), SparseRetriever(store))
             return self._retrievers[index_id]
 
     def chunk_store(self, index_id: Optional[str] = None) -> ChunkStore:
