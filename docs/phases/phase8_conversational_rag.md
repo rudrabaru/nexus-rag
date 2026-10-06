@@ -9,8 +9,8 @@ A standalone RAG pipeline is stateless; it treats every query in isolation. Howe
 When a user submits a query within an active chat session, the system intercepts the query before it reaches the retrieval phase.
 
 1. **Context Analysis:** The system examines the user's raw query alongside the history of the current conversation (the preceding questions and answers).
-2. **Intent Detection:** A specialized, high-speed LLM evaluates whether the new query is a standalone question or a follow-up that relies on previous context.
-3. **Query Formulation:** If it is a follow-up, the rewriter model synthesizes a new, fully self-contained search query. For example, it translates "How do I install it?" into "How do I install the PostgreSQL database server?" based on the prior chat turns.
+2. **History gate:** With no history the query is searched as written, with no model call. With history, a high-speed LLM is always asked to rewrite it; a question that already stands alone should come back essentially unchanged. There is no separate classifier step.
+3. **Query Formulation:** The rewriter model synthesizes a fully self-contained search query. If its reply is empty or unreadable, or the call fails, the original query is searched instead. For example, it translates "How do I install it?" into "How do I install the PostgreSQL database server?" based on the prior chat turns.
 
 This rewritten query is then passed to the retrieval engine (Phase 5), ensuring the search algorithms receive explicit, unambiguous keywords and semantic concepts.
 

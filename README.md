@@ -1,19 +1,19 @@
 # Nexus RAG
 
-A fast, accurate, and secure Retrieval-Augmented Generation (RAG) system. It reads your documents, understands the context, and answers questions reliably without making things up.
+A Retrieval-Augmented Generation (RAG) system and the tooling to measure it. It turns your documents into a searchable knowledge base, answers questions from them with citations, and lets you test whether a change to the retrieval pipeline is actually better.
 
-**Live Deployment:**
-- 🖥️ **API Backend** (Render Free Tier): `https://nexus-rag-backend-hjxa.onrender.com/docs/`
-- 💬 **Streamlit UI** (Streamlit Cloud): `https://nexus-rag-2026.streamlit.app`
+**Status:** runs locally and in Docker. It is not deployed anywhere yet; hosting is planned work.
 
 ## Overview
-Nexus RAG takes your files (PDFs, URLs, text) and turns them into a searchable knowledge base. It's designed to be fast by processing data in memory, secure by keeping user workspaces completely separated, and smart enough to handle complex follow-up questions just like a real conversation.
+Nexus takes your files (PDFs, DOCX, Markdown, text) and web pages and indexes them in Postgres. Workspaces are kept separate by API key, retrieval is hybrid (vectors plus keywords) with an optional reranker, and answers cite the passages they used. The evaluation engine runs several retrieval configurations over the same questions and reports whether the differences are statistically meaningful, or that there is too little evidence to say.
+
+Design rules: every stage is inspectable, nothing in the pipeline depends on a particular website or document source, and a threshold or rule has to be justified by measurement (see `docs/phases/`).
 
 ## Local Quickstart
 
 **1. Prerequisites & Tech Stack**
-- **Language**: Python 3.10+
-- **Frameworks**: FastAPI, Streamlit
+- **Language**: Python 3.11+
+- **Frameworks**: FastAPI; Streamlit for the admin UI (`admin_ui/`, a client of the API)
 - **Database**: Postgres (Neon) with pgvector: vectors (HNSW), keyword search (full-text), documents, jobs, keys and metrics in one store; schema managed by Alembic
 - **Job queue**: [Procrastinate](https://procrastinate.readthedocs.io/) (Postgres-backed). The API validates a request and queues it; a **fetch worker** reads web pages through reader APIs, and a **parse worker** parses, chunks and embeds. The parse worker ships as its own image (`Dockerfile.worker`) with the dependencies the API doesn't need
 - **Parsing**: [Docling](https://docling.org/) for PDF and DOCX (layout, tables, OCR of scanned pages)
@@ -69,12 +69,37 @@ scripts/run_workers.sh              # macOS / Linux: the same
 ```
 Without the parse worker, every job stays at `status: "queued"`; without the fetch worker, URL jobs do. The first document the parse worker handles downloads Docling's models (~0.5 GB) once.
 
-**5. Run the Frontend (Streamlit)**
+**5. Run the Admin UI (Streamlit)**
 In a new terminal window, activate the virtual environment and run:
 ```bash
 streamlit run admin_ui/app.py
 ```
-*The UI will automatically open in your default browser.*
+It opens at `http://localhost:8501` and talks to the API at `API_BASE_URL` (default `http://127.0.0.1:8000`).
+
+**6. Issue a workspace key and use it**
+There is no open sign-up. Create a key with the admin key, paste it into the sidebar, then use the tabs:
+```bash
+curl -X POST http://localhost:8000/v1/admin/keys -H "X-Admin-Key: <your ADMIN_API_KEY>"
+```
+1. **Documents:** paste a URL or upload a PDF, DOCX, Markdown or text file, then **Process & Index**. The workers must be running.
+2. **Chat:** ask a question about what you indexed; the answer streams with citations.
+3. **Retrieval playground:** compare retrieval with and without the reranker (no answer is generated).
+4. **Dashboard:** queries, latency and cost.
+
+**Run it with Docker instead**
+The API (and, with another command, the fetch worker), the parse worker and the UI are separate images. All need the same `.env`.
+```bash
+docker build -f Dockerfile.api -t nexus-rag-api .
+docker build -f Dockerfile.worker -t nexus-rag-worker .
+docker build -f Dockerfile.ui -t nexus-rag-ui .
+docker run --env-file .env nexus-rag-api alembic upgrade head   # release step: migrate first
+
+docker run --env-file .env -p 8000:8000 nexus-rag-api
+docker run --env-file .env nexus-rag-worker
+docker run --env-file .env --no-healthcheck nexus-rag-api python -m src.jobs.workers fetch
+docker run -p 8080:8080 -e API_BASE_URL=http://host.docker.internal:8000 nexus-rag-ui
+```
+The images contain no `.env`, so pass it at run time. Docker's `--env-file` keeps quotes literally, so write values unquoted.
 
 ## Key Features
 
@@ -84,18 +109,18 @@ streamlit run admin_ui/app.py
 - **Polite Web Reading:** Give it a page or an XML sitemap (up to 50 pages). Pages are read through hosted reader APIs that respect `robots.txt`, paced per site, within a daily page quota, and every fetch is logged.
 
 ### Text Splitting
-- **Noise Removal:** Automatically detects and removes useless website menus, footers, and legal boilerplate so the AI focuses only on the real content.
-- **Smart Chunking:** Instead of blindly chopping text every 500 words, it respects your document's natural structure (headings, paragraphs, code blocks, and tables) so no context is ever lost.
+- **Noise Removal:** Removes repeated page chrome (menus, footers) only on structural evidence, such as text that repeats across many pages of the same crawl. When the evidence is thin, the text is kept.
+- **Smart Chunking:** Instead of blindly chopping text every 500 words, it respects your document's natural structure (headings, paragraphs, code blocks, and tables) and splits an oversized section at paragraph boundaries instead of cutting it.
 
 ### Search Engine
 - **Hybrid Search:** Combines meaning-based search (Dense Vectors) with exact keyword matching (Sparse Text) so it never misses a relevant detail.
 - **Configurable retrieval:** Every search knob (strategy, result count, fusion constant and weights, reranker, rerank pool size) is one `RetrievalConfig`. Chat runs the default configuration; the evaluator runs any configuration through the same code, so what is measured is what is served.
-- **Reranking:** Re-sorts a pool of candidates with a cross-encoder that reads the question and each passage together. FlashRank runs locally for $0; Jina's and Voyage's hosted rerankers are options (Voyage's free tier allows 3 reranks a minute). It is a per-query toggle, because on the earlier prototype benchmark a reranker traded Recall@1 (0.974 → 0.816) for Recall@5 (0.974 → 1.000). If a reranker or the query embedding fails, the answer says so in its retrieval record instead of silently degrading.
+- **Reranking:** Re-sorts a pool of candidates with a cross-encoder that reads the question and each passage together. FlashRank runs locally for $0; Jina's and Voyage's hosted rerankers are options (Voyage's free tier allows 3 reranks a minute). It is a per-query toggle because a reranker can help or hurt depending on the corpus; the evaluation engine is how you find out which. If a reranker or the query embedding fails, the answer says so in its retrieval record instead of silently degrading.
 - **Private Workspaces:** Every search is scoped to the workspace of your API key, and a request with no workspace returns nothing without touching the database. Keys are stored only as hashes and can be revoked individually.
 
 ### Chat & Memory
 - **Follow-up Questions:** Remembers the context of your conversation so you can ask natural follow-up questions without repeating yourself.
-- **No Hallucinations:** The AI is strictly programmed to answer *only* using the documents you provided. If the answer isn't in the text, it will tell you.
+- **Grounded Answers:** The prompt tells the model to answer only from the retrieved passages and to say so when they do not contain the answer. An optional faithfulness check has a separate judge model score the answer against its sources.
 - **Clear Citations:** Every answer includes exact citations so you can verify where the AI found the information.
 - **Real-Time Streaming:** Responses stream onto your screen instantly, just like ChatGPT.
 
@@ -233,7 +258,7 @@ graph TD
 
 ## Startup (Stateless Host, Durable Database)
 
-The API keeps nothing on local disk, so a host that wipes its filesystem on restart (Render, Hugging Face Spaces) loses nothing and needs no recovery step.
+The API keeps nothing on local disk, so a host that wipes its filesystem on restart loses nothing and needs no recovery step.
 
 ```mermaid
 graph LR

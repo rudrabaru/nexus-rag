@@ -13,7 +13,7 @@ Every source becomes Markdown before processing, but the two kinds of source tak
 - The **parse worker** then processes both the same way: clean, chunk, embed, commit. It never contacts a website: its only inputs are rows in Postgres.
 
 ### Web Fetching: Reader APIs Only
-**Rule: no process we host sends a request to a third-party website.** An earlier version ran a crawler (Crawl4AI) inside a Hugging Face Space, and the account was suspended for automated traffic. A crawler on shared hosting makes the host's network the thing target sites see. Fetching is therefore delegated to hosted reader APIs, which fetch from their own networks under their own terms:
+**Rule: no process we host sends a request to a third-party website.** An earlier version ran a crawler (Crawl4AI) inside the hosted service, and shared hosting providers treat automated outbound traffic as abuse. A crawler on shared hosting makes the host's network the thing target sites see. Fetching is therefore delegated to hosted reader APIs, which fetch from their own networks under their own terms:
 
 1. **Jina Reader, keyless** (primary). About 20 requests/minute per IP, and keyless use does not draw on Jina's one-time token grant. It reads HTML and PDFs by URL, so a remote PDF is never downloaded by us.
 2. **Firecrawl** (fallback, only when `FIRECRAWL_API_KEY` is set). 1,000 free credits a month.

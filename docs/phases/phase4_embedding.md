@@ -46,7 +46,7 @@ Each embedded chunk is one row of `chunks` in Postgres (Neon): text, vector (`ha
 - **One write, two indexes.** The keyword index is computed from the same row, so dense and sparse cannot diverge.
 - **Idempotent upserts** on `(tenant_id, index_id, chunk_id)`.
 - **Cascading deletes** from the document.
-- **`halfvec`** halves storage (~2 KB per chunk) under Neon's 0.5 GB free tier; round-trip cosine stays above 0.9999.
+- **`halfvec`** halves storage (~2 KB per chunk) under Neon's 1 GB free tier; round-trip cosine stays above 0.9999.
 - **One HNSW graph for all indexes.** Searches filter by `index_id` with iterative scans. With a second large index, a partial HNSW index per `index_id` would keep each graph model-pure; at one active index plus a transitional copy this is not yet worth the DDL.
 
 ## Design Philosophy & Tradeoffs
