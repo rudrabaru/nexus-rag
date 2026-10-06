@@ -15,7 +15,6 @@ Per job:
 4. The ingest task is deferred; it reads the pages from fetched_pages.
 """
 import asyncio
-import hashlib
 import logging
 
 import procrastinate
@@ -38,6 +37,7 @@ from src.jobs.contract import (
     MAX_RETRIES,
     IngestionRequest,
 )
+from src.jobs.fetch_report import content_key, no_pages_reason, summary
 from src.jobs.policy import register_recovery, run_with_policy
 from src.jobs.support import Progress, job_tag
 from src.db.engine import get_sync_engine
@@ -49,8 +49,6 @@ logger = logging.getLogger(__name__)
 
 fetch_blueprint = procrastinate.Blueprint()
 
-MAX_LISTED_URLS_IN_METADATA = 20
-
 _pacers = {}
 
 
@@ -59,11 +57,6 @@ def _pacer(min_interval: float) -> DomainPacer:
     if min_interval not in _pacers:
         _pacers[min_interval] = DomainPacer(min_interval)
     return _pacers[min_interval]
-
-
-def content_key(markdown: str) -> str:
-    """Identifies a page by its text alone, ignoring whitespace differences."""
-    return hashlib.sha256(" ".join(markdown.split()).encode("utf-8")).hexdigest()
 
 
 def _indexed_urls(request: IngestionRequest) -> set:
@@ -164,16 +157,16 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
             await asyncio.to_thread(fetches.store_fetched_page, request.job_id, url, page.title, page.markdown, page.provider)
             await audit(url, "fetched", page.provider, f"{len(page.markdown)} chars")
             fetched.append(url)
-        await report(2 + int(46 * position / len(pending)), _summary(urls, fetched, robots_blocked, denied, failed, over_quota, duplicates))
+        await report(2 + int(46 * position / len(pending)), summary(urls, fetched, robots_blocked, denied, failed, over_quota, duplicates))
 
     stored = await asyncio.to_thread(fetches.fetched_urls, request.job_id)
     if not stored:
-        reason = _no_pages_reason(robots_blocked, denied, failed, over_quota)
+        reason = no_pages_reason(robots_blocked, denied, failed, over_quota)
         if failed:  # a reader outage may pass: let Procrastinate retry the job
             raise ReaderError(reason)
         raise UnprocessableSourceError(reason)
 
-    await report(50, _summary(urls, fetched, robots_blocked, denied, failed, over_quota, duplicates))
+    await report(50, summary(urls, fetched, robots_blocked, denied, failed, over_quota, duplicates))
     try:
         await app.configure_task(
             INGEST_TASK, queue=INGEST_QUEUE, lock=request.doc_id, queueing_lock=f"ingest-{request.job_id}"
@@ -181,32 +174,6 @@ async def _fetch(request: IngestionRequest, app: procrastinate.App) -> None:
     except AlreadyEnqueued:
         logger.info(f"{tag} ingest already queued by an earlier attempt")
     logger.info(f"{tag} FETCH DONE | stored={len(stored)} robots_blocked={len(robots_blocked)} failed={len(failed)}")
-
-
-def _summary(urls, fetched, robots_blocked, denied, failed, over_quota, duplicates) -> dict:
-    summary = {
-        "total_pages": len(urls), "fetched_pages": len(fetched), "failed_pages": len(failed),
-        "robots_blocked_pages": len(robots_blocked), "denied_pages": len(denied), "quota_skipped_pages": len(over_quota),
-        "duplicate_pages": len(duplicates),
-    }
-    if robots_blocked:
-        summary["robots_blocked_urls"] = robots_blocked[:MAX_LISTED_URLS_IN_METADATA]
-    if failed or robots_blocked or over_quota:
-        summary["error_reason"] = _no_pages_reason(robots_blocked, denied, failed, over_quota)
-    return summary
-
-
-def _no_pages_reason(robots_blocked, denied, failed, over_quota) -> str:
-    parts = []
-    if robots_blocked:
-        parts.append(f"{len(robots_blocked)} disallowed by robots.txt")
-    if denied:
-        parts.append(f"{len(denied)} denied by the fetch policy")
-    if failed:
-        parts.append(f"{len(failed)} could not be read")
-    if over_quota:
-        parts.append(f"{len(over_quota)} skipped: daily page quota reached")
-    return "No page was fetched: " + ", ".join(parts) if parts else "No page was fetched."
 
 
 @fetch_blueprint.task(

@@ -64,7 +64,7 @@ def test_a_page_with_no_words_is_unreadable():
 
 
 def test_identical_text_has_one_content_key_whatever_its_whitespace():
-    from src.jobs.fetch_tasks import content_key
+    from src.jobs.fetch_report import content_key
 
     assert content_key("Access  denied\n\nplease log in") == content_key("Access denied please log in")
     assert content_key("Access denied") != content_key("Access granted")
