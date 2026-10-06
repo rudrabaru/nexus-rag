@@ -2,5 +2,5 @@
 # and layout models), which is why it is a separate image from the API.
 -r requirements-base.txt
 docling==2.130.0  # PDF/DOCX layout, tables and OCR (RapidOCR); the version the 2026-09-26 spike measured
-pymupdf>=1.24.0  # page counting, and the text fallback for PDFs Docling cannot handle
-tiktoken>=0.7.0  # the chunker's token counts
+pymupdf==1.28.0  # page counting, and the text fallback for PDFs Docling cannot handle
+tiktoken==0.13.0  # the chunker's token counts

@@ -36,8 +36,8 @@ jobs:
     env:
       TEST_DATABASE_URL: postgresql://nexus:nexus@localhost:5432/nexus_test
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11" # matches Dockerfile.api and Dockerfile.worker
           cache: pip
@@ -50,10 +50,30 @@ jobs:
       - name: Tests (unit + Postgres integration)
         run: pytest -q -rs
 
+  # Known vulnerabilities in the pinned direct dependencies and everything they pull in, and
+  # secrets committed anywhere in the history.
+  supply-chain:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0 # gitleaks scans the whole history
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - name: Dependency vulnerabilities
+        run: |
+          pip install pip-audit==2.10.1
+          pip-audit -r requirements-api.txt -r requirements-worker.txt
+      - name: Committed secrets
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   image:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build the API image
         run: docker build -f Dockerfile.api -t nexus-api:ci .
       - name: Build the worker image
@@ -100,7 +120,7 @@ jobs:
       - name: The API image must carry the default reranker's model (no download on a query)
         run: docker run --rm --entrypoint sh nexus-api:ci -c "ls /opt/flashrank/ms-marco-TinyBERT-L-2-v2/*.onnx"
       - name: The worker image must be able to import its task module and Docling
-        run: docker run --rm --entrypoint python nexus-worker:ci -c "import src.jobs.tasks, docling.document_converter"
+        run: docker run --rm --entrypoint python nexus-worker:ci -c "import src.jobs.ingest_tasks, docling.document_converter"
 
   # Manual only: spends embedding quota and needs repository secrets DATABASE_URL and
   # VOYAGE_API_KEY. Runs an experiment spec (src/evaluation/spec.py) against the live index and
@@ -116,8 +136,8 @@ jobs:
       ADMIN_API_KEY: ci-gate-unused
       GEMINI_API_KEY: ci-gate-unused  # retrieval-only specs call no LLM
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
           cache: pip

@@ -1,11 +1,12 @@
 # Slim API image: serving, retrieval and generation. It queues ingestion jobs but never
 # runs them, so no document parser is installed here (CI checks that none is importable).
 -r requirements-base.txt
-asyncpg>=0.30
+asyncpg==0.31.0
 litellm==1.102.0
-fastapi==0.111.0
-uvicorn>=0.29.0
-slowapi>=0.1.9
-python-multipart>=0.0.9
+fastapi==0.139.0
+starlette==1.3.1  # pinned beside FastAPI: it parses every request body, including multipart uploads
+uvicorn==0.49.0
+slowapi==0.1.10
+python-multipart==0.0.32
 flashrank==0.2.10  # the default reranker: a small ONNX cross-encoder on CPU (onnxruntime, no torch)
-numpy>=1.24  # the evaluation engine's significance tests (src/evaluation/significance.py)
+numpy==2.4.6  # the evaluation engine's significance tests (src/evaluation/significance.py)
