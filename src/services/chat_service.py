@@ -14,96 +14,34 @@ import asyncio
 import logging
 import time
 import uuid
-from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Dict, Optional
 
 from src.config import Settings, get_settings
 from src.generating.evaluator import FaithfulnessEvaluator
 from src.generating.generator import RAGGenerator
-from src.llm.client import LLMCall
-from src.llm.errors import GenerationError
 from src.generating.models import GenerationResult
 from src.generating.query_rewriter import QueryRewriter
-from src.retrieving.config import RetrievalConfig
-from src.retrieving.models import RetrievalResult
+from src.llm.client import LLMCall
+from src.llm.errors import GenerationError
 from src.retrieving.pipeline import RetrievalResources, build_pipeline
 from src.services.chat_config import chat_retrieval_config
+from src.services.chat_log import judge_answer, record_query
+from src.services.chat_models import (
+    EMPTY_WORKSPACE_MESSAGE,
+    GENERATION_FAILED_MESSAGE,
+    INTERNAL_ERROR_MESSAGE,
+    ChatAnswer,
+    ChatQuery,
+    Comparison,
+    Prepared,
+    preview,
+    sources_of,
+)
 from src.stores.documents import DocumentStore
 from src.stores.query_log import QueryLogStore
 from src.stores.workspace import WorkspaceSettingsStore
 
 logger = logging.getLogger(__name__)
-
-EMPTY_WORKSPACE_MESSAGE = "This workspace has no documents yet. Add a document or a web page first."
-GENERATION_FAILED_MESSAGE = "The language model could not produce an answer right now. Please try again shortly."
-INTERNAL_ERROR_MESSAGE = "Something went wrong while answering."
-SOURCE_PREVIEW_CHARS = 200
-
-
-@dataclass(frozen=True)
-class ChatQuery:
-    query: str
-    top_k: int = 5
-    use_reranker: bool = False
-    evaluate_faithfulness: bool = False
-    history: Tuple[Dict[str, str], ...] = ()
-
-
-@dataclass
-class SourceView:
-    url: str
-    section: str
-    similarity_score: float
-    chunk_preview: str
-
-
-@dataclass
-class Prepared:
-    tenant_id: str
-    chat: ChatQuery
-    started: float
-    empty: bool = False
-    config: Optional[RetrievalConfig] = None
-    retrieval: Optional[RetrievalResult] = None
-
-
-@dataclass
-class ChatAnswer:
-    answer: str
-    sources: List[SourceView] = field(default_factory=list)
-    latency_ms: float = 0.0
-    latency_breakdown: Optional[Dict[str, float]] = None
-    result: Optional[GenerationResult] = None  # kept for the faithfulness check that may follow
-    log_id: Optional[int] = None
-
-
-@dataclass
-class Comparison:
-    baseline: List[SourceView]
-    reranked: List[SourceView]
-    baseline_latency_ms: float
-    reranked_latency_ms: float
-    reranker: Optional[str]
-    degraded: List[str]
-
-
-def _preview(chunk) -> SourceView:
-    section = " > ".join(chunk.heading_path)
-    label = f"{chunk.source_document} > {section}" if chunk.source_document and section else chunk.source_document or section
-    text = chunk.text
-    return SourceView(chunk.source_url or "", label, chunk.similarity_score, text[:300] + ("..." if len(text) > 300 else ""))
-
-
-def sources_of(result: GenerationResult) -> List[SourceView]:
-    return [
-        SourceView(
-            url=chunk.source_url or "",
-            section=" > ".join(chunk.heading_path) if chunk.heading_path else "",
-            similarity_score=chunk.similarity_score,
-            chunk_preview=chunk.text[:SOURCE_PREVIEW_CHARS] + ("..." if len(chunk.text) > SOURCE_PREVIEW_CHARS else ""),
-        )
-        for chunk in result.context_window.included_chunks
-    ]
 
 
 def _elapsed_ms(start: float) -> float:
@@ -162,7 +100,7 @@ class ChatService:
         self._log("generation_complete", query_text=chat.query, completion_tokens=result.completion_tokens,
                   prompt_tokens=result.prompt_tokens, duration_ms=_elapsed_ms(started))
         self._log("query_complete", query_text=chat.query, duration_ms=_elapsed_ms(prepared.started))
-        log_id = await self._record(prepared, result, result.total_latency_ms)
+        log_id = await record_query(self._query_log, prepared, result, result.total_latency_ms)
         return ChatAnswer(
             answer=result.answer, sources=sources_of(result), latency_ms=result.total_latency_ms,
             latency_breakdown={"retrieval": result.retrieval_latency_ms, "generation": result.generation_latency_ms},
@@ -209,7 +147,7 @@ class ChatService:
         self._log("generation_complete", query_text=chat.query, completion_tokens=call.completion_tokens,
                   prompt_tokens=call.prompt_tokens, duration_ms=_elapsed_ms(started))
         self._log("query_complete", query_text=chat.query, duration_ms=_elapsed_ms(prepared.started))
-        log_id = await self._record(prepared, result, _elapsed_ms(prepared.started))
+        log_id = await record_query(self._query_log, prepared, result, _elapsed_ms(prepared.started))
         if chat.evaluate_faithfulness:
             judged = await asyncio.to_thread(self.judge, result, log_id)
             if judged:
@@ -227,24 +165,16 @@ class ChatService:
         reranked = await build_pipeline(config, self._retrieval).run(query, tenant_id)
         baseline = (reranked.candidates or reranked.chunks)[: chat.top_k]
         return Comparison(
-            baseline=[_preview(c) for c in baseline], reranked=[_preview(c) for c in reranked.chunks],
+            baseline=[preview(c) for c in baseline], reranked=[preview(c) for c in reranked.chunks],
             baseline_latency_ms=reranked.latency_ms - reranked.rerank_latency_ms, reranked_latency_ms=reranked.latency_ms,
             reranker=config.reranker, degraded=list(reranked.degraded),
         )
 
     def judge(self, result: GenerationResult, log_id: Optional[int]) -> Optional[GenerationResult]:
-        """Judges the answer against its context and records the score on the query's log row. Never raises."""
-        try:
-            judged = self._evaluator.evaluate(result)
-        except Exception:
-            logger.exception("Faithfulness evaluation failed")
-            return None
-        if log_id and self._query_log:
-            try:
-                self._query_log.update_faithfulness(log_id, judged.faithfulness_score, judged.faithfulness_reasoning)
-            except Exception:
-                logger.exception("Failed to record the faithfulness score")
-        self._log("faithfulness_complete", query_text=result.query, score=judged.faithfulness_score)
+        """Judges the answer against its context and records the score. Never raises."""
+        judged = judge_answer(self._evaluator, self._query_log, result, log_id)
+        if judged:
+            self._log("faithfulness_complete", query_text=result.query, score=judged.faithfulness_score)
         return judged
 
     # ── Helpers ──────────────────────────────────────────────────────────────
@@ -257,32 +187,6 @@ class ChatService:
         if self._rewriter and chat.history:
             query = await asyncio.to_thread(self._rewriter.rewrite, query, list(chat.history))
         return query
-
-    async def _record(self, prepared: Prepared, result: GenerationResult, latency_ms: float) -> Optional[int]:
-        """Persists the query's latency, tokens, serving provider and cost. Never fails the request."""
-        if not self._query_log:
-            return None
-        retrieval = prepared.retrieval
-        details = {
-            "top_k_requested": prepared.chat.top_k,
-            "retrieved_context": [
-                {"chunk_id": c.chunk_id, "source_url": c.source_url, "similarity_score": c.similarity_score}
-                for c in result.context_window.included_chunks
-            ],
-        }
-        try:
-            return await asyncio.to_thread(
-                self._query_log.log_query,
-                tenant_id=prepared.tenant_id, query=prepared.chat.query, latency_ms=latency_ms,
-                tokens_used=result.prompt_tokens + result.completion_tokens, faithfulness_score=None, details=details,
-                embedding_tokens=retrieval.embedding_tokens, embedding_cost_usd=retrieval.embedding_cost_usd,
-                generation_input_tokens=result.prompt_tokens, generation_output_tokens=result.completion_tokens,
-                rerank_cost_usd=retrieval.rerank_cost_usd, provider=result.provider,
-                generation_cost_usd=result.generation_cost_usd,
-            )
-        except Exception:
-            logger.exception("Failed to log the query")
-            return None
 
     def _log(self, event: str, **fields) -> None:
         if self._events:

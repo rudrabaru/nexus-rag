@@ -2,7 +2,7 @@ from typing import Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field
 
-from src.services.chat_service import ChatQuery
+from src.services.chat_models import ChatQuery
 
 MAX_CHAT_TURNS = 20
 MAX_TURN_CHARS = 4000  # a long answer pasted back; bounds the prompt a caller can make us pay for

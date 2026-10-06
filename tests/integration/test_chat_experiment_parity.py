@@ -2,7 +2,8 @@
 import pytest
 
 from src.services.chat_config import chat_retrieval_config
-from src.services.chat_service import ChatQuery, ChatService
+from src.services.chat_models import ChatQuery
+from src.services.chat_service import ChatService
 from src.config import get_settings
 from src.evaluation import store
 from src.evaluation.dataset import Dataset, EvaluationQuery
