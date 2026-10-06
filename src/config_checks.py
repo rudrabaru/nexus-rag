@@ -17,7 +17,7 @@ from src.llm.config import parse_model
 Role = Literal["api", "worker", "cli"]
 
 MIN_ADMIN_KEY_LENGTH = 32  # a person-chosen secret guarded only by a throttle needs room against guessing
-EMBEDDING_PROVIDERS = ("voyage", "ollama")
+EMBEDDING_PROVIDERS = ("voyage", "ollama", "cloudflare")
 RERANKERS = ("flashrank", "jina", "voyage", "none")
 STRATEGIES = ("dense", "sparse", "hybrid")
 LOCAL_HOSTS = ("localhost", "127.0.0.1", "::1")
@@ -55,6 +55,14 @@ def _embedding_problems(settings: Settings) -> List[str]:
         return [f"EMBEDDING_PROVIDER ({' | '.join(EMBEDDING_PROVIDERS)})"]
     if provider == "voyage" and not settings.voyage_api_key.get_secret_value():
         return ["VOYAGE_API_KEY (EMBEDDING_PROVIDER=voyage)"]
+    if provider == "cloudflare":
+        missing = [
+            name for name, value in (
+                ("CLOUDFLARE_ACCOUNT_ID", settings.cloudflare_account_id),
+                ("CLOUDFLARE_API_TOKEN", settings.cloudflare_api_token.get_secret_value()),
+            ) if not value
+        ]
+        return [f"{name} (EMBEDDING_PROVIDER=cloudflare)" for name in missing]
     return []
 
 

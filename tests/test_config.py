@@ -4,6 +4,16 @@ from src.config import Settings, get_settings
 from src.config_checks import MIN_ADMIN_KEY_LENGTH, config_problems
 
 
+def test_the_cloudflare_provider_needs_its_account_and_token(monkeypatch):
+    from src.config_checks import config_problems
+
+    settings = make_settings(monkeypatch, EMBEDDING_PROVIDER="cloudflare")
+    problems = config_problems(settings, "api")
+    assert any("CLOUDFLARE_ACCOUNT_ID" in p for p in problems) and any("CLOUDFLARE_API_TOKEN" in p for p in problems)
+    settings = make_settings(monkeypatch, CLOUDFLARE_ACCOUNT_ID="a", CLOUDFLARE_API_TOKEN="t")
+    assert not any("CLOUDFLARE" in p for p in config_problems(settings, "api"))
+
+
 def make_settings(monkeypatch, **env):
     for key, value in env.items():
         monkeypatch.setenv(key, value)

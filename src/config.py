@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     voyage_tpm: int = Field(10_000, ge=1)
     voyage_rerank_model: str = "rerank-3"  # same card-free limit as embeddings, in a separate bucket
     ollama_base_url: str = "http://localhost:11434"
+    # Cloudflare Workers AI (EMBEDDING_PROVIDER=cloudflare): a free plan with no payment method.
+    cloudflare_account_id: str = ""
+    cloudflare_api_token: SecretStr = SecretStr("")
 
     # Page fetching (src/crawling): only hosted reader APIs ever contact a third-party site.
     firecrawl_api_key: SecretStr = SecretStr("")  # optional fallback reader and sitemap mapper

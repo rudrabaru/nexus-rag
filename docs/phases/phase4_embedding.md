@@ -21,8 +21,11 @@ Providers differ only in wire format, so each is a small function that builds an
 |---|---|---|---|
 | **Voyage** (default) | `voyage-4` (1024-dim) | Hosted default | 200M tokens per model, one-time. **3 requests/min and 10K tokens/min without a payment method** (verified 2026-09-26); adding a payment method raises the limits and the free tokens still apply |
 | **Ollama** | `bge-m3` (1024-dim) | Local index for the optional GPU worker | Unlimited, local |
+| **Cloudflare** | `bge-m3` (1024-dim, `@cf/baai/bge-m3`) | Hosted alternative to Voyage, through Workers AI's OpenAI-compatible `/ai/v1/embeddings` | Free plan, no payment method: 10,000 neurons a day at 1,075 neurons per million input tokens, about 9M tokens a day, and 3,000 requests a minute (Cloudflare's pricing and limits pages, read 2026-10-06). Past the daily allowance requests fail until 00:00 UTC |
 
 Both produce 1024-dimensional vectors, the width of the `chunks.embedding` column. A model with another width is refused with an explicit error instead of failing on insert.
+
+**Cloudflare is wired but not yet measured.** The provider (`EMBEDDING_PROVIDER=cloudflare`, with `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`) is tested against a fake server only. Still to establish on a real account: that the output is 1024-dimensional (a wrong width is refused with an error), the real per-request batch and token limits (its documentation states none; the 50 texts and 100,000 tokens per request are conservative experiment values), throughput, and whether `bge-m3` retrieves as well as `voyage-4` on the same chunks. Because each model is its own index, that last question is answered by embedding one corpus twice and comparing the two indexes with the evaluation engine (Phase 6). Queries must use the index's own model, so a Cloudflare index can serve hosted chat queries (unlike a laptop-only Ollama index).
 
 ### Asymmetric encoding
 Retrieval models embed queries and documents differently (Voyage `input_type`). Callers always state which side they are embedding: chunks as `document`, queries as `query`. Using the wrong side silently lowers recall, so it is an explicit argument, not a default.

@@ -40,6 +40,23 @@ def test_an_index_id_selects_its_own_provider_and_model():
         build_embedder(get_settings(), "jina:jina-embeddings-v3")
 
 
+async def test_cloudflare_sends_the_account_model_and_token_to_its_openai_compatible_endpoint(server, monkeypatch):
+    seen = []
+    real_handler = server.handler
+    server.handler = lambda request: seen.append(request) or real_handler(request)
+    for key, value in {"EMBEDDING_PROVIDER": "cloudflare", "CLOUDFLARE_ACCOUNT_ID": "acc123", "CLOUDFLARE_API_TOKEN": "cf-token"}.items():
+        monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+    embedder = build_embedder(get_settings())
+    assert embedder.index_id == "cloudflare:bge-m3"
+    batch = await embedder.aembed(["a", "b"], "document")
+    assert len(batch.vectors) == 2 and batch.tokens == 7
+    request = seen[0]
+    assert str(request.url) == "https://api.cloudflare.com/client/v4/accounts/acc123/ai/v1/embeddings"
+    assert request.headers["authorization"] == "Bearer cf-token"
+    assert server.bodies[0] == {"model": "@cf/baai/bge-m3", "input": ["a", "b"]}
+
+
 async def test_queries_and_documents_are_embedded_asymmetrically(server, monkeypatch):
     embedder = voyage(monkeypatch)
     await embedder.aembed(["q"], "query")
