@@ -2,6 +2,7 @@
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+markers = ["integration: needs a real Postgres (TEST_DATABASE_URL); select with -m integration, skip with -m \"not integration\""]
 filterwarnings = ["ignore::DeprecationWarning", "ignore::pydantic.warnings.PydanticDeprecatedSince20"]
 
 [tool.ruff]

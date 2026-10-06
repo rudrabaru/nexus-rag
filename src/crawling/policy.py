@@ -12,7 +12,7 @@ import time
 from typing import Dict, List
 from urllib.parse import urlparse
 
-from src.ingestion.url_policy import UnsafeUrlError, validate_public_url
+from src.crawling.url_policy import UnsafeUrlError, validate_public_url
 
 
 def _matches(host: str, domains: List[str]) -> bool:

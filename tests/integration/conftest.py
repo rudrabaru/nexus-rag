@@ -34,6 +34,13 @@ from src.db.schema_version import ALEMBIC_INI
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
 
 
+def pytest_collection_modifyitems(items):
+    here = os.path.dirname(__file__)
+    for item in items:
+        if str(item.path).startswith(here):
+            item.add_marker(pytest.mark.integration)
+
+
 @pytest.fixture(scope="session")
 def event_loop_policy():
     """

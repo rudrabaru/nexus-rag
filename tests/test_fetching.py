@@ -326,7 +326,7 @@ async def test_a_sitemap_cannot_aim_fetches_at_another_host(web):
 
 
 async def test_a_refused_child_sitemap_is_never_read(web):
-    from src.ingestion.url_policy import UnsafeUrlError
+    from src.crawling.url_policy import UnsafeUrlError
 
     routes, seen = web
     index = "[c](https://a.example/sitemap-docs.xml)\n" + PAGE_TEXT
@@ -343,7 +343,7 @@ async def test_a_refused_child_sitemap_is_never_read(web):
 
 
 async def test_a_redirect_to_a_forbidden_host_is_denied_not_stored(fetch_env, monkeypatch):
-    from src.ingestion.url_policy import UnsafeUrlError
+    from src.crawling.url_policy import UnsafeUrlError
 
     fetch_tasks, registry = fetch_env
 

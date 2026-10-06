@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from src.crawling.policy import check_fetchable
-from src.ingestion.url_policy import UnsafeUrlError, validate_public_url
+from src.crawling.url_policy import UnsafeUrlError, validate_public_url
 from src.jobs.contract import FETCH_QUEUE, FETCH_TASK, INGEST_QUEUE, INGEST_TASK
 from src.services.errors import InvalidRequest, PayloadTooLarge, QuotaExceeded
 from src.services.ingestion_service import (
@@ -17,7 +17,7 @@ from src.services.ingestion_service import (
 
 def resolve_to(monkeypatch, *addresses):
     infos = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (a, 443)) for a in addresses]
-    monkeypatch.setattr("src.ingestion.url_policy.socket.getaddrinfo", lambda *args, **kwargs: infos)
+    monkeypatch.setattr("src.crawling.url_policy.socket.getaddrinfo", lambda *args, **kwargs: infos)
 
 
 class FakeUpload:
@@ -63,7 +63,7 @@ class Wired:
 )
 def test_non_http_sources_are_rejected_before_any_lookup(url, monkeypatch):
     monkeypatch.setattr(
-        "src.ingestion.url_policy.socket.getaddrinfo",
+        "src.crawling.url_policy.socket.getaddrinfo",
         lambda *a, **k: pytest.fail("DNS must not be consulted for a non-http URL"),
     )
     with pytest.raises(UnsafeUrlError):
@@ -96,7 +96,7 @@ def test_unresolvable_hosts_are_rejected(monkeypatch):
     def fail(*args, **kwargs):
         raise socket.gaierror("no such host")
 
-    monkeypatch.setattr("src.ingestion.url_policy.socket.getaddrinfo", fail)
+    monkeypatch.setattr("src.crawling.url_policy.socket.getaddrinfo", fail)
     with pytest.raises(UnsafeUrlError):
         validate_public_url("https://does-not-exist.invalid/")
 
@@ -303,16 +303,16 @@ def test_private_addresses_wrapped_in_nat64_or_6to4_are_rejected(address, monkey
 def test_a_host_that_does_not_resolve_in_time_is_rejected(monkeypatch):
     import time
 
-    from src.ingestion import url_policy
+    from src.crawling import url_policy
 
     monkeypatch.setattr(url_policy, "DNS_TIMEOUT_SECONDS", 0.05)
-    monkeypatch.setattr("src.ingestion.url_policy.socket.getaddrinfo", lambda *a, **k: time.sleep(0.5))
+    monkeypatch.setattr("src.crawling.url_policy.socket.getaddrinfo", lambda *a, **k: time.sleep(0.5))
     with pytest.raises(UnsafeUrlError, match="in time"):
         validate_public_url("https://slow.example/")
 
 
 def test_redaction_keeps_the_address_and_drops_the_secret():
-    from src.ingestion.url_policy import redact_url
+    from src.crawling.url_policy import redact_url
 
     assert redact_url("https://a.example/docs/page?token=SECRET#frag") == "https://a.example/docs/page"
 

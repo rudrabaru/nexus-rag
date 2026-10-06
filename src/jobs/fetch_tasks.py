@@ -27,7 +27,7 @@ from src.crawling.readers import ReaderError, RobotsBlockedError, read_page
 from src.crawling.sitemap import MAX_SITEMAP_PAGES, discover_pages, is_sitemap_url
 from src.embedding.providers import build_embedder
 from src.errors import UnprocessableSourceError
-from src.ingestion.url_policy import UnsafeUrlError, redact_url
+from src.crawling.url_policy import UnsafeUrlError, redact_url
 from src.jobs.contract import (
     FETCH_QUEUE,
     FETCH_RECOVERY_TASK_NAME,

@@ -69,7 +69,7 @@ A startup fail-fast guard validates the whole configuration (`src/config.py`) an
 **Tradeoff:** Onboarding is an administrator action instead of self-service, and the admin key must be handled carefully. This suits a portfolio deployment with a small known set of users. A public product would need real sign-up (OAuth or invite tokens) in front of key issuance.
 
 ## 11. Ingest Source Validation
-**Decision:** The `url` field of `POST /v1/documents` accepts only http(s) URLs whose host resolves exclusively to public addresses (`src/ingestion/url_policy.py`).
+**Decision:** The `url` field of `POST /v1/documents` accepts only http(s) URLs whose host resolves exclusively to public addresses (`src/crawling/url_policy.py`).
 **Rationale:** The field was passed to the dispatcher unchecked, and the dispatcher treated any string ending in `.pdf`, `.docx`, `.md` or `.txt` as a local file path. Any authenticated tenant could therefore submit a server path and have the file indexed and retrievable. The check is structural (scheme and resolved address); it does not depend on site names.
 **Tradeoff:** The check validates the address at request time only. Redirects and DNS rebinding are not covered and are addressed by fetching through a hosted reader service rather than from this process.
 

@@ -20,7 +20,7 @@ from typing import List, Optional
 
 import httpx
 
-from src.ingestion.url_policy import redact_url
+from src.crawling.url_policy import redact_url
 
 logger = logging.getLogger(__name__)
 

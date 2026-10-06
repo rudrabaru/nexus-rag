@@ -18,7 +18,7 @@ from urllib.parse import parse_qs, urlparse
 import httpx
 
 from src.crawling.readers import READ_TIMEOUT_SECONDS, ReaderError, RobotsBlockedError, read_with_jina
-from src.ingestion.url_policy import UnsafeUrlError, redact_url
+from src.crawling.url_policy import UnsafeUrlError, redact_url
 
 logger = logging.getLogger(__name__)
 

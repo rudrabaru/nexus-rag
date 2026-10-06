@@ -24,7 +24,7 @@ import procrastinate
 from src.config import Settings, get_settings
 from src.crawling.policy import check_fetchable
 from src.crawling.sitemap import MAX_SITEMAP_PAGES, is_sitemap_url
-from src.ingestion.url_policy import UnsafeUrlError
+from src.crawling.url_policy import UnsafeUrlError
 from src.jobs.contract import FETCH_QUEUE, FETCH_TASK, INGEST_QUEUE, INGEST_TASK, IngestionRequest
 from src.services.errors import InvalidRequest, PayloadTooLarge, QuotaExceeded, Unavailable
 from src.stores.documents import DocumentStore
