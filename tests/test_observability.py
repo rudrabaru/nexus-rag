@@ -126,3 +126,19 @@ def test_error_reporting_is_started_without_personal_data_when_a_dsn_is_set(monk
     assert options["send_default_pii"] is False and options["traces_sample_rate"] == 0.0
     assert options["max_request_body_size"] == "never" and options["include_local_variables"] is False
     assert options["before_send"] is error_reporting.scrub_event
+
+
+def test_printing_a_character_the_console_cannot_encode_does_not_crash(monkeypatch):
+    import io
+    import sys
+
+    from src.runtime import use_utf8_output
+
+    console = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", errors="strict")
+    monkeypatch.setattr(sys, "stdout", console)
+    with pytest.raises(UnicodeEncodeError):
+        print("non‑breaking", file=console, flush=True)  # what the Windows default does
+    use_utf8_output()
+    print("non‑breaking", flush=True)
+    console.buffer.seek(0)
+    assert "non‑breaking".encode("utf-8") in console.buffer.read()

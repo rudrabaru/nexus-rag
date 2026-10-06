@@ -43,6 +43,17 @@ def configure_logging() -> None:
     init_error_reporting(settings.sentry_dsn.get_secret_value(), settings.sentry_environment)
 
 
+def use_utf8_output() -> None:
+    """
+    Text the system prints (a generated question, a document title) is not limited to what the console's
+    code page can show: on Windows the default would raise UnicodeEncodeError for a character such as a
+    non-breaking hyphen and stop a command part-way through. Unencodable characters are replaced, never fatal.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
+
+
 def check_configuration(role: Role) -> Settings:
     settings = get_settings()
     problems = config_problems(settings, role)
@@ -62,6 +73,7 @@ def bootstrap(role: Role, async_postgres_driver: bool = False) -> Settings:
     """
     if async_postgres_driver and sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    use_utf8_output()
     load_environment()
     configure_logging()
     settings = check_configuration(role)
