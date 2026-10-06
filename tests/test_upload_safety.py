@@ -7,7 +7,8 @@ import pytest
 from src.jobs import ingest_tasks as tasks
 from src.jobs.contract import IngestionRequest
 from src.services.errors import InvalidRequest, PayloadTooLarge
-from src.services.ingestion_service import MAX_UPLOAD_BYTES, READ_CHUNK_BYTES, IngestionService, safe_filename
+from src.services.ingestion_service import IngestionService
+from src.services.uploads import MAX_UPLOAD_BYTES, READ_CHUNK_BYTES, safe_filename
 
 
 @pytest.mark.parametrize(

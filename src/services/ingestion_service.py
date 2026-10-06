@@ -13,11 +13,9 @@ commits and replaces them in one transaction, so a worker that is offline for da
 import asyncio
 import hashlib
 import logging
-import os
-import re
 import uuid
 from dataclasses import dataclass
-from typing import Optional, Protocol
+from typing import Optional
 
 import procrastinate
 
@@ -26,16 +24,14 @@ from src.crawling.policy import check_fetchable
 from src.crawling.sitemap import MAX_SITEMAP_PAGES, is_sitemap_url
 from src.crawling.url_policy import UnsafeUrlError
 from src.jobs.contract import FETCH_QUEUE, FETCH_TASK, INGEST_QUEUE, INGEST_TASK, IngestionRequest
-from src.services.errors import InvalidRequest, PayloadTooLarge, QuotaExceeded, Unavailable
+from src.services.errors import InvalidRequest, QuotaExceeded, Unavailable
+from src.services.uploads import Upload, allowed_extension, read_capped, safe_filename
 from src.stores.documents import DocumentStore
 from src.stores.fetches import FetchStore
 from src.stores.jobs import JobStore
 
 logger = logging.getLogger(__name__)
 
-MAX_UPLOAD_BYTES = 20 * 1024 * 1024
-READ_CHUNK_BYTES = 1024 * 1024
-MAX_FILENAME_CHARS = 255
 # Bounds how much of Neon's 1 GB free-tier storage an offline or backlogged worker can consume with
 # unprocessed uploads: 200 MB leaves the rest for chunk vectors. An operational safety limit on
 # ingest_sources, not a corpus-tuned retrieval threshold.
@@ -45,18 +41,9 @@ MAX_PENDING_UPLOAD_BYTES = 200 * 1024 * 1024
 # a person uploading by hand, not tuned to any corpus.
 MAX_ACTIVE_JOBS_PER_TENANT = 10
 TENANT_CHUNK_QUOTA = 2000
-ALLOWED_UPLOAD_EXTENSIONS = {".pdf", ".docx", ".txt", ".md"}
 # A document that will make about this many chunks gets a heads-up that it will take a while.
 LARGE_DOCUMENT_WARNING_CHUNKS = 500
 ESTIMATED_BYTES_PER_CHUNK = 2000
-
-
-class Upload(Protocol):
-    """An uploaded file as the service needs it; FastAPI's UploadFile satisfies this."""
-
-    filename: Optional[str]
-
-    async def read(self, size: int = -1) -> bytes: ...
 
 
 @dataclass
@@ -64,31 +51,6 @@ class Submission:
     job_id: str
     status: str  # queued | complete (the content was already indexed)
     warning: Optional[str] = None
-
-
-def safe_filename(raw: Optional[str]) -> str:
-    """
-    The label of an uploaded file: its last path segment under either separator style, without
-    control characters. The worker may run on another OS than the API, so a name that is harmless
-    here (a backslash path on Linux) must stay harmless there. It is a display label only: the
-    worker never uses it as a path.
-    """
-    name = re.split(r"[\\/]", raw or "")[-1]
-    name = "".join(c for c in name if c.isprintable()).strip()
-    if not name or name in (".", "..") or len(name) > MAX_FILENAME_CHARS:
-        raise InvalidRequest(f"The uploaded file needs a name of at most {MAX_FILENAME_CHARS} characters.")
-    return name
-
-
-async def _read_capped(file: Upload, limit: int) -> bytes:
-    """Reads an upload in chunks and stops as soon as it exceeds `limit`, so an oversized body is never held in memory."""
-    chunks, total = [], 0
-    while chunk := await file.read(READ_CHUNK_BYTES):
-        total += len(chunk)
-        if total > limit:
-            raise PayloadTooLarge(f"File exceeds {limit // (1024 * 1024)}MB limit")
-        chunks.append(chunk)
-    return b"".join(chunks)
 
 
 def _doc_id(tenant_id: str, source_ident: str) -> str:
@@ -122,15 +84,11 @@ class IngestionService:
             filename = None
         else:
             filename = safe_filename(file.filename)
-            ext = os.path.splitext(filename)[1].lower()
-            if ext not in ALLOWED_UPLOAD_EXTENSIONS:
-                raise InvalidRequest(
-                    f"Unsupported file type: {ext}. Allowed types are: {', '.join(sorted(ALLOWED_UPLOAD_EXTENSIONS))}"
-                )
+            ext = allowed_extension(filename)
             if await asyncio.to_thread(self._jobs.pending_upload_bytes, tenant_id) >= MAX_PENDING_UPLOAD_BYTES:
                 raise QuotaExceeded("Too many documents already queued for processing. Wait for them to finish.")
 
-            content = await _read_capped(file, MAX_UPLOAD_BYTES)
+            content = await read_capped(file)
             size = len(content)
             content_hash = hashlib.sha256(content).hexdigest()
             upload, format_type, doc_id = (filename, content), ext.lstrip("."), _doc_id(tenant_id, filename)

@@ -7,10 +7,10 @@ from src.crawling.policy import check_fetchable
 from src.crawling.url_policy import UnsafeUrlError, validate_public_url
 from src.jobs.contract import FETCH_QUEUE, FETCH_TASK, INGEST_QUEUE, INGEST_TASK
 from src.services.errors import InvalidRequest, PayloadTooLarge, QuotaExceeded
+from src.services.uploads import MAX_UPLOAD_BYTES
 from src.services.ingestion_service import (
     MAX_ACTIVE_JOBS_PER_TENANT,
     MAX_PENDING_UPLOAD_BYTES,
-    MAX_UPLOAD_BYTES,
     IngestionService,
 )
 

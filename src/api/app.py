@@ -15,7 +15,7 @@ from src.api.middleware import BodyLimitMiddleware, RequestIdMiddleware
 from src.api.rate_limit import limiter
 from src.api.routes import admin, chat, documents, health, workspace
 from src.config import get_settings
-from src.services.ingestion_service import MAX_UPLOAD_BYTES
+from src.services.uploads import MAX_UPLOAD_BYTES
 
 # 256 KB covers the largest valid JSON request (a 2,000-character query plus 20 chat turns); an
 # upload may carry MAX_UPLOAD_BYTES plus a little multipart framing.
