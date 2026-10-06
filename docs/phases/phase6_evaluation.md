@@ -122,8 +122,8 @@ Tradeoffs, stated plainly:
 ### Parameters (each an experiment, none tuned on a corpus yet)
 | Parameter | Value | Why | Cost of being wrong |
 |---|---|---|---|
-| generation temperature | 0.3 | each call is a different passage, so little extra randomness is needed; low keeps the question tied to the text | too low gives stiff phrasing; too high invents facts (the reviewer is the guard) |
-| call spacing | 13 s Gemini, 8 s Groq | Gemini: the ~5 requests a minute its free tier has shown (unpublished; check AI Studio). Groq: 8K tokens a minute against ~1K-token prompts | slower than needed on a paid tier (`--min-interval`) |
+| generation temperature | 0.3; Gemini 1.0 | each call is a different passage, so little extra randomness is needed; low keeps the question tied to the text. Gemini 3 models degrade below 1.0: measured 2026-10-06, every one of 8 replies from `gemini-3.5-flash` at 0.3 trailed into endless newlines and none could be read | too low gives stiff phrasing; too high invents facts (the reviewer is the guard) |
+| call spacing | 13 s Gemini, 8 s Groq | Gemini: the ~5 requests a minute its free tier has shown, but note its **daily** cap of 20 requests per model (measured 2026-10-06), which is why the default generator is Groq. Groq: 8K tokens a minute against ~1K-token prompts | slower than needed on a paid tier (`--min-interval`) |
 | abort after | 5 consecutive failures | the client already retries a transient error three times with backoff, so five failed chunks in a row means the provider is down, not unlucky | a flaky provider stops a run that would have finished; it resumes where it stopped |
 | overlap word length | 3+ characters | sets short function words aside without a language-specific stop list | a crude measure: it only compares tiers on one corpus |
 

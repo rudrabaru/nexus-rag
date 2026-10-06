@@ -22,6 +22,57 @@ def deterministic_cost(monkeypatch):
     monkeypatch.setattr("src.llm.client.litellm.completion_cost", lambda **kw: 0.0042)
 
 
+GEMINI_DAILY_QUOTA = (
+    'GeminiException - {"error": {"code": 429, "message": "You exceeded your current quota", "details": [{"violations": '
+    '[{"quotaMetric": "generativelanguage.googleapis.com/generate_content_free_tier_requests", '
+    '"quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier", "quotaValue": "20"}]}, '
+    '{"@type": "type.googleapis.com/google.rpc.RetryInfo", "retryDelay": "40902s"}]}}'
+)
+
+
+def test_a_spent_daily_quota_is_not_retried_and_falls_back_at_once(monkeypatch):
+    import litellm
+
+    primary_calls = []
+
+    def completion(**kwargs):
+        if kwargs["model"].startswith("gemini/"):
+            primary_calls.append(1)
+            raise litellm.RateLimitError(message=GEMINI_DAILY_QUOTA, llm_provider="gemini", model="gemini/primary-model")
+        return response("from the fallback")
+
+    monkeypatch.setattr("src.llm.client.litellm.completion", completion)
+    client = LLMClient(config(fallback={"provider": "groq", "model_name": "fallback-model"}))
+    assert client.call_llm("hi").text == "from the fallback"
+    assert len(primary_calls) == 1  # no backoff retries against a limit that lifts in hours
+
+
+def test_a_spent_daily_quota_with_no_fallback_is_a_permanent_failure(monkeypatch):
+    import litellm
+
+    def completion(**kwargs):
+        raise litellm.RateLimitError(message=GEMINI_DAILY_QUOTA, llm_provider="gemini", model="gemini/primary-model")
+
+    monkeypatch.setattr("src.llm.client.litellm.completion", completion)
+    with pytest.raises(GenerationError) as error:
+        LLMClient(config()).call_llm("hi")
+    assert error.value.permanent is True
+
+
+def test_an_ordinary_429_is_still_transient_and_not_permanent():
+    from src.llm.errors import is_permanent, is_retryable
+
+    assert is_retryable(rate_limit_error()) and not is_permanent(rate_limit_error())
+
+
+def test_a_429_whose_retry_delay_is_a_few_seconds_is_still_retried():
+    import litellm
+    from src.llm.errors import is_quota_exhausted
+
+    brief = litellm.RateLimitError(message='{"retryDelay": "12s"}', llm_provider="gemini", model="m")
+    assert not is_quota_exhausted(brief)
+
+
 def test_a_429_on_the_primary_reaches_the_fallback():
     """The specific regression test item 6 requires: a 429 must not just retry forever
     against a dead quota — it must eventually reach the configured fallback."""

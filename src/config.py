@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     llm_chat_fallback: str = "groq/openai/gpt-oss-20b"  # used only when that provider's key is set; empty disables it
     llm_rewrite: str = "groq/openai/gpt-oss-20b"
     llm_judge: str = "groq/openai/gpt-oss-20b"
-    llm_testset: str = "gemini/gemini-3.5-flash"
+    llm_testset: str = "groq/openai/gpt-oss-120b"  # Gemini's free tier allows 20 requests a day per model: too few for a 50-question set
 
     # One index = one embedding model (src/embedding/providers.py). Ingestion writes to, and
     # queries read from, the index of this provider + model.

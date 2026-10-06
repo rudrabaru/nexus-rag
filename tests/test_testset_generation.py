@@ -52,6 +52,13 @@ def run_generation(draft, groups, replies, count=10, difficulties=("easy", "hard
     return client
 
 
+def test_gemini_generates_at_its_default_temperature_and_other_providers_at_the_low_one():
+    from src.testsets.commands import GENERATION_TEMPERATURE, generation_temperature
+
+    assert generation_temperature("gemini") == 1.0
+    assert generation_temperature("groq") == GENERATION_TEMPERATURE == 0.3
+
+
 def test_chunks_with_the_same_text_form_one_group_and_all_are_ground_truth():
     chunks = [
         source_chunk("a", doc_id="d1", text="Same  text\nhere", source="https://x/one", heading=("A",)),

@@ -23,7 +23,7 @@ from typing import Optional
 import litellm
 
 from src.llm.config import LLMConfig
-from src.llm.errors import PERMANENT_ERRORS, EmptyResponseError, GenerationError, is_retryable
+from src.llm.errors import EmptyResponseError, GenerationError, is_permanent, is_retryable
 from src.retry import backoff_seconds
 
 logger = logging.getLogger(__name__)
@@ -129,7 +129,7 @@ class LLMClient:
         if fallback:
             return fallback.call_llm(prompt, is_fallback=True, response_schema=response_schema)
         logger.error(f"{model} failed: {type(last_error).__name__}: {last_error}")
-        raise GenerationError(f"{type(last_error).__name__}: {last_error}", isinstance(last_error, PERMANENT_ERRORS)) from last_error
+        raise GenerationError(f"{type(last_error).__name__}: {last_error}", is_permanent(last_error)) from last_error
 
     async def call_llm_stream(self, prompt: str, call: LLMCall, is_fallback: bool = False, max_retries: int = MAX_RETRIES):
         """
@@ -180,4 +180,4 @@ class LLMClient:
             return
         self._served_here(call)
         logger.error(f"{model} stream failed: {type(last_error).__name__}: {last_error}")
-        raise GenerationError(f"{type(last_error).__name__}: {last_error}", isinstance(last_error, PERMANENT_ERRORS)) from last_error
+        raise GenerationError(f"{type(last_error).__name__}: {last_error}", is_permanent(last_error)) from last_error

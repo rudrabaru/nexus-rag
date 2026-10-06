@@ -24,6 +24,14 @@ from src.testsets.sampling import group_identical, interleave_by_document, load_
 # Questions come from different passages, so one call per question already varies; a low
 # temperature keeps the question tied to what the passage says. Untuned: a starting point.
 GENERATION_TEMPERATURE = 0.3
+# Gemini 3 models misbehave below 1.0 (the provider and LiteLLM both warn of loops). Measured 2026-10-06:
+# at 0.3, all 8 replies from gemini-3.5-flash were valid JSON whose question trailed off into hundreds of
+# newlines, so no question could be read. Gemini therefore runs at its default of 1.0.
+PROVIDER_TEMPERATURE = {"gemini": 1.0}
+
+
+def generation_temperature(provider: str) -> float:
+    return PROVIDER_TEMPERATURE.get(provider, GENERATION_TEMPERATURE)
 
 # Seconds between calls, per provider. Gemini: assumes the 5 requests a minute its free tier has
 # shown in practice (Google does not publish it: check AI Studio and pass --min-interval). Groq: its
@@ -77,7 +85,7 @@ def command_generate(args) -> int:
         return 0
 
     meta = {"tenant_id": args.tenant, "index_id": index_id, "model": f"{provider}/{model_name}", "seed": args.seed,
-            "difficulties": difficulties, "temperature": GENERATION_TEMPERATURE}
+            "difficulties": difficulties, "temperature": generation_temperature(provider)}
     head = store.find(args.tenant, args.set)
     if head is None:
         test_set_id, draft = store.create(args.tenant, args.set, meta), Draft(meta=meta)
@@ -89,7 +97,7 @@ def command_generate(args) -> int:
                   f"set measures. Use another --set, or the same settings to resume.")
             return 2
 
-    client = LLMClient(GenerationConfig(provider=provider, model_name=model_name, temperature=GENERATION_TEMPERATURE,
+    client = LLMClient(GenerationConfig(provider=provider, model_name=model_name, temperature=generation_temperature(provider),
                                         max_output_tokens=1024))  # no fallback: the model is pinned
     interval = args.min_interval or PROVIDER_MIN_INTERVAL_SECONDS.get(provider, DEFAULT_MIN_INTERVAL_SECONDS)
     print(f"writing {args.count} questions with {provider}/{model_name} into test set {args.set!r} (resuming at {len(draft.items)})")
