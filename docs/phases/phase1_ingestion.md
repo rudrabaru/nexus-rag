@@ -18,16 +18,14 @@ Every source becomes Markdown before processing, but the two kinds of source tak
 1. **Jina Reader, keyless** (primary). About 20 requests/minute per IP, and keyless use does not draw on Jina's one-time token grant. It reads HTML and PDFs by URL, so a remote PDF is never downloaded by us.
 2. **Firecrawl** (fallback, only when `FIRECRAWL_API_KEY` is set). 1,000 free credits a month.
 
-The previous code broke this rule in small ways that are now gone: the dispatcher requested `robots.txt` and `/sitemap.xml` from the target site directly, sent `HEAD` requests to detect content types, and downloaded remote PDFs itself.
-
 **robots.txt is always respected.** Jina is asked to check it (`X-Robots-Txt`) and answers HTTP 409 when a page is disallowed (verified 2026-09-26 against a disallowed URL). A disallowed page is recorded as `robots_blocked` and **never retried with another reader**: that would be routing around the site owner's decision. Firecrawl's scrape documentation does not state its robots.txt behaviour, which is why it is second, not first. Tavily Extract, listed in the redesign plan as a third reader, is not wired in for the same reason: its robots.txt behaviour is unverified.
 
-**A page must be readable.** Fewer than 30 words from a reader means a login wall, a bot block or an empty shell, not a short document, and the next reader is tried.
+**A page must contain text.** A reader that returns no words at all has produced an empty shell, and the next reader is tried. A short page is accepted: length is not evidence that content is useless. A login wall or bot block that comes back for several URLs is recognised by being identical across them, and the fetch job skips repeats of content it already stored.
 
 ### Sitemaps
-Only an explicit sitemap URL (ending in `.xml`, or containing "sitemap") triggers multi-page ingestion; any other URL is exactly one page. The previous dispatcher expanded any page URL into its whole site through `robots.txt` auto-discovery, which spent fetch quota and site traffic the user never asked for.
+Only a URL that names a sitemap file triggers multi-page ingestion: an XML file (`.xml` or `.xml.gz`) with "sitemap" in its name, or a bare sitemap name. "sitemap" elsewhere in a path (an article about sitemaps) and other XML such as feeds are ordinary pages, so a single page is never fanned out into a crawl.
 
-The sitemap itself is read through Jina Reader, which renders a sitemap's `<loc>` entries as links (verified 2026-09-26); the page URLs are the links in that output. A sitemap index is followed one level deep (up to 10 child sitemaps). With a Firecrawl key, Firecrawl's `map` endpoint is the fallback. Media and archive links are skipped, a `?filter=/docs/` suffix keeps only matching URLs, and at most **50 pages** are taken per job.
+The sitemap itself is read through Jina Reader, which renders a sitemap's `<loc>` entries as links (verified 2026-09-26); the page URLs are the links in that output. A sitemap index is followed one level deep (up to 10 child sitemaps). Every child sitemap is read like a page: it goes through the fetch policy, the per-domain pacing and the audit log, and one the policy refuses is never read. A sitemap may list only its own site and that site's subdomains, so a hostile sitemap cannot aim our fetches at another host. With a Firecrawl key, Firecrawl's `map` endpoint is the fallback. Media and archive links are skipped, a `?filter=/docs/` suffix keeps only matching URLs, and at most **50 pages** are taken per job.
 
 ### Fetch Policy and Controls
 These controls stay in our code because they decide *what we are willing to fetch*, not what content is kept:
@@ -42,7 +40,7 @@ These controls stay in our code because they decide *what we are willing to fetc
 The policy is checked twice: by the API when the URL is submitted, and again by the fetch worker before each page, because DNS can change in between.
 
 ### Parsing Uploads: Docling
-Uploaded PDFs and DOCX files are parsed by [Docling](https://docling.org/): layout analysis, reading order, table structure, and OCR of scanned pages (RapidOCR, ONNX, on CPU). TXT and MD files are read as-is. This replaced MarkItDown, a PyMuPDF text fallback, and page-by-page Gemini vision OCR with a 2-second sleep, which spent the scarcest free resource (LLM requests per day) on a job a local layout model does better.
+Uploaded PDFs and DOCX files are parsed by [Docling](https://docling.org/): layout analysis, reading order, table structure, and OCR of scanned pages (RapidOCR, ONNX, on CPU). TXT and MD files are read as-is. This replaced MarkItDown and page-by-page Gemini vision OCR with a 2-second sleep, which spent the scarcest free resource (LLM requests per day) on a job a local layout model does better. PyMuPDF remains only as the fallback below.
 
 **Why, with evidence.** The chunking audit (Phase 3) found 97.6% of PDF chunks had no heading path: the old extraction lost document structure. A spike on real documents (2026-09-26, CPU only, 2 threads, a fresh process per document):
 
@@ -55,7 +53,7 @@ Uploaded PDFs and DOCX files are parsed by [Docling](https://docling.org/): layo
 | Scanned presentation | 14 | 119 s | 3.4 GB | 34 | 2 | PyMuPDF: 13 chars. Docling OCR: 6,147 chars, zero LLM calls |
 | DOCX files (3) | - | ~1 s | 0.4 GB | 0-17 | 0-5 | |
 
-Model loading adds ~16 s per process. Inside the worker image under Docker Desktop (WSL2) the scanned deck took ~14.6 s/page, so 50 pages is ~730 s plus model load, still inside the timeout. Peak memory was **1.7-3.4 GB**, far below the ~12 GB reported in Docling issue #366, so one-at-a-time parsing fits a 16 GB Hugging Face Space.
+Model loading adds ~16 s per process. Inside the worker image under Docker Desktop (WSL2) the scanned deck took ~14.6 s/page, so 50 pages is ~730 s plus model load, still inside the timeout. Peak memory was **1.7-3.4 GB**, far below the ~12 GB reported in Docling issue #366, so one-at-a-time parsing fits a 16 GB host.
 
 **How it runs:**
 - **A fresh child process per parse, for every parser that reads the upload**: Docling, the PDF page count, the PyMuPDF fallback and the DOCX zip check all run in `python -m src.parsing.child`, never in the worker. The upload is untrusted and these are large native libraries; a child cannot take the worker down with a crash or an out-of-memory kill, can be killed on a timeout, and returns Docling's memory to the OS on exit (it is not reliably released between documents). The child answers through a UTF-8 file, not a pickle, so the worker deserialises nothing the file could have influenced.
@@ -64,7 +62,7 @@ Model loading adds ~16 s per process. Inside the worker image under Docker Deskt
 - **Caps**: PDFs over **50 pages** (`DOCLING_MAX_PAGES`) skip Docling, and each parse has a **900 s** timeout (`DOCLING_TIMEOUT_SECONDS`). Rationale: the worst measured rate was ~8.5 s/page, so 50 pages is ~425 s here and ~850 s on a CPU twice as slow.
 - **A fallback that keeps the content**: a PDF over the page cap, or one Docling fails on (timeout, crash, OOM), is read with PyMuPDF as plain text. Nothing is dropped, but headings are lost, and the job records `parser: pymupdf` so the loss is visible. A DOCX Docling cannot read fails as unprocessable.
 - **Export settings**: `&` and `_` are exported literally (Docling escapes them by default, which put "amp" into the keyword index and broke `snake_case` identifiers), image placeholders are omitted, and page headers and footers that the layout model labels as page furniture are excluded: structural evidence, not a keyword rule.
-- **Bold-only section titles** in DOCX files (a line that is entirely bold, does not end like a sentence, and is followed by a blank line) are promoted to headings. Many DOCX files style titles that way, and Docling correctly reports them as paragraphs. Measured: 0 to 4 headings on the n8n notes. The rule's punctuation check had a bug (it read the raw line, which always ends in `**`), now fixed.
+- **Bold-only section titles** in DOCX files (a line that is entirely bold, does not end like a sentence, and is followed by a blank line) are promoted to headings. Many DOCX files style titles that way, and Docling correctly reports them as paragraphs. Measured: 0 to 4 headings on the n8n notes.
 
 The optional "extract visuals" mode (LLM image descriptions) was removed with the vision path. Docling can describe pictures with a local vision model; that is not enabled.
 
@@ -92,8 +90,7 @@ Measured with a real `docker kill` (SIGKILL) of the worker container at 75% of a
 
 ### Multi-Tenancy
 All documents are tagged at the ingestion layer with:
-- **Tenant ID**: Identifies the owning workspace to ensure strict data isolation.
-- **Visibility**: Defines the scope of the document (e.g., restricted strictly to the owning tenant).
+- **Tenant ID**: Identifies the owning workspace to ensure strict data isolation. Every read and write is scoped to it.
 
 ### Ingestion Observability & Error Propagation
 To ensure transparent operations, the ingestion pipeline maintains fine-grained observability over partial failures:
@@ -110,7 +107,7 @@ An upload is hashed by the API before queueing; a URL source is hashed by the pa
 
 ## Design Philosophy & Tradeoffs
 - **Fidelity vs. cost:** Docling recovers structure the old text extraction lost, at 30-120 s and up to 3.4 GB per PDF instead of a few seconds. That cost is why it runs only in the parse worker, one document at a time, with a page cap and a text fallback.
-- **Reader APIs vs. control:** Delegating fetching gives up control over rendering and timing, and depends on free allowances (keyless Jina ~20 requests/min; Firecrawl 1,000 pages/month). In exchange no hosted process of ours ever touches a target site, which is what keeps the hosting accounts in good standing.
+- **Reader APIs vs. control:** Delegating fetching gives up control over rendering and timing, and depends on free allowances (keyless Jina ~20 requests/min; Firecrawl 1,000 pages/month). In exchange no hosted process of ours ever touches a target site, which keeps automated traffic from our hosts' networks away from target sites.
 - **Bounded Concurrency vs. Speed:** While unbounded parallel scraping could theoretically process sitemaps faster, enforcing a concurrency limit prevents remote server rate-limiting and ensures stable, predictable memory usage.
 - **Crawler Reliability:** JavaScript-heavy sites behind aggressive bot detection may fail to render fully. In these edge cases, per-page outcomes in the job metadata and in `fetch_log` tell the user which pages failed and why.
 - **Two images instead of one:** Splitting the API and the worker costs an extra process to deploy and a database hand-off for uploaded bytes instead of a shared temp directory. The payoff is that `POST /v1/documents` cannot be slowed down by parsing, the API's dependency footprint stays small, and ingestion capacity scales independently of query capacity — a large evaluation sweep (item 13) can run more worker replicas without touching the API at all.

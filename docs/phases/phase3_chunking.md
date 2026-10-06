@@ -14,7 +14,6 @@ The chunking engine treats Markdown as a tree structure rather than a flat strin
 Certain structural elements must remain completely intact to preserve their semantic meaning. The system enforces strict atomic boundaries for:
 - **Code Blocks:** A fenced block of code is never split mid-block, preventing syntax corruption or broken logic.
 - **Tables:** Markdown tables are kept contiguous, ensuring rows and columns are not separated across different chunks, which would destroy their relational meaning.
-- **Visuals:** Any described images or visual references are grouped as atomic, distinct multimodal units.
 
 ### Soft Targets and Hard Limits
 While the engine prioritizes semantic coherence, it respects the physical constraints of downstream embedding models.

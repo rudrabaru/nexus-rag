@@ -20,7 +20,7 @@ Each block is normalized and cryptographically hashed for deduplication:
 - Dates are normalized to avoid churn from time-stamped, rotating blocks.
 - Whitespace is collapsed.
 
-The system tracks how often each unique block appears across the ingested corpus. Blocks that appear repeatedly across a large proportion of documents are flagged as likely boilerplate.
+The system tracks how often each unique block appears across the documents of the **same ingestion job** (one page, one upload, or the pages of one sitemap), not across everything ever ingested. Blocks that appear repeatedly across a large proportion of those documents are flagged as likely boilerplate.
 
 **PDF page furniture.** Running page headers and footers of uploaded PDFs are removed before this stage: Docling's layout model labels them as page furniture, and they are excluded from its Markdown export. The plain-text fallback (PDFs over the Docling page cap, or that Docling fails on) keeps them. An earlier filter meant to catch them here (short blocks repeated 3+ times within one PDF) never took effect: it flagged blocks that the cleaner then re-scored and kept, and it only inflated the "blocks removed" audit count. It was deleted (2026-09-28) rather than switched on, because switching it on would remove content with no measurement behind it; that needs a before/after comparison on fallback PDFs first.
 
@@ -28,11 +28,30 @@ The system tracks how often each unique block appears across the ingested corpus
 Every block is evaluated using measurable signals:
 - **Link Density**: The ratio of link characters to total text characters.
 - **Word Count**: The absolute length of the block.
-- **Document Frequency**: The fraction of the total corpus where this block appears.
+- **Document Frequency**: The fraction of the job's documents in which this block appears (counted only once at least `MIN_SHARING_DOCUMENTS` documents share it).
 
 A block is removed if it passes an objective, data-driven threshold:
 - High link density combined with low word count strongly indicates a navigation menu or footer.
 - High document frequency combined with low word count strongly indicates repetitive boilerplate (e.g., copyright notices or site-wide banners).
+
+### Scoring Weights and Removal Tiers (experiment)
+Code blocks, tables and headings are never scored: they are always kept. Every other block gets a score from these signals, in `src/processing/cleaner.py`:
+
+| Signal | Condition | Score |
+|---|---|---|
+| Frequency | document frequency > 80% / > 40% / > 10% | +5 / +3 / +1 |
+| Edge position | in the first or last 10% of the document | +1.5 |
+| Link density | > 0.8 / > 0.5 | +3 / +1 |
+| Information density | under 10 words with a link / over 30 words with link density under 0.1 | +2 / -3 |
+| Low diversity | over 5 words and unique-word ratio under 0.5 | +2 |
+| Context | each neighbouring block that is short (under 15 words) and link-heavy (> 0.5) | +1 |
+
+A block is removed only by one of three tiers, and only when its score is above -1:
+1. **Obvious chrome:** document frequency above 95% and under 15 words.
+2. **Multi-signal match:** score of at least 6 from at least two *different kinds* of signal (frequency, position, link density, information density, diversity, context).
+3. **Link wall:** link density above 0.9 and document frequency above 20%.
+
+*Status: experiment.* These weights and cut-offs were set by reasoning about what navigation chrome looks like, not fitted to a corpus or validated by an evaluation. The only evidence is unit tests on synthetic pages (a navigation block repeated on every page of a job is removed; the same block on a single page is kept) and the removal audit below. The intended failure mode is to keep noise: tier 2 needs two independent kinds of evidence, and tier 1 and 3 need cross-document repetition. The risk is the opposite on a corpus with unusual formatting, such as link-heavy reference tables written as plain lines. Before relying on them for a new corpus, read the removal audit for a sample of its documents, and measure retrieval with and without cleaning (Phase 6) before changing any value.
 
 > **Corpus-Independence Rule:** No specific text, heading title, or keyword (e.g., "Related Links") is ever hardcoded as a removal trigger. Removal is always driven by statistical evidence from the corpus itself.
 

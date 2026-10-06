@@ -9,8 +9,8 @@ The retrieval phase surfaces the most relevant chunks from the indexed knowledge
 Before any chunk is evaluated for relevance, a strict security filter is enforced directly at the storage and retrieval layer:
 - In production execution, if a tenant identifier is missing, unassigned, or set to a wildcard, the query is immediately rejected and returns an empty result set without querying the underlying databases.
 - When a valid tenant identifier is provided, both searches carry a `tenant_id = :tenant` SQL predicate on the one `chunks` table.
-- Chunks are keyed by `(tenant_id, index_id, chunk_id)`. The previous vector store keyed them by `chunk_id` alone, and chunk IDs derive from the source URL, so a second tenant ingesting the same page overwrote the first tenant's vectors. The legacy data showed it: all 260 chunks of one page ingested by two tenants were held under the second tenant only.
-- For offline evaluation and benchmarking pipelines, an explicit, trusted administrative override allows cross-tenant evaluation without risking production leakage.
+- Chunks are keyed by `(tenant_id, index_id, chunk_id)`, and chunk ids begin with the document's id, so two tenants ingesting the same page hold separate chunks and neither can overwrite the other.
+- There is no cross-tenant mode. Evaluations run against one tenant's chunks like any other search.
 
 ### One Configuration, One Pipeline (`src/retrieving/config.py`, `pipeline.py`)
 Every query-time retrieval knob lives in one `RetrievalConfig`:
@@ -26,7 +26,7 @@ Every query-time retrieval knob lives in one `RetrievalConfig`:
 | `fusion_depth` | none | hybrid only: how many results dense and sparse each return before fusion. Fusing two lists of `top_k` cannot surface a chunk that one list ranked `top_k + 1`; a deeper first stage lets agreement between the lists promote it. Must be at least the candidates it feeds. An experiment knob; chat does not set it |
 | `index_id` | configured index | which embedding index to search |
 
-`build_pipeline(config, resources)` assembles a pipeline from process-wide resources that are built once: per-index retrievers (with their query-embedding cache) and loaded rerankers. Pipelines are cheap, so **chat builds one per request** from the default configuration (`RETRIEVAL_STRATEGY`, `RERANKER`) plus the request's `top_k` and reranker toggle, and **an evaluation builds one per configuration** (each trial of an experiment spec, Phase 6). There is no retriever fixed at startup any more, so a configuration measured offline is exactly the one chat serves.
+`build_pipeline(config, resources)` assembles a pipeline from process-wide resources that are built once: per-index retrievers (with their query-embedding cache) and loaded rerankers. Pipelines are cheap, so **chat builds one per request** in three layers, the last winning: the environment defaults (`RETRIEVAL_STRATEGY`, `RERANKER`), then the workspace's own settings (`PUT /v1/workspace/settings`, how an experiment's winner is applied), then the request's `top_k` and reranker toggle, and **an evaluation builds one per configuration** (each trial of an experiment spec, Phase 6). There is no retriever fixed at startup any more, so a configuration measured offline is exactly the one chat serves.
 
 **Degradation is explicit.** If a hybrid search cannot embed the query (an embedding outage or rate limit), it serves the sparse ranking; if a reranker fails, the first-stage order is kept. Either way the reason is recorded on the result (`degraded`), logged, and counted in evaluation reports (`degraded_queries`), so an evaluation never silently measures something other than the configuration it names. A database failure is not degradation and raises.
 
@@ -40,9 +40,9 @@ Every query-time retrieval knob lives in one `RetrievalConfig`:
 ### Stage 2: Sparse Retrieval (Keyword Search)
 Concurrently, Postgres full-text search runs over a generated `tsvector` column (`to_tsvector('english', chunk_text)`, GIN-indexed). The query goes through `plainto_tsquery`, which treats every character as plain text, so query syntax cannot be injected. All terms must match first (AND). When nothing matches, the same terms are retried with any-term matching (OR), and that fallback is logged. Results are ranked by `ts_rank_cd`, which is not BM25. RRF consumes only the rank order, so only the ordering matters.
 
-Dense and sparse results are ordered by score and then by chunk id: the keyword rank (`ts_rank_cd`) ties constantly and identical-text chunks tie on distance, and an unordered tie made a rerun rank differently and added noise to every significance test. Because the sparse index is a generated column of the same row as the vector, it cannot fall out of sync with it. The SQLite FTS5 index it replaces held 1,162 rows against 2,284 vectors, so hybrid search had been searching about half the corpus for keywords.
+Dense and sparse results are ordered by score and then by chunk id: the keyword rank (`ts_rank_cd`) ties constantly and identical-text chunks tie on distance, and an unordered tie made a rerun rank differently and added noise to every significance test. Because the sparse index is a generated column of the same row as the vector, it cannot fall out of sync with it.
 
-Known limitation: `'english'` stemming is applied to every document. A non-English corpus needs a per-document text-search configuration (language detection already exists in the ingestion stage).
+Known limitation: `'english'` stemming is applied to every document, and the system has no language detection. A non-English corpus needs a per-document text-search configuration.
 
 ### Stage 3: Weighted Reciprocal Rank Fusion (`src/retrieving/fusion.py`)
 Cosine similarities and `ts_rank_cd` scores live on unrelated scales and cannot be added. Fusion therefore uses ranks only:
@@ -51,9 +51,9 @@ Cosine similarities and `ts_rank_cd` scores live on unrelated scales and cannot 
 
 A chunk high in both lists rises to the top. The weights and `rrf_k` are search knobs rather than constants, which is why fusion is ~20 lines of our own code instead of a library call. The unweighted case is tested against ranx's RRF implementation. Fused scores are scaled so the best is 1.0; they order results and are not comparable across queries.
 
-RRF fuses on `chunk_id`, so both lists must use the same identifier. Until the Postgres migration they did not: dense results carried the vector store's UUID point ID while sparse results carried the real chunk ID. A chunk found by both retrievers therefore never received a fused score, and it could occupy two of the five result slots. Measured on the benchmark's 38 queries: 27 of 190 top-5 slots (14.2%) held a duplicate, so the generator saw four distinct chunks instead of five in 27 queries. Recall did not change (see Phase 6 for why the benchmark could not detect it).
+RRF fuses on `chunk_id`, so both retrievers return the same identifier, the real chunk id; a chunk found by both lists is one fused entry and takes one result slot.
 
-**Filtered-search settings on Neon.** The HNSW settings above must reach every search connection. Neon's proxy silently drops individual startup parameters (tested with `work_mem`, which was ignored) but forwards libpq's `options` parameter, so the settings are sent as `options=-chnsw.iterative_scan=relaxed_order -chnsw.ef_search=100`. An integration test asserts the values actually arrive in the session. Without it, filtered search would have silently lost iterative scans.
+**Filtered-search settings on Neon.** The HNSW settings above must reach every search connection. Neon's proxy silently drops individual startup parameters (tested with `work_mem`, which was ignored) but forwards libpq's `options` parameter, so the settings are sent as `options=-chnsw.iterative_scan=relaxed_order -chnsw.ef_search=100`. An integration test asserts the values actually arrive in the session.
 
 ### Stage 4: Optional Cross-Encoder Reranking (`src/retrieving/rerankers/`)
 A cross-encoder reads the query and each candidate together and scores their joint relevance, which embeddings (computed separately) cannot. It reorders the first-stage pool (`rerank_candidates`, chat uses `top_k × 4`) down to `top_k`.
@@ -70,7 +70,7 @@ A cross-encoder reads the query and each candidate together and scores their joi
 
 **Reranker scores order results; they are not relevance probabilities.** A live check (2026-09-29) on three real PEP 20 chunks for "errors should never pass silently": both models ranked the chunk containing that sentence first, but TinyBERT scored it 0.0013 where MiniLM scored it 0.93 (the chunk is 406 tokens, so nothing was truncated). TinyBERT's scores are poorly calibrated, so no score floor (`min_similarity_score`) may be applied to reranked results; the default floor is 0 for this reason.
 
-A local `bge-reranker-v2-m3` (for the optional GPU worker) are future options; each is one more class with the same `rerank` method.
+A local `bge-reranker-v2-m3` (for the optional GPU worker) is a future option: one more class with the same `rerank` method.
 
 ### Score Calibration
 Relevance scores are treated as **ranking signals, not absolute cutoffs**. The system defaults to maximizing recall by allowing all retrieved top candidates through, rather than applying an arbitrary minimum score cutoff that might accidentally filter out the correct answer.

@@ -228,11 +228,11 @@ This flowchart visualizes how the system finds the perfect answer.
 
 ```mermaid
 graph TD
-    A[Your Question] --> B{Is it a follow-up?}
+    A[Your Question] --> B{Does the request carry chat history?}
     
     %% Rewriting
-    B -->|Yes| C[Rewrite question using chat history]
-    B -->|No| D[Final Search Query]
+    B -->|Yes| C[Rewrite into a standalone question]
+    B -->|No| D[Final Search Query: the question as written]
     C --> D
     
     %% Hybrid Retrieval

@@ -78,7 +78,7 @@ Every trial is compared with the baseline on each metric, over the queries valid
 `--fail-on-regression` exits 1 unless the experiment is evidence. All of these must hold, and each failure is printed:
 
 - the experiment is **complete** (not paused or failed);
-- at least **`min_valid`** (spec field, default 0.9; `--min-valid` overrides) of every trial's queries produced a valid run. Below that, the metrics describe the surviving queries, not the trial. A trial that is entirely degraded or errored has no paired queries, which used to read as "no regression" and pass: for example a missing reranker key left CI green. 0.9 tolerates a few transient failures; it is not tuned on a corpus;
+- at least **`min_valid`** (spec field, default 0.9; `--min-valid` overrides) of every trial's queries produced a valid run. Below that, the metrics describe the surviving queries, not the trial. A trial that is entirely degraded or errored has no paired queries, and that must never read as "no regression": a missing reranker key would otherwise leave CI green. 0.9 tolerates a few transient failures; it is not tuned on a corpus;
 - every trial could be **compared** with the baseline;
 - no trial is significantly worse than the baseline on the spec's **`primary_metric`** (default `mrr`, chosen in advance). The report tests every metric, but a gate that fires on any of several correlated metrics fires by chance.
 
