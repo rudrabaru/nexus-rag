@@ -81,7 +81,7 @@ Add `--drain` to run what is queued and exit; jobs wait in the queue while no wo
 ### Start the Streamlit UI
 In a separate terminal:
 ```powershell
-streamlit run scripts/chat_ui.py
+streamlit run admin_ui/app.py
 ```
 
 ## 5. Usage Guide

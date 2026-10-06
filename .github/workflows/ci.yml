@@ -46,7 +46,7 @@ jobs:
         run: pip install --index-url https://download.pytorch.org/whl/cpu torch torchvision
       - run: pip install -r requirements-dev.txt
       - name: Lint (correctness rules only)
-        run: ruff check src scripts tests
+        run: ruff check src scripts tests admin_ui
       - name: Tests (unit + Postgres integration)
         run: pytest -q -rs
 
@@ -78,6 +78,14 @@ jobs:
         run: docker build -f Dockerfile.api -t nexus-api:ci .
       - name: Build the worker image
         run: docker build -f Dockerfile.worker -t nexus-worker:ci .
+      - name: Build the admin UI image
+        run: docker build -f Dockerfile.ui -t nexus-ui:ci .
+      - name: The admin UI image holds the UI only, as an unprivileged user
+        run: |
+          [ "$(docker inspect --format '{{.Config.User}}' nexus-ui:ci)" = "nexus" ]
+          if docker run --rm --entrypoint sh nexus-ui:ci -c "[ -e /app/src ] || [ -e /app/.env ]"; then
+            echo "::error::the UI image carries backend code or secrets"; exit 1
+          fi
       - name: Images must contain no secrets or local state
         run: |
           leaked=0

@@ -72,7 +72,7 @@ Without the parse worker, every job stays at `status: "queued"`; without the fet
 **5. Run the Frontend (Streamlit)**
 In a new terminal window, activate the virtual environment and run:
 ```bash
-streamlit run scripts/chat_ui.py
+streamlit run admin_ui/app.py
 ```
 *The UI will automatically open in your default browser.*
 
