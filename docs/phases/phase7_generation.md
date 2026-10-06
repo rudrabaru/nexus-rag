@@ -5,27 +5,33 @@ The generation phase is responsible for synthesizing the retrieved context into 
 
 ## Core Implementation Logic
 
-### Context Packaging & Deduplication
-Before the generative model is invoked, the retrieved chunks must be formatted into a clean context window.
-- **Deduplication:** The system scans the retrieved chunks and merges adjacent text blocks originating from the same document. This maximizes the utilization of the context window by eliminating redundant overlap.
-- **Formatting:** Each distinct block of context is injected into the prompt surrounded by clear XML-style tags, labeled with a specific citation ID (e.g., `[Doc 1]`). This creates a rigid boundary between what is "context" and what is "instruction".
+### Context Packaging (`src/generating/context_builder.py`)
+Before the model is invoked, the retrieved chunks are assembled into one context window, in retrieval order:
+- **Exact duplicates are dropped.** Chunks whose text is identical (the same passage indexed from two pages) are included once, by a hash of the text. Nothing is merged or rewritten.
+- **A token budget** (`max_context_tokens`, 5,000 by default) stops adding chunks once full. A chunk costs its real tiktoken count from the chunker (a row without one falls back to the shared estimator, 3 characters per token). 5,000 keeps one request near 5.5K tokens, which fits Groq's free 8K tokens a minute; it is an experiment knob, not tuned on retrieval results. Every chunk that is left out, whether below the score floor, a repeat of an included chunk, or over the budget, is recorded as excluded with its reason, so what the model did *not* see is inspectable too.
+- **An optional score floor** (`min_similarity_score`, 0 by default) excludes low-scoring chunks. It stays at 0 unless the score scale is known to be calibrated; if nothing is left (including when nothing was retrieved), no model call is made and the answer is a diagnostic that names the actual reason: nothing retrieved, below the floor, over the budget or repeated.
+- **Each chunk carries a citation header**, `[Source: <url> | Section: <heading path>]`, and chunks are separated by `---`.
 
-### Strict Anti-Hallucination Prompts
-The core system prompt is engineered to enforce absolute adherence to the provided context. The instructions explicitly command the model to:
-1. Act as a precise technical assistant.
-2. Answer the question using *only* the provided context blocks.
-3. Completely ignore its own internal knowledge base.
-4. Openly admit "I don't know" if the answer cannot be found in the provided context, rather than attempting to guess or extrapolate.
+### Grounding Prompt (`src/generating/prompt_template.py`)
+The prompt has four parts: grounding rules, the five most recent messages of conversation history (when given), the context between `=== CONTEXT START ===` and `=== CONTEXT END ===` markers, and the question. The rules tell the model to answer only from the context and to say "I don't have enough information in the provided context to answer this question." when the context does not contain the answer. The instruction to cite the `[Source: ...]` markers is added only when `cite_sources` is on.
 
-### Enforced Citation Mechanics
-The prompt enforces a strict citation format. Every factual claim made in the generated answer must be immediately followed by the specific citation ID of the context block that supports it (e.g., `... as detailed in the setup guide [Doc 2].`). 
+### LLM Calls, Fallback and Per-Call Accounting (`src/llm/`)
+Calls go through LiteLLM with our own retry and fallback, and one classifier (`src/llm/errors.py`) serves both the streaming and the non-streaming path: transient errors (429, 5xx, connection, an empty body or an empty stream) are retried with backoff, then the configured fallback model answers; a dead model, a bad key or a timeout falls back immediately. Streaming falls back only before the first token. When retries and the fallback are spent the call raises `GenerationError`; a failure is never returned as answer text.
 
-This allows end-users to easily trace any claim back to the exact source document, building trust in the system's outputs.
+Providers are `gemini`, `groq` and `openai`; each needs only its own API key. Models are assigned to roles in settings, as `provider/model` (`src/llm/roles.py`): `LLM_CHAT` (with an optional `LLM_CHAT_FALLBACK`, used when that provider's key is set), `LLM_REWRITE` (falls back to the chat model), `LLM_JUDGE` and `LLM_TESTSET` (both pinned: no fallback, because a different model mid-run changes what is measured). `src/config_checks.py` fails fast on a malformed role or a missing chat key. Gemini carries chat, but **its free tier allows only 20 requests a day per model on this project** (measured 2026-10-06: quota id `GenerateRequestsPerDayPerProjectPerModel-FreeTier`, value 20, retry delay about 11 hours), so after about 20 answers a day chat is served by the Groq fallback; test-set generation therefore defaults to Groq as well; Groq's `gpt-oss` models judge and handle short prompts, because its free tier (8K tokens a minute, 200K a day) is too small for long prompts, and the judge differs in family from the generator. An experiment pins its models and never falls back. `extract_json_object` (`src/llm/structured.py`) reads a JSON object out of a reply that may be wrapped in prose or a code fence; the faithfulness judge and the test-set generator share it.
 
-### Streaming Generation & Token Observability
-To ensure a highly responsive user experience, the generation phase supports real-time streaming. As the generative model produces tokens, they are immediately streamed back to the client via Server-Sent Events (SSE). This reduces the perceived latency of the system to near-zero, even for complex, multi-paragraph answers.
+A spent daily quota is recognised (`is_quota_exhausted`, `src/llm/errors.py`: a quota id or message that says per-day, or a retry delay of ten minutes or more). It is not retried, since waiting seconds cannot help; the call falls to the fallback model at once, and with no fallback it fails as permanent so a long run stops with a clear message instead of retrying for hours. An ordinary short 429 is still retried with backoff.
 
-Each LLM provider surfaces usage metadata (prompt and completion token counts) from within its own stream chunks. The pipeline accumulates these token counts during streaming and commits them to the observability registry upon completion. This ensures accurate cost tracking even in streaming mode — a non-trivial problem, since streaming generators complete asynchronously and cannot be naively awaited for a final usage summary.
+Every call returns its own `LLMCall` record: the text, prompt and completion tokens, cost, and the provider and model that **actually answered** (after a fallback, the fallback's). One client serves every concurrent request, so this record is per call and never stored on the client: concurrent queries cannot log one another's tokens or cost. A streamed answer fills a record owned by its request as tokens arrive; if the provider sends no usage block, tokens are estimated by the shared estimator (`src/tokens.py`, 3 characters per token, which over-estimates English so budgets and pacing err safe). Cost comes from LiteLLM's price data; when it has no price for a model the call is marked `cost_known: false`, so an unpriced model is never mistaken for a free one.
+
+### Streaming Generation
+Answers stream to the client as Server-Sent Events: `token` events as the model produces them, then `sources`, then `done` (and `faithfulness` when requested). The context window and prompt are built once, before streaming starts, and the same context yields the source list. Usage, cost and the serving provider are written to `query_logs` when the stream completes.
+
+### The Faithfulness Judge
+The judge scores 0, 0.5 or 1 and nothing else: a reply with another number, NaN or no number is rejected as unusable instead of being averaged in. Evaluations use the strict form, where an unavailable judge or an unusable reply raises and is never recorded as a score. Chat uses the lenient form, where a failure leaves the score empty (null) with the reason; it is never recorded as 0.0, which would read as "the answer was a hallucination".
+
+### Query Rewriting
+A follow-up is made standalone using the last six messages of history, and the query can optionally be generalised (`ENABLE_QUERY_GENERALISATION`, off by default). Generalising changes what is retrieved but is not part of what an experiment measures, so chat does not use it unless chosen; its prompt names no corpus or domain. An empty or unreadable rewrite keeps the original query.
 
 ## Design Philosophy & Tradeoffs
 - **Strictness vs. Helpfulness:** The prompt's extreme strictness against using outside knowledge means the system might occasionally refuse to answer a question that the underlying LLM actually knows the answer to, simply because it wasn't in the retrieved documents. This is an intentional tradeoff: in a production enterprise environment, failing to answer is vastly preferred over confidently hallucinating incorrect information.

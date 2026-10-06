@@ -1,0 +1,23 @@
+# Force LF line endings in the repository AND on checkout, on every platform. Without
+# this, a Windows dev machine with core.autocrlf=true checks files out with CRLF while
+# Linux CI checks out the LF blob unchanged — same file, different bytes, different
+# hash. Evaluation experiments identify their dataset by the SHA-256 of the file's raw
+# bytes (src/evaluation/dataset.py), so a CRLF checkout would make the same dataset look
+# different on Windows and in CI. (This once silently broke the old frozen baselines.)
+* text=auto eol=lf
+
+*.json text eol=lf
+*.py text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.txt text eol=lf
+*.sh text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.pdf binary
+*.pptx binary
+*.docx binary

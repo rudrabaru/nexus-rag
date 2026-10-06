@@ -1,148 +1,136 @@
-import logging
-import time
-import re
-from typing import List, Dict, Any
+"""
+Clean, chunk and embed documents that are already Markdown (fetched pages or parsed uploads).
 
-from src.crawling.metadata import CrawledDocument, VisualChunkDraft
-from src.processing.cleaner import DocumentCleaner
-from src.chunking.metadata import ChunkMetadata, ChunkingConfig
-from src.processing.models import ProcessedDocument, Block
-from src.processing.validator import ProcessingValidator
+It writes nothing to storage: the caller commits the returned outcome in one transaction
+(src/jobs/commit.py).
+"""
+import logging
+import re
+import time
+from typing import Any, Callable, List, Optional
+
 from src.chunking.chunker import DocumentChunker
-from src.embedding.config import EmbeddingConfig
+from src.chunking.metadata import ChunkingConfig
+from src.config import get_settings
+from src.db.engine import get_sync_engine
+from src.crawling.metadata import CrawledDocument
 from src.embedding.generator import EmbeddingGenerator
-from src.retrieving.vector_store import QdrantManager
-from src.ingestion.embedding_worker import EmbeddingWorker
+from src.embedding.providers import build_embedder
+from src.ingestion.embedding_worker import EmbeddingOutcome, EmbeddingWorker
+from src.errors import UnprocessableSourceError
+from src.processing.block_parser import BlockParser
+from src.processing.cleaner import DocumentCleaner
+from src.processing.models import Block
+from src.stores.checkpoints import CheckpointStore
 
 logger = logging.getLogger(__name__)
 
-def _strip_intra_document_repeats(blocks: List[Block]) -> List[Block]:
-    from collections import Counter
-    content_counts = Counter(
-        b.content_hash for b in blocks 
-        if not b.metrics.is_code and not b.metrics.is_table and 3 <= b.metrics.word_count < 30
+_LOG_LINE = re.compile(r"\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2}:\d{2}")
+# Cleaning that leaves less than this many characters is treated as a cleaner failure, not as
+# an empty document: the raw Markdown is chunked instead, so nothing is lost.
+MIN_CLEANED_CHARS = 50
+
+
+def _cleaned_markdown(cleaner: DocumentCleaner, doc: CrawledDocument, blocks: List[Block]) -> str:
+    """The document without the blocks the cleaner removed; each removal is logged with its reason."""
+    kept = cleaner.clean_document_blocks(blocks)
+    cleaned = "\n\n".join(b.content for b in kept).strip()
+    removed = [b for b in blocks if b.is_removed]
+    logger.info(
+        f"CLEAN | {doc.url} | words {len(doc.markdown_content.split())} -> {len(cleaned.split())} | "
+        f"blocks removed {len(removed)}/{len(blocks)}"
     )
-    repeats = {h for h, count in content_counts.items() if count >= 3}
-    cleaned_blocks = []
-    for b in blocks:
-        if b.content_hash in repeats and 3 <= b.metrics.word_count < 30:
-            b.is_removed = True
-            b.removal_reason = "Intra-document repeat (PDF header/footer)"
-        cleaned_blocks.append(b)
-    return cleaned_blocks
+    for b in removed:
+        logger.debug(f"CLEAN | removed [{b.removal_reason}] {b.content[:80]!r}")
+    if len(cleaned) < MIN_CLEANED_CHARS:
+        logger.warning(f"CLEAN | {doc.url} | cleaning left {len(cleaned)} chars; chunking the raw Markdown instead.")
+        return doc.markdown_content
+    return cleaned
 
-class IncrementalIngestionPipeline:
-    def __init__(self, embedding_generator=None, db_manager=None):
-        if db_manager is None:
-            try:
-                self.db_manager = QdrantManager()
-                logger.info("Pipeline initialized new QdrantManager.")
-            except Exception as e:
-                logger.critical(f"QdrantManager failed to initialize in pipeline: {e}")
-                raise e
-        else:
-            self.db_manager = db_manager
-            
-        self.embedding_generator = embedding_generator
 
-    def run(
-        self, crawled_docs: List[CrawledDocument], tenant_id: str, registry=None, job_id: str = None, doc_id: str = None, visual_chunks: List[VisualChunkDraft] = None, pipeline_logger: Any = None,
-    ) -> Dict[str, Any]:
-        if not tenant_id:
-            raise ValueError("tenant_id is required for ingestion")
+def process_documents(
+    crawled_docs: List[CrawledDocument],
+    tenant_id: str,
+    doc_id: str,
+    on_progress: Optional[Callable[[int], None]] = None,
+    pipeline_logger: Any = None,
+    job_id: Optional[str] = None,
+    embedding_generator: Optional[EmbeddingGenerator] = None,
+) -> EmbeddingOutcome:
+    """
+    embedding_generator defaults to a fresh one per run: it keeps per-run state (last_error)
+    that must not be shared between ingestions running concurrently in one worker.
+    """
+    if not tenant_id or not doc_id:
+        raise ValueError("tenant_id and doc_id are required for ingestion")
 
-        logger.info(f"Starting incremental ingestion for {len(crawled_docs)} documents.")
+    logger.info(f"Starting ingestion of {len(crawled_docs)} documents.")
+    if sum(len(doc.markdown_content) for doc in crawled_docs) < MIN_CLEANED_CHARS:
+        raise UnprocessableSourceError("Extracted content is too short or empty.")
 
-        total_chars = sum(len(doc.markdown_content) for doc in crawled_docs)
-        if total_chars < 50:
-            raise ValueError("Extracted content is too short or empty. If this is a scanned PDF, vision extraction was also attempted by the adapter but returned no content. Ensure a GEMINI_API_KEY is configured, or upload a text-based PDF.")
+    for doc in crawled_docs:
+        lines = doc.markdown_content.splitlines()
+        if lines and sum(1 for line in lines if _LOG_LINE.search(line)) / len(lines) > 0.4:
+            logger.warning(f"Document {doc.url} appears to be a log file. Retrieval quality may be degraded.")
 
-        _LOG_PATTERN = re.compile(r"\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2}:\d{2}")
-        for doc in crawled_docs:
-            lines = doc.markdown_content.splitlines()
-            if lines:
-                log_lines = sum(1 for line in lines if _LOG_PATTERN.search(line))
-                if log_lines / len(lines) > 0.4:
-                    logger.warning(f"Document {doc.url} appears to be a log file. Retrieval quality may be degraded.")
+    def update_progress(pct: int):
+        if on_progress:
+            on_progress(pct)
 
-        def update_progress(pct: int, status="processing"):
-            if registry and job_id:
-                registry.update_job_status(job_id, status, pct)
+    update_progress(55)
+    start_time = time.time()
 
-        update_progress(55)
-        start_time = time.time()
+    # Block document frequency is only measurable across the documents of one job (a sitemap).
+    cleaner = DocumentCleaner(total_documents=len(crawled_docs))
+    all_blocks = [BlockParser.parse_blocks(doc.markdown_content) for doc in crawled_docs]
+    if len(crawled_docs) > 1:
+        cleaner.process_corpus_frequencies(all_blocks)
 
-        cleaner = DocumentCleaner(total_documents=len(crawled_docs))
-        all_blocks = []
-        for doc in crawled_docs:
-            blocks = cleaner.parse_blocks(doc.markdown_content)
-            if doc.url.lower().endswith(".pdf"):
-                blocks = _strip_intra_document_repeats(blocks)
-            all_blocks.append(blocks)
+    chunk_input_docs = [
+        {"url": doc.url, "title": doc.title, "markdown_content": _cleaned_markdown(cleaner, doc, blocks)}
+        for doc, blocks in zip(crawled_docs, all_blocks)
+    ]
 
-        if len(crawled_docs) > 1:
-            cleaner.process_corpus_frequencies(all_blocks)
+    update_progress(65)
+    chunker = DocumentChunker(config=ChunkingConfig(source_version="v_live", output_version="v_live"))
+    all_chunks = chunker.chunk_batch(chunk_input_docs)
+    if not all_chunks:
+        detail = f" ({chunker.failures[0].reason})" if chunker.failures else ""
+        raise UnprocessableSourceError(f"No chunk could be produced from the extracted content{detail}.")
+    for c in all_chunks:
+        c.tenant_id = tenant_id
+        c.doc_id = doc_id
+        # Doc-scoped: a page ingested alone and again through a sitemap are different documents and
+        # must never share (and overwrite) a chunk id.
+        c.chunk_id = f"{doc_id}:{c.chunk_id}"
 
-        processed_docs = []
-        for i, doc in enumerate(crawled_docs):
-            blocks = all_blocks[i]
-            cleaned_blocks = cleaner.clean_document_blocks(blocks)
-            pdoc = ProcessedDocument(**doc.model_dump())
-            pdoc.blocks = blocks
-            pdoc.page_category = "incremental_doc"
-            ProcessingValidator.validate_document(doc.markdown_content, cleaned_blocks, pdoc)
-            processed_docs.append(pdoc)
+    update_progress(75)
 
-        update_progress(65)
-        chunker = DocumentChunker(config=ChunkingConfig(source_version="v_live", output_version="v_live"))
-        chunk_input_docs = []
-        for pdoc in processed_docs:
-            doc_dict = pdoc.model_dump()
-            cleaned = pdoc.cleaned_markdown.strip()
-            if len(cleaned) >= 50:
-                doc_dict["markdown_content"] = cleaned
-            else:
-                logger.warning(f"cleaned_markdown for '{pdoc.url}' is too short; falling back to raw markdown_content.")
-            chunk_input_docs.append(doc_dict)
+    generator = embedding_generator or EmbeddingGenerator(
+        build_embedder(get_settings()), CheckpointStore(get_sync_engine()), job_id
+    )
+    outcome = EmbeddingWorker(generator).embed(all_chunks, update_progress, pipeline_logger, job_id)
+    if chunker.failures:
+        outcome.unchunked_sources = [failure.url for failure in chunker.failures]
+        note = f"{len(chunker.failures)} document(s) could not be chunked and are not indexed (first: {chunker.failures[0].reason})."
+        outcome.error_reason = " ".join(filter(None, [outcome.error_reason, note]))
 
-        all_chunks = chunker.chunk_batch(chunk_input_docs)
-        for c in all_chunks:
-            c.visibility = "private"
-            c.tenant_id = tenant_id
-            prefix = f"[{c.source_document} > {' > '.join(c.heading_path or [])}]\n"
-            c.embedding_text = prefix + c.chunk_text
-
-        if visual_chunks and crawled_docs:
-            parent_doc = crawled_docs[0]
-            start_index = len(all_chunks)
-            for i, vc in enumerate(visual_chunks):
-                est_tokens = int(len(vc.text.split()) * 1.3)
-                v_meta = ChunkMetadata(
-                    chunk_id=f"{parent_doc.url}_visual_{i}", source_url=parent_doc.url, source_document=parent_doc.title or parent_doc.url,
-                    title=parent_doc.title or "Unknown", chunk_index=start_index + i, total_chunks=start_index + len(visual_chunks),
-                    chunk_text=vc.text, token_count=est_tokens, char_start=0, char_end=0, content_type="visual_description",
-                    visual_asset_ref=vc.asset_ref, visual_asset_type=vc.asset_type, document_version="v_live", chunk_version="v_live",
-                    visibility="private", tenant_id=tenant_id,
-                )
-                all_chunks.append(v_meta)
-
-        update_progress(75)
-
-        generator = self.embedding_generator or EmbeddingGenerator(EmbeddingConfig())
-        worker = EmbeddingWorker(generator, self.db_manager)
-        
-        result = worker.process_batches(all_chunks, tenant_id, registry, job_id, pipeline_logger)
-        total_added = result["total_added"]
-
-        duration = time.time() - start_time
-
-        if job_id:
-            EmbeddingWorker.write_audit_log(job_id, crawled_docs, all_blocks, all_chunks, result["total_tokens"], duration)
-
-        return {
-            "status": "success",
-            "version": "v_live",
-            "docs_processed": len(crawled_docs),
-            "chunks_added": total_added,
-            "latency_seconds": round(duration, 2),
-        }
+    if pipeline_logger:
+        pipeline_logger.log_event(
+            "ingestion_audit",
+            job_id=job_id,
+            tenant_id=tenant_id,
+            source=crawled_docs[0].url if crawled_docs else "unknown",
+            index_id=generator.embedder.index_id,
+            docs_crawled=len(crawled_docs),
+            blocks_parsed=sum(len(blocks) for blocks in all_blocks),
+            blocks_removed=sum(1 for blocks in all_blocks for b in blocks if b.is_removed),
+            chunks_created=len(all_chunks),
+            chunks_by_type={
+                ct: sum(1 for c in all_chunks if c.content_type == ct) for ct in ["text", "code", "table", "mixed"]
+            },
+            chunks_embedded=len(outcome.chunks),
+            total_tokens=outcome.total_tokens,
+            pipeline_latency_seconds=round(time.time() - start_time, 2),
+        )
+    return outcome

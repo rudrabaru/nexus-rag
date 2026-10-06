@@ -1,15 +1,6 @@
 """
-Embeddings module: Convert textual chunks into vector representations.
+Embeddings: convert chunks into vectors.
+
+Submodules are imported explicitly by their users, so importing a config or model class
+does not load the embedding client.
 """
-
-from .config import EmbeddingConfig
-from .models import EmbeddedChunk, EmbeddingReport, SimilarityResult
-from .generator import EmbeddingGenerator
-
-__all__ = [
-    "EmbeddingConfig",
-    "EmbeddedChunk",
-    "EmbeddingReport",
-    "SimilarityResult",
-    "EmbeddingGenerator",
-]

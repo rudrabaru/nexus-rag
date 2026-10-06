@@ -1,5 +1,7 @@
 # Phase 6 Retrieval Benchmarking & Ablation Study Report
 
+> **Retired prototype result (2026-09-28).** These numbers come from the earlier prototype's `benchmark.json` harness, on a corpus that no longer exists, with the earlier Qdrant-backed index and Jina embeddings. They are not measurements of the current system, they used document-identity matching (which the current evaluation engine deliberately does not), and the current engine's reports (Phase 6) supersede them. Kept only as the record that motivated making the reranker a per-query option.
+
 This report documents the empirical evaluation of the Nexus-RAG retrieval architecture across dozens of diverse, corpus-specific queries indexing over a thousand chunks across distinct enterprise document sources.
 
 ## 1. Executive Summary & Architecture Ablation
@@ -65,5 +67,5 @@ The evaluation pipeline was executed across four distinct configuration modes to
 
 ## 5. Summary & Next Steps
 1. **Production Baseline:** Dense semantic search and hybrid rank fusion deliver outstanding retrieval accuracy (~97-100% Recall@5) across all enterprise sources.
-2. **Tenant & Security Boundary:** All evaluations were executed under strict workspace isolation boundaries, confirming zero leakages and 100% reliability.
+2. **Tenant & Security Boundary:** All evaluations were executed under strict workspace isolation boundaries, with no cross-workspace results observed in that harness. That harness did not test isolation as a property: the isolation guarantee is tested separately (`tests/test_retrieval_security.py`).
 3. **Auditability:** Every evaluation run is tagged with a cryptographic checksum fingerprint and validated against zero malformed entries.

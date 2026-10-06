@@ -1,145 +1,128 @@
+import hashlib
 import logging
-import os
-import asyncio
-import httpx
-from typing import List
+from typing import Dict, List, Optional, Tuple
 
-from .config import EmbeddingConfig
-from .models import EmbeddedChunk
 from src.chunking.metadata import ChunkMetadata
+from src.embedding.models import EmbeddedChunk
+from src.embedding.embedder import Embedder, EmbeddingError
+from src.errors import EmbeddingRejectedError
+from src.stores.checkpoints import Checkpoint, CheckpointStore
 
 logger = logging.getLogger(__name__)
 
 
+def embedding_input(chunk: ChunkMetadata) -> str:
+    """
+    The text a chunk is embedded as: its document and heading path, then its text. The
+    prefix gives short chunks the context of where they sit.
+    """
+    return f"[{chunk.source_document} > {' > '.join(chunk.heading_path or [])}]\n{chunk.chunk_text}"
+
+
+def input_hash(index_id: str, text: str) -> str:
+    """Identifies exactly what was embedded and into which index: a vector is reusable only for the same pair."""
+    return hashlib.sha256(f"{index_id}\x1f{text}".encode("utf-8")).hexdigest()
+
+
+def apportion(total: int, weights: List[int]) -> List[int]:
+    """Splits `total` across `weights` proportionally, exactly: the parts always sum to `total`."""
+    weight_sum = sum(weights) or 1
+    parts = [total * w // weight_sum for w in weights]
+    parts[0] += total - sum(parts)
+    return parts
+
+
 class EmbeddingGenerator:
     """
-    Generates embeddings for text chunks using Jina API.
+    Embeds chunks as documents into one index, one provider request at a time. Keeps per-run state
+    (last_error, provider_tokens), so one instance is used per ingestion run, never shared between
+    concurrent runs.
+
+    With a checkpoint store, every completed request is saved as it finishes and a retry of the
+    same job reuses what was saved: at the card-free Voyage limit one ingestion is hours of paced
+    requests, and a failure late in the run must not repeat the early part.
     """
 
-    def __init__(
-        self, config: EmbeddingConfig = None
-    ):
-        self.config = config or EmbeddingConfig()
+    def __init__(self, embedder: Embedder, checkpoints: Optional[CheckpointStore] = None, job_id: Optional[str] = None):
+        self.embedder = embedder
+        self.last_error: Optional[str] = None
+        self.provider_tokens = 0  # what the provider reported for this run's requests (reused checkpoints included)
+        self._checkpoints = checkpoints if job_id else None
+        self._job_id = job_id
+        self._saved: Dict[str, Checkpoint] = checkpoints.load(job_id) if self._checkpoints else {}
 
-        self.jina_api_key = os.environ.get("JINA_API_KEY")
-        if not self.jina_api_key:
-            logger.warning("JINA_API_KEY is not set. Embedding generation will fail.")
-
-        logger.info(f"Loaded JINA API for embeddings: {self.config.model_name}")
-
-        self.stats = {
-            "total_chunks_processed": 0,
-            "total_failures": 0,
-            "total_tokens": 0,
-            "start_time": None,
-            "end_time": None,
-        }
-        self.last_error = None
-        self.embed_semaphore = None
-
-    async def embed_batch(self, texts: list[str], task_type: str = "retrieval.passage") -> tuple[list[list[float]], list[int]]:
-        all_embeddings = []
-        failed_indices = []
-        batch_size = self.config.batch_size
-        self.last_error = None
-        
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            for i in range(0, len(texts), batch_size):
-                batch = texts[i:i + batch_size]
-                
-                max_retries = self.config.max_retries
-                for attempt in range(max_retries):
-                    try:
-                        if self.embed_semaphore:
-                            await self.embed_semaphore.acquire()
-                        try:
-                            response = await client.post(
-                                "https://api.jina.ai/v1/embeddings",
-                                headers={"Authorization": f"Bearer {self.jina_api_key}"},
-                                json={
-                                    "model": self.config.model_name,
-                                    "input": batch,
-                                    "task": task_type
-                                }
-                            )
-                            response.raise_for_status()
-                        finally:
-                            if self.embed_semaphore:
-                                self.embed_semaphore.release()
-                                
-                        data = response.json()
-                        all_embeddings.extend([item["embedding"] for item in data["data"]])
-                        break
-                    except Exception as e:
-                        if attempt == max_retries - 1:
-                            logger.error(f"Batch {i//batch_size} failed after {max_retries} attempts: {e}")
-                            err_msg = str(e)
-                            status_code = getattr(getattr(e, "response", None), "status_code", "")
-                            if status_code == 429 or "429" in err_msg:
-                                self.last_error = f"Jina Embedding API rate limit exceeded (HTTP 429). Batch failed after {max_retries} retries."
-                            else:
-                                self.last_error = f"Embedding API error ({status_code or 'error'}): {err_msg[:100]}"
-                            failed_indices.extend(range(i, i + len(batch)))
-                            all_embeddings.extend([None] * len(batch))
-                            break
-                        # exponential backoff 4s, 8s, 16s
-                        await asyncio.sleep(4 * (2 ** attempt))
-                        
-        return all_embeddings, failed_indices
-
-    def generate_embeddings(self, chunks: List[ChunkMetadata]) -> tuple[List[EmbeddedChunk], list[int]]:
+    def generate_embeddings(self, chunks: List[ChunkMetadata]) -> Tuple[List[EmbeddedChunk], List[int]]:
         """
-        Takes a list of ChunkMetadata and returns a list of EmbeddedChunk with vectors and failed indices.
+        Returns (embedded chunks, indices into `chunks` that failed). Empty chunks are skipped, not
+        failed. A request the provider rejects for good (bad key, wrong model, wrong vector width)
+        raises EmbeddingRejectedError: retrying it can only fail the same way.
         """
-        return asyncio.run(self.generate_embeddings_async(chunks))
-        
-    async def generate_embeddings_async(self, chunks: List[ChunkMetadata]) -> tuple[List[EmbeddedChunk], list[int]]:
-        valid_chunks = [c for c in chunks if c.chunk_text.strip()]
-        if len(valid_chunks) < len(chunks):
-            logger.warning(
-                f"Skipped {len(chunks) - len(valid_chunks)} empty chunks before embedding."
-            )
-
-        if not valid_chunks:
+        positions = [i for i, c in enumerate(chunks) if c.chunk_text.strip()]
+        if len(positions) < len(chunks):
+            logger.warning(f"Skipped {len(chunks) - len(positions)} empty chunks before embedding.")
+        if not positions:
             return [], []
-            
-        if not self.jina_api_key:
-            raise ValueError("JINA Client not initialized. Check JINA_API_KEY.")
 
-        texts = []
-        for chunk in valid_chunks:
-            if getattr(chunk, "embedding_text", None):
-                texts.append(chunk.embedding_text)
-            else:
-                context = f"Document: {chunk.title}"
-                if chunk.heading_path:
-                    context += f" | Section: {' > '.join(chunk.heading_path)}"
-                text = f"{context}\n\n{chunk.chunk_text}"
-                texts.append(text)
+        index_id = self.embedder.index_id
+        texts = {i: embedding_input(chunks[i]) for i in positions}
+        vectors: Dict[int, List[float]] = {}
+        for i in positions:
+            saved = self._saved.get(chunks[i].chunk_id)
+            if saved and saved.input_hash == input_hash(index_id, texts[i]):
+                vectors[i] = saved.embedding
+                self.provider_tokens += saved.tokens
+        if vectors:
+            logger.info(f"EMBED | reusing {len(vectors)} of {len(positions)} chunks from an earlier attempt")
 
-        embedded_chunks = []
-        failed_indices = []
+        todo = [i for i in positions if i not in vectors]
+        failed: List[int] = []
+        for group in self.embedder.group_indices([texts[i] for i in todo]):
+            members = [todo[g] for g in group]
+            try:
+                batch = self.embedder.embed([texts[i] for i in members], "document")
+            except EmbeddingError as e:
+                self.last_error = str(e)
+                if not e.retryable:
+                    raise EmbeddingRejectedError(self._rejection(e)) from e
+                logger.error(f"EMBED | {len(members)} chunks failed: {e}")
+                failed.extend(members)
+                continue
+            except Exception as e:  # a malformed response or a dropped connection: this request fails, the run continues
+                self.last_error = str(e)
+                logger.error(f"EMBED | {len(members)} chunks failed: {e}")
+                failed.extend(members)
+                continue
+
+            self.provider_tokens += batch.tokens
+            for i, vector in zip(members, batch.vectors):
+                vectors[i] = vector
+            self._save(chunks, members, texts, batch.vectors, batch.tokens)
+
+        embedded = [
+            EmbeddedChunk(
+                **chunks[i].model_dump(), embedding=vectors[i],
+                embedding_model=self.embedder.model, index_id=index_id,
+            )
+            for i in positions if i in vectors
+        ]
+        return embedded, sorted(failed)
+
+    def _save(self, chunks, members, texts, vectors, tokens) -> None:
+        if not self._checkpoints:
+            return
+        index_id = self.embedder.index_id
+        shares = apportion(tokens, [len(texts[i]) for i in members])
         try:
-            logger.debug(f"Encoding {len(texts)} chunks via JINA API...")
-            embeddings, failed_indices = await self.embed_batch(texts, task_type="retrieval.passage")
-            
-            for i, (chunk, emb) in enumerate(zip(valid_chunks, embeddings)):
-                if emb is None:
-                    continue
-                embedded_chunk = EmbeddedChunk(
-                    **chunk.model_dump(),
-                    embedding=emb,
-                    embedding_model=self.config.model_name,
-                )
-                embedded_chunks.append(embedded_chunk)
-                self.stats["total_chunks_processed"] += 1
-                self.stats["total_tokens"] += chunk.token_count
-            
-            if failed_indices:
-                self.stats["total_failures"] += len(failed_indices)
-        except Exception as e:
-            logger.error(f"Failed to encode chunks: {e}")
-            self.stats["total_failures"] += len(texts)
-            failed_indices = list(range(len(texts)))
+            self._checkpoints.save(self._job_id, [
+                {"chunk_id": chunks[i].chunk_id, "input_hash": input_hash(index_id, texts[i]), "embedding": vector, "tokens": share}
+                for i, vector, share in zip(members, vectors, shares)
+            ])
+        except Exception:  # losing a checkpoint costs time on a retry, never the run
+            logger.exception("EMBED | could not save a checkpoint")
 
-        return embedded_chunks, failed_indices
+    def _rejection(self, error: EmbeddingError) -> str:
+        reason = f"HTTP {error.status}" if error.status else "an invalid response"
+        return (
+            f"The embedding provider ({self.embedder.provider}) rejected the request ({reason}). "
+            "Check the provider key, the model and that it outputs the width the index uses."
+        )

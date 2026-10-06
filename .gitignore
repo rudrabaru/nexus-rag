@@ -75,3 +75,15 @@ data/
 .ruff_cache/
 .code-review-graph/
 .streamlit/secrets.toml
+
+# Local scratch and personal files — not part of the codebase
+*.pptx
+scripts/experiments/
+system_technical_analysis.md
+# Test-set drafts hold chunk text and unreviewed questions
+*.draft.json
+# Evaluation datasets and drafts hold chunk text and questions derived from ingested (possibly private) documents.
+evaluation_datasets/
+# Local planning notes
+ROADMAP.md
+.claude/

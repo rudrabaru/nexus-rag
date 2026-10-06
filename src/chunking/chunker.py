@@ -4,22 +4,31 @@ Document chunking with semantic boundary preservation and overlap.
 This module implements the core chunking algorithm:
 1. Parse document into sections based on heading hierarchy.
 2. Inside sections, split into atomic blocks (Code, Tables, Paragraphs).
-3. Group blocks into chunks respecting token budget (soft limit 600, max 800).
+3. Group blocks into chunks respecting token budget (soft limit 600, max 800); a block over the
+   embedding limit is split, never truncated.
 4. Create overlaps between consecutive chunks.
 5. Generate chunk metadata.
 """
 
-import logging
 import hashlib
+import logging
+from dataclasses import dataclass
 from typing import List
 
 from .metadata import ChunkMetadata, ChunkingConfig
-from .tokenizer import TokenCounter, TokenBudget
-from .parsers import parse_sections, extract_blocks
+from .tokenizer import TokenCounter
+from .blocks import extract_blocks
+from .parsers import parse_sections
 from .merger import merge_tiny_chunks
 from .heuristics import get_overlap_blocks, build_chunk_metadata
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ChunkFailure:
+    url: str
+    reason: str
 
 
 class DocumentChunker:
@@ -32,18 +41,11 @@ class DocumentChunker:
     ):
         self.config = config or ChunkingConfig()
         self.token_counter = token_counter or TokenCounter()
-        self.token_budget = TokenBudget(
-            self.config.chunk_size, self.config.overlap, self.token_counter
-        )
 
-        self.stats = {
-            "total_documents_processed": 0,
-            "total_chunks_generated": 0,
-            "total_tokens_generated": 0,
-            "oversized_chunks": 0,
-            "tiny_chunks_merged": 0,
-            "content_types": {"text": 0, "code": 0, "table": 0, "mixed": 0},
-        }
+        # A block is split to leave room for the overlap that is prepended to the chunk after it, so
+        # no chunk can exceed the embedding limit.
+        self.max_block_tokens = self.config.embedding_hard_limit - self.config.overlap
+        self.failures: List[ChunkFailure] = []
 
         logger.info(
             f"DocumentChunker initialized: {self.config.chunk_size} tokens, "
@@ -61,57 +63,31 @@ class DocumentChunker:
 
         doc_name = self._extract_doc_name(url)
 
-        try:
-            chunks = self._split_content(content, url, title, doc_name)
-            total = len(chunks)
-            tokens_to_words_ratio = 1.3  # heuristic for English text
-            for c in chunks:
-                if c.token_count > self.config.embedding_hard_limit:
-                    logger.warning(
-                        f"Chunk {c.chunk_id} has {c.token_count} tokens, "
-                        f"which exceeds the embedding model limit of {self.config.embedding_hard_limit}. "
-                        f"Truncating to prevent embedding API failure."
-                    )
-                    # Truncate text to fit, preserving the heading context
-                    words = c.chunk_text.split()
-                    max_words = int(self.config.embedding_hard_limit / tokens_to_words_ratio)
-                    c.chunk_text = " ".join(words[:max_words]) + " [TRUNCATED]"
-                    c.token_count = self.config.embedding_hard_limit
-
-                c.total_chunks = total
-                self.stats["total_chunks_generated"] += 1
-                self.stats["total_tokens_generated"] += c.token_count
-                if c.oversized_chunk:
-                    self.stats["oversized_chunks"] += 1
-                if c.tiny_chunk_merged:
-                    self.stats["tiny_chunks_merged"] += 1
-                if c.content_type in self.stats["content_types"]:
-                    self.stats["content_types"][c.content_type] += 1
-                else:
-                    self.stats["content_types"][c.content_type] = 1
-
-            self.stats["total_documents_processed"] += 1
-            logger.debug(f"Created {len(chunks)} chunks from {url}")
-            return chunks
-        except Exception as e:
-            logger.error(f"Error chunking {url}: {e}")
-            import traceback
-
-            traceback.print_exc()
-            return []
+        chunks = self._split_content(content, url, title, doc_name)
+        logger.debug(f"Created {len(chunks)} chunks from {url}")
+        return chunks
 
     def chunk_batch(self, docs: List[dict]) -> List[ChunkMetadata]:
+        """
+        One unchunkable page must not sink a whole sitemap job, so a failing document is skipped and
+        recorded in `failures`; the caller reports it on the job and fails the job only when nothing
+        was produced.
+        """
+        self.failures = []
         all_chunks = []
         for i, doc in enumerate(docs, 1):
-            chunks = self.chunk_document(doc)
-            all_chunks.extend(chunks)
+            try:
+                all_chunks.extend(self.chunk_document(doc))
+            except Exception as e:
+                logger.exception(f"Error chunking {doc.get('url')}; the document is skipped")
+                self.failures.append(ChunkFailure(doc.get("url", "unknown"), f"{type(e).__name__}: {e}"))
             if i % 10 == 0:
-                logger.info(
-                    f"Processed {i}/{len(docs)} documents, "
-                    f"{len(all_chunks)} chunks so far"
-                )
+                logger.info(f"Processed {i}/{len(docs)} documents, {len(all_chunks)} chunks so far")
         logger.info(
-            f"Completed chunking {len(docs)} documents, total chunks: {len(all_chunks)}"
+            f"CHUNK | {len(docs)} documents -> {len(all_chunks)} chunks | "
+            f"tokens {sum(c.token_count for c in all_chunks)} | "
+            f"oversized {sum(c.oversized_chunk for c in all_chunks)} | "
+            f"merged from tiny {sum(c.tiny_chunk_merged for c in all_chunks)} | failed {len(self.failures)}"
         )
         return all_chunks
 
@@ -126,10 +102,9 @@ class DocumentChunker:
         sections = parse_sections(content)
         chunks = []
         chunk_index = 0
-        char_offset = 0
 
         for section in sections:
-            blocks = extract_blocks(section.text, char_offset, self.token_counter)
+            blocks = extract_blocks(section.text, self.token_counter, self.max_block_tokens)
 
             current_chunk_blocks = []
             current_tokens = 0
@@ -191,6 +166,5 @@ class DocumentChunker:
                     chunks.append(chunk)
                     chunk_index += 1
 
-            char_offset += len(section.text) + 1
 
         return merge_tiny_chunks(chunks, self.config)

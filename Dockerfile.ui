@@ -1,9 +1,13 @@
+# The admin UI: a Streamlit client of the API. It imports nothing from src/, so the image holds only
+# admin_ui/ and its own small requirements.
 FROM python:3.11-slim
+RUN useradd --create-home --uid 10001 nexus
 WORKDIR /app
 COPY requirements-ui.txt .
 RUN pip install --no-cache-dir -r requirements-ui.txt
-COPY scripts/ ./scripts/
+COPY admin_ui/ ./admin_ui/
+USER nexus
 EXPOSE 8080
 ENV API_BASE_URL="http://localhost:8000"
-# Cloud Run injects PORT environment variable
-CMD ["sh", "-c", "streamlit run scripts/chat_ui.py --server.port ${PORT:-8080} --server.address 0.0.0.0"]
+# Hosts such as Render and Cloud Run inject PORT.
+CMD ["sh", "-c", "streamlit run admin_ui/app.py --server.port ${PORT:-8080} --server.address 0.0.0.0"]

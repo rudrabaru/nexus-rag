@@ -1,0 +1,10 @@
+# The default rules plus one narrow exception: the unit tests define fake credentials ("test-admin-key-...")
+# to configure the app under test. They authenticate nothing. Real secrets in tests/ would still be
+# caught by every other rule, and anywhere outside tests/ nothing is allowed.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Fake credentials used as unit-test fixtures"
+targetRules = ["generic-api-key"]
+paths = ['''^tests/''']

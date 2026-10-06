@@ -2,6 +2,7 @@ import hashlib
 import re
 from typing import List
 from src.processing.models import Block, BlockMetrics
+from src.protected_markdown import protect
 
 class BlockParser:
     @staticmethod
@@ -20,8 +21,6 @@ class BlockParser:
             metrics.is_heading = True
         elif "|---|" in content or "|---" in content or "---|" in content:
             metrics.is_table = True
-        elif content.startswith("- ") or content.startswith("* ") or re.match(r"^\d+\.\s", content):
-            metrics.is_list = True
 
         words = re.findall(r"\b\w+\b", content.lower())
         metrics.word_count = len(words)
@@ -40,68 +39,31 @@ class BlockParser:
 
     @staticmethod
     def parse_blocks(markdown: str) -> List[Block]:
-        code_blocks = {}
-        tables = {}
+        """Blocks in reading order: headings, code, tables and blank-line separated paragraphs."""
+        safe, restore = protect(markdown)
+        blocks: List[Block] = []
+        paragraph: List[str] = []
 
-        def repl_code(m):
-            ph = f"__CODE_BLOCK_{len(code_blocks)}__"
-            code_blocks[ph] = m.group(0)
-            return ph
-
-        def repl_table(m):
-            ph = f"__TABLE_BLOCK_{len(tables)}__"
-            tables[ph] = m.group(0)
-            return ph
-
-        content_safe = re.sub(r"```.*?```", repl_code, markdown, flags=re.DOTALL)
-        table_pattern = r"(?:(?:^|\n)\|[^\n]+\|)+\n?"
-        content_safe = re.sub(table_pattern, repl_table, content_safe)
-
-        blocks = []
-        raw_lines = content_safe.split("\n")
-        current_block_lines: List[str] = []
-
-        def flush_current():
-            content = "\n".join(current_block_lines).strip()
+        def add(content: str) -> None:
+            content = restore(content).strip()
             if content:
-                if content in code_blocks:
-                    blocks.append(BlockParser.create_block(code_blocks[content]))
-                elif content in tables:
-                    blocks.append(BlockParser.create_block(tables[content]))
-                else:
-                    for ph, code in code_blocks.items():
-                        content = content.replace(ph, code)
-                    for ph, table in tables.items():
-                        content = content.replace(ph, table)
-                    blocks.append(BlockParser.create_block(content))
-            current_block_lines.clear()
+                blocks.append(BlockParser.create_block(content))
 
-        for line in raw_lines:
+        def flush() -> None:
+            add("\n".join(paragraph))
+            paragraph.clear()
+
+        for line in safe.split("\n"):
             stripped = line.strip()
             if not stripped:
-                flush_current()
-                continue
+                flush()
+            elif stripped.startswith("#") or stripped.startswith("\x00"):  # a heading, or a whole code block / table
+                flush()
+                add(stripped)
+            else:
+                paragraph.append(line)
 
-            if stripped.startswith("#"):
-                flush_current()
-                for ph, code in code_blocks.items():
-                    stripped = stripped.replace(ph, code)
-                blocks.append(BlockParser.create_block(stripped))
-                continue
-
-            if stripped in code_blocks or stripped in tables:
-                flush_current()
-                if stripped in code_blocks:
-                    blocks.append(BlockParser.create_block(code_blocks[stripped]))
-                else:
-                    blocks.append(BlockParser.create_block(tables[stripped]))
-                continue
-
-            current_block_lines.append(line)
-
-        flush_current()
-        total_blocks = len(blocks)
-        for i, block in enumerate(blocks):
-            block.metrics.position_ratio = i / total_blocks if total_blocks > 0 else 0.0
-
+        flush()
+        for position, block in enumerate(blocks):
+            block.metrics.position_ratio = position / len(blocks)
         return blocks

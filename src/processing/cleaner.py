@@ -1,14 +1,19 @@
 from typing import List, Dict
 from src.processing.models import Block
-from src.processing.block_parser import BlockParser
+
+# A block must appear in at least this many documents before its document frequency counts as
+# evidence of boilerplate. Two documents sharing a sentence is common for real content (a quoted
+# definition, a licence line), and with two documents any shared block has a frequency of 100%, so
+# the ratio alone cannot tell chrome from coincidence. Three is the smallest count that is a
+# pattern rather than a pair. Experiment: set by reasoning, not tuned on a corpus; measure removals
+# per document on a new corpus before raising it.
+MIN_SHARING_DOCUMENTS = 3
+
 
 class DocumentCleaner:
     def __init__(self, total_documents: int):
         self.total_documents = total_documents
         self.block_document_counts: Dict[str, int] = {}
-
-    def parse_blocks(self, markdown: str) -> List[Block]:
-        return BlockParser.parse_blocks(markdown)
 
     def process_corpus_frequencies(self, all_documents_blocks: List[List[Block]]):
         """Count document frequency for all block hashes."""
@@ -24,7 +29,7 @@ class DocumentCleaner:
         for i, block in enumerate(blocks):
             df_count = self.block_document_counts.get(block.content_hash, 0)
             block.metrics.document_frequency = (
-                df_count / self.total_documents if self.total_documents > 0 else 0.0
+                df_count / self.total_documents if self.total_documents > 0 and df_count >= MIN_SHARING_DOCUMENTS else 0.0
             )
 
             if (
@@ -90,8 +95,6 @@ class DocumentCleaner:
                 signals_triggered.append("context_penalty")
                 reasons.append(f"Context Penalty (+{context_penalty})")
 
-            block.boilerplate_score = score
-            block.triggered_signals = signals_triggered
             is_removed = False
 
             if block.metrics.document_frequency > 0.95 and block.metrics.word_count < 15:

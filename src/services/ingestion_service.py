@@ -1,324 +1,171 @@
-import asyncio
-import os
-import shutil
-import logging
-import traceback
-import hashlib
-import time
-import uuid
-import tempfile
-from typing import Optional, Any, Tuple
-from fastapi import UploadFile, HTTPException
+"""
+Validates an ingestion request and hands it to the durable job queue.
 
-from src.ingestion.dispatcher import IngestionDispatcher
-from src.ingestion.pipeline import IncrementalIngestionPipeline
-from src.registry.database import DocumentRegistry
+Nothing here parses a document: fetching, chunking and embedding happen in the worker
+(src/jobs/ingest_tasks.py), so this module carries no document-parsing dependencies and the API
+image stays slim. An uploaded file's bytes are read into memory (in bounded chunks), hashed, and
+stored in the `ingest_sources` table in the same transaction as the job: never on the API's local
+disk, which the worker (possibly a different host) cannot see.
+
+Re-ingesting a document does not delete it. The old chunks keep serving queries until the new run
+commits and replaces them in one transaction, so a worker that is offline for days costs nothing.
+"""
+import asyncio
+import hashlib
+import logging
+import uuid
+from dataclasses import dataclass
+from typing import Optional
+
+import procrastinate
+
+from src.config import Settings, get_settings
+from src.crawling.policy import check_fetchable
+from src.crawling.sitemap import MAX_SITEMAP_PAGES, is_sitemap_url
+from src.crawling.url_policy import UnsafeUrlError
+from src.jobs.contract import FETCH_QUEUE, FETCH_TASK, INGEST_QUEUE, INGEST_TASK, IngestionRequest
+from src.services.errors import InvalidRequest, QuotaExceeded, Unavailable
+from src.services.uploads import Upload, allowed_extension, read_capped, safe_filename
+from src.stores.documents import DocumentStore
+from src.stores.fetches import FetchStore
+from src.stores.jobs import JobStore
 
 logger = logging.getLogger(__name__)
 
+# Bounds how much of Neon's 1 GB free-tier storage an offline or backlogged worker can consume with
+# unprocessed uploads: 200 MB leaves the rest for chunk vectors. An operational safety limit on
+# ingest_sources, not a corpus-tuned retrieval threshold.
+MAX_PENDING_UPLOAD_BYTES = 200 * 1024 * 1024
+# Jobs a tenant may have queued or running at once. Workers run on demand, so work can wait for
+# days; this bounds how much one tenant can pile up in that time. A limit chosen to be generous for
+# a person uploading by hand, not tuned to any corpus.
+MAX_ACTIVE_JOBS_PER_TENANT = 10
+TENANT_CHUNK_QUOTA = 2000
+# A document that will make about this many chunks gets a heads-up that it will take a while.
+LARGE_DOCUMENT_WARNING_CHUNKS = 500
+ESTIMATED_BYTES_PER_CHUNK = 2000
 
-async def prepare_ingestion(
-    url: Optional[str],
-    file: Optional[UploadFile],
-    tenant_id: str,
-    registry: DocumentRegistry
-) -> Tuple[str, str, str, Optional[str], Optional[str], Optional[str], str]:
-    if not url and not file:
-        raise HTTPException(status_code=400, detail="Must provide either url or file")
 
-    quota = registry.get_tenant_quota(tenant_id)
-    if quota >= 2000:
-        raise HTTPException(
-            status_code=429,
-            detail="Tenant quota exceeded (2000 chunks max). Please delete old documents to ingest new ones.",
-        )
+@dataclass
+class Submission:
+    job_id: str
+    status: str  # queued | complete (the content was already indexed)
+    warning: Optional[str] = None
 
-    job_id = str(uuid.uuid4())
-    source_ident = url if url else file.filename
-    source_ident = f"{tenant_id}_{source_ident}"
-    doc_id = hashlib.blake2b(source_ident.encode(), digest_size=16).hexdigest()
 
-    temp_dir = None
-    source_path = None
-    canonical_url = None
-    content_hash = None
-    total_size = 0
+def _doc_id(tenant_id: str, source_ident: str) -> str:
+    return hashlib.blake2b(f"{tenant_id}_{source_ident}".encode(), digest_size=16).hexdigest()
 
-    if url:
-        source_path = url
-        if url.lower().endswith(".xml") or "sitemap" in url.lower():
-            format_type = "sitemap"
+
+class IngestionService:
+    def __init__(
+        self, job_queue: procrastinate.App, documents: DocumentStore, jobs: JobStore, fetches: FetchStore,
+        settings: Optional[Settings] = None,
+    ):
+        self._queue = job_queue
+        self._documents = documents
+        self._jobs = jobs
+        self._fetches = fetches
+        self._settings = settings or get_settings()
+
+    async def submit(self, tenant_id: str, url: Optional[str], file: Optional[Upload], resume: bool) -> Submission:
+        """Validates the request, registers the job durably, and defers it to the worker queue."""
+        if not url and not file:
+            raise InvalidRequest("Must provide either url or file")
+
+        if url:
+            await self._check_url(tenant_id, url)
+        await self._check_quota(tenant_id)
+
+        content_hash, upload, size = None, None, 0
+        if url:
+            doc_id = _doc_id(tenant_id, url)
+            format_type = "sitemap" if is_sitemap_url(url) else "web"
+            filename = None
         else:
-            format_type = "web"
-    elif file:
-        safe_filename = os.path.basename(file.filename)
-        allowed_extensions = {".pdf", ".docx", ".txt", ".md"}
-        ext = os.path.splitext(safe_filename)[1].lower()
-        if ext not in allowed_extensions:
-            raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}. Allowed types are: {', '.join(allowed_extensions)}")
+            filename = safe_filename(file.filename)
+            ext = allowed_extension(filename)
+            if await asyncio.to_thread(self._jobs.pending_upload_bytes, tenant_id) >= MAX_PENDING_UPLOAD_BYTES:
+                raise QuotaExceeded("Too many documents already queued for processing. Wait for them to finish.")
 
-        MAX_UPLOAD_BYTES = 20 * 1024 * 1024
-        temp_dir = tempfile.mkdtemp()
-        source_path = os.path.join(temp_dir, safe_filename)
-        hasher = hashlib.sha256()
-        
-        with open(source_path, "wb") as buffer:
-            while True:
-                chunk = await file.read(1024 * 1024)
-                if not chunk:
-                    break
-                total_size += len(chunk)
-                if total_size > MAX_UPLOAD_BYTES:
-                    buffer.close()
-                    shutil.rmtree(temp_dir)
-                    raise HTTPException(status_code=400, detail=f"File exceeds {MAX_UPLOAD_BYTES / (1024*1024):.0f}MB limit")
-                hasher.update(chunk)
-                buffer.write(chunk)
-                
-        content_hash = hasher.hexdigest()
-        format_type = safe_filename.split(".")[-1].lower() if "." in safe_filename else "unknown"
-        canonical_url = f"upload://{doc_id}/{safe_filename}"
+            content = await read_capped(file)
+            size = len(content)
+            content_hash = hashlib.sha256(content).hexdigest()
+            upload, format_type, doc_id = (filename, content), ext.lstrip("."), _doc_id(tenant_id, filename)
 
-    return job_id, doc_id, source_path, canonical_url, content_hash, temp_dir, format_type, total_size
+            existing = await asyncio.to_thread(self._documents.get_document_by_hash, tenant_id, content_hash)
+            if existing and existing["status"] == "complete":
+                return await self._already_indexed(tenant_id, existing, content_hash)
 
-async def _process_ingestion(
-    job_id: str,
-    doc_id: str,
-    source_path: str,
-    tenant_id: str,
-    extract_visuals: bool,
-    temp_dir: Optional[str],
-    registry: DocumentRegistry,
-    semaphore: asyncio.Semaphore,
-    retriever: Any,
-    canonical_url: Optional[str] = None,
-    content_hash: Optional[str] = None,
-    embedding_generator: Any = None,
-    pipeline_logger: Any = None,
-    resume: bool = False,
-):
-    start_time = time.time()
-    tag = f"[job={job_id[:8]} doc={doc_id[:8]}]"
-    semaphore_acquired = False
-
-    try:
-        # Implicit Job Queue: Suspend here until the semaphore is free
-        await semaphore.acquire()
-        semaphore_acquired = True
-
-        # ── STAGE 1: Adapter dispatch ─────────────────────────────────────────
-        logger.info(
-            f"{tag} STAGE 1 | Adapter dispatch | source={source_path!r} "
-            f"extract_visuals={extract_visuals} canonical_url={canonical_url!r}"
+        job_id = str(uuid.uuid4())
+        request = IngestionRequest(
+            job_id=job_id, doc_id=doc_id, tenant_id=tenant_id, url=url, filename=filename,
+            content_hash=content_hash, resume=resume,
         )
-        dispatcher = IngestionDispatcher()
-
-        adapter_result = await dispatcher.ingest(
-            source_path, extract_visuals=extract_visuals, registry=registry, job_id=job_id, doc_id=doc_id
+        await asyncio.to_thread(
+            self._jobs.register_job, job_id, doc_id, request.source_ref, format_type, tenant_id, content_hash,
+            upload=upload,
         )
+        await self._defer(job_id, doc_id, request)
+        return Submission(job_id, "queued", self._warning(format_type, size))
 
-        doc_count = len(adapter_result.documents) if adapter_result else 0
-        total_chars = sum(len(d.markdown_content) for d in (adapter_result.documents if adapter_result else []))
-        logger.info(
-            f"{tag} STAGE 1 DONE | documents={doc_count} total_chars={total_chars} "
-            f"visual_chunks={len(adapter_result.visual_chunks) if adapter_result else 0}"
-        )
-
-        if registry and not (adapter_result and adapter_result.documents and all(d.markdown_content == "" for d in adapter_result.documents)):
-            registry.update_job_status(job_id, "processing", 50)
-
-        # ── STAGE 1.5: Sitemap bounded concurrent fetch ────────────────────────
-        if adapter_result and adapter_result.documents and all(d.markdown_content == "" for d in adapter_result.documents) and len(adapter_result.documents) > 0:
-            urls = [doc.url for doc in adapter_result.documents]
-            if len(urls) > 50:
-                logger.warning(f"{tag} Sitemap exceeds 50 URLs (found {len(urls)}). Truncating to 50 to prevent memory exhaustion.")
-                urls = urls[:50]
-            total = len(urls)
-            logger.info(f"{tag} STAGE 1.5 | Sitemap bounded concurrent fetch | total_pages={total}")
-            if registry:
-                registry.update_job_status(job_id, "processing", 5, metadata={"total_pages": total, "indexed_pages": 0, "failed_pages": 0})
-            
-            all_docs = []
-            all_visual_chunks = []
-            failed_pages = 0
-            processed = 0
-            failed_reasons = []
-            sem = asyncio.Semaphore(4)
-
-            existing_urls = set()
-            if resume and retriever:
-                try:
-                    vector_store = getattr(retriever, "vector_store", getattr(getattr(retriever, "dense_retriever", None), "vector_store", None))
-                    if vector_store and hasattr(vector_store, "get_existing_urls"):
-                        # Get existing URLs sequentially to avoid breaking the current event loop context
-                        # Since qdrant client scroll is sync under the hood, we can wrap it or run to thread.
-                        # Wait, get_existing_urls is synchronous.
-                        existing_urls = await asyncio.to_thread(vector_store.get_existing_urls, tenant_id, doc_id)
-                        if existing_urls:
-                            logger.info(f"{tag} Resuming ingestion: Found {len(existing_urls)} previously indexed pages.")
-                except Exception as e:
-                    logger.warning(f"{tag} Failed to fetch existing URLs for resume: {e}")
-
-            async def fetch_url(u):
-                nonlocal processed, failed_pages
-                if u in existing_urls:
-                    processed += 1
-                    logger.info(f"{tag} Skipping previously indexed URL: {u}")
-                    if registry:
-                        pct = 5 + int(45 * processed / total)
-                        registry.update_job_status(job_id, "processing", pct, metadata={"total_pages": total, "indexed_pages": processed - failed_pages, "failed_pages": failed_pages})
-                    return None, None
-
-                async with sem:
-                    try:
-                        # Prevent hung requests from permanently locking the ingestion semaphore
-                        res = await asyncio.wait_for(
-                            dispatcher.web_adapter.ingest(u, extract_visuals=extract_visuals),
-                            timeout=20.0
-                        )
-                        processed += 1
-                        if registry:
-                            pct = 5 + int(45 * processed / total)
-                            registry.update_job_status(job_id, "processing", pct, metadata={"total_pages": total, "indexed_pages": processed - failed_pages, "failed_pages": failed_pages})
-                        return res, None
-                    except Exception as e:
-                        logger.warning(f"{tag} Sitemap skipped URL {u}: {e}")
-                        failed_pages += 1
-                        processed += 1
-                        if registry:
-                            pct = 5 + int(45 * processed / total)
-                            registry.update_job_status(job_id, "processing", pct, metadata={"total_pages": total, "indexed_pages": processed - failed_pages, "failed_pages": failed_pages})
-                        return None, f"{u}: {str(e)[:60]}"
-
-            results = await asyncio.gather(*(fetch_url(u) for u in urls))
-            for res, err in results:
-                if res and res.documents:
-                    all_docs.extend(res.documents)
-                if res and res.visual_chunks:
-                    all_visual_chunks.extend(res.visual_chunks)
-                if err:
-                    failed_reasons.append(err)
-            
-            if failed_reasons and registry:
-                err_summary = f"{failed_pages}/{total} pages failed scraping: " + "; ".join(failed_reasons[:2])
-                registry.update_job_status(job_id, "processing", 50, metadata={"error_reason": err_summary})
-
-            adapter_result.documents = all_docs
-            adapter_result.visual_chunks = all_visual_chunks
-            doc_count = len(adapter_result.documents)
-            total_chars = sum(len(d.markdown_content) for d in adapter_result.documents)
-            logger.info(f"{tag} STAGE 1.5 DONE | successfully fetched documents={doc_count} total_chars={total_chars} failed_pages={failed_pages}")
-
-        # ── STAGE 2: URL canonicalisation ─────────────────────────────────────
-        is_sitemap = source_path.lower().endswith(".xml") or "sitemap" in source_path.lower()
-        if canonical_url and adapter_result and adapter_result.documents and not is_sitemap:
-            for doc in adapter_result.documents:
-                old_url = doc.url
-                doc.url = canonical_url
-                logger.debug(f"{tag} STAGE 2 | URL rewrite: {old_url!r} → {canonical_url!r}")
-
-        # ── GATE: Empty adapter result ─────────────────────────────────────────
-        if not adapter_result or not adapter_result.documents:
-            logger.error(
-                f"{tag} GATE FAIL | Adapter returned no documents. "
-                f"source={source_path!r} extract_visuals={extract_visuals}. "
-                "Check STAGE 1 logs for the root cause."
-            )
-            if registry:
-                registry.update_job_status(
-                    job_id, "failed", error="Failed to extract content from source."
-                )
-            if temp_dir:
-                shutil.rmtree(temp_dir)
-            return
-
-        # ── GATE: Empty content after adapter ─────────────────────────────────
-        if total_chars < 50:
-            logger.error(
-                f"{tag} GATE FAIL | Adapter returned documents but total content "
-                f"is only {total_chars} chars. For scanned PDFs the vision fallback "
-                "should have recovered content — check STAGE 1 logs for vision errors."
+    async def _check_url(self, tenant_id: str, url: str) -> None:
+        """The fetch policy (https, public address, domain lists) and the tenant's daily page quota."""
+        settings = self._settings
+        try:
+            await asyncio.to_thread(check_fetchable, url, settings.allowed_fetch_domains, settings.denied_fetch_domains)
+        except UnsafeUrlError as e:
+            raise InvalidRequest(str(e))
+        if await asyncio.to_thread(self._fetches.pages_fetched_today, tenant_id) >= settings.fetch_daily_page_quota:
+            raise QuotaExceeded(
+                f"Daily web page quota reached ({settings.fetch_daily_page_quota} pages per 24 hours). "
+                "Upload files instead, or try later."
             )
 
-        # ── GATE: Massive content (Protect API Limits) ─────────────────────────
-        MAX_CHARS_PER_INGESTION = 1_500_000
-        if total_chars > MAX_CHARS_PER_INGESTION:
-            err_msg = f"Document is too large. Extracted text ({total_chars} characters) exceeds the {MAX_CHARS_PER_INGESTION} limit to prevent API exhaustion."
-            logger.error(f"{tag} GATE FAIL | {err_msg}")
-            if registry:
-                registry.update_job_status(job_id, "failed", error=err_msg)
-            if temp_dir:
-                shutil.rmtree(temp_dir)
-            return
-
-        # ── STAGE 3: Duplicate detection ──────────────────────────────────────
-        if not content_hash:
-            combined_text = "".join(doc.markdown_content for doc in adapter_result.documents)
-            content_hash = hashlib.sha256(combined_text.encode()).hexdigest()
-            logger.info(f"{tag} STAGE 3 | Content hash computed: {content_hash[:16]}...")
-            if registry:
-                existing_doc = registry.get_document_by_hash(tenant_id, content_hash)
-                if existing_doc and existing_doc["status"] == "complete":
-                    logger.info(f"{tag} STAGE 3 | Duplicate detected — skipping ingestion.")
-                    registry.update_job_status(job_id, "complete", 100)
-                    if temp_dir:
-                        shutil.rmtree(temp_dir)
-                    return
-                with registry._get_conn() as conn:
-                    conn.execute("UPDATE documents SET content_hash = ? WHERE doc_id = ?", (content_hash, doc_id))
-
-        # ── STAGE 4: Pipeline (chunk → embed → store) ─────────────────────────
-        db_manager = getattr(retriever, "vector_store", getattr(getattr(retriever, "dense_retriever", None), "vector_store", None))
-        pipeline = IncrementalIngestionPipeline(embedding_generator=embedding_generator, db_manager=db_manager)
-        loop = asyncio.get_running_loop()
-
-        logger.info(
-            f"{tag} STAGE 4 | Starting pipeline: "
-            f"docs={len(adapter_result.documents)} chars={total_chars}"
-        )
-
-        result = await loop.run_in_executor(
-            None,
-            pipeline.run,
-            adapter_result.documents,
-            tenant_id,
-            registry,
-            job_id,
-            doc_id,
-            adapter_result.visual_chunks,
-            pipeline_logger,
-        )
-
-        if temp_dir:
-            shutil.rmtree(temp_dir)
-
-        chunks_stored = result.get("chunks_added", result.get("chunks_stored", "?"))
-        duration_ms = (time.time() - start_time) * 1000
-        logger.info(
-            f"{tag} STAGE 4 DONE | chunks_stored={chunks_stored} "
-            f"total_duration_ms={duration_ms:.0f}"
-        )
-
-        if pipeline_logger:
-            doc = registry.get_document(doc_id)
-            chunk_count = len(doc.get("chunk_ids", [])) if doc else 0
-            pipeline_logger.log_event(
-                "ingestion_complete",
-                job_id=job_id,
-                chunk_count=chunk_count,
-                duration_ms=duration_ms
+    async def _check_quota(self, tenant_id: str) -> None:
+        if await asyncio.to_thread(self._documents.chunk_count, tenant_id) >= TENANT_CHUNK_QUOTA:
+            raise QuotaExceeded(
+                f"Tenant quota exceeded ({TENANT_CHUNK_QUOTA} chunks max). Delete old documents to ingest new ones."
+            )
+        if await asyncio.to_thread(self._jobs.active_job_count, tenant_id) >= MAX_ACTIVE_JOBS_PER_TENANT:
+            raise QuotaExceeded(
+                f"{MAX_ACTIVE_JOBS_PER_TENANT} documents are already queued or processing. Wait for some to finish."
             )
 
-    except Exception as e:
-        duration_ms = (time.time() - start_time) * 1000
-        logger.error(
-            f"{tag} INGESTION FAILED after {duration_ms:.0f}ms | "
-            f"error={e!r}\n{traceback.format_exc()}"
+    async def _already_indexed(self, tenant_id: str, existing: dict, content_hash: str) -> Submission:
+        """The same bytes are already a complete document: record a finished job pointing at it, queue nothing."""
+        job_id = str(uuid.uuid4())
+        await asyncio.to_thread(
+            self._jobs.register_job, job_id, existing["doc_id"], existing["source"], existing["format"], tenant_id, content_hash
         )
-        if registry:
-            registry.update_job_status(job_id, "failed", error=str(e))
-    finally:
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        if semaphore_acquired:
-            semaphore.release()
+        await asyncio.to_thread(self._jobs.update_job_status, job_id, "complete", 100)
+        return Submission(job_id, "complete")
+
+    async def _defer(self, job_id: str, doc_id: str, request: IngestionRequest) -> None:
+        """
+        A URL goes to the fetch queue first (the fetch worker then defers ingest); an upload goes
+        straight to ingest. lock=doc_id serialises concurrent jobs for the same document (e.g. a
+        resume retried while the original run is still in flight), so two workers never write the
+        same document's chunks at once. If the queue cannot take the job, the registered job is
+        failed and its upload discarded, so no queued job exists that no worker will ever see.
+        """
+        task, queue = (FETCH_TASK, FETCH_QUEUE) if request.url else (INGEST_TASK, INGEST_QUEUE)
+        try:
+            await asyncio.to_thread(
+                lambda: self._queue.configure_task(task, queue=queue, lock=doc_id).defer(**request.model_dump())
+            )
+        except Exception:
+            logger.exception(f"Could not defer job {job_id}")
+            await asyncio.to_thread(self._jobs.fail_job, job_id, "The job could not be queued.")
+            raise Unavailable("The job queue is unavailable right now. Try again shortly.")
+
+    @staticmethod
+    def _warning(format_type: str, size: int) -> Optional[str]:
+        if format_type == "sitemap":
+            return f"Sitemap detected. Up to {MAX_SITEMAP_PAGES} pages are fetched one at a time through a reader API."
+        if size and size / ESTIMATED_BYTES_PER_CHUNK > LARGE_DOCUMENT_WARNING_CHUNKS:
+            return (
+                f"Large document (~{int(size / ESTIMATED_BYTES_PER_CHUNK)} estimated chunks). "
+                "Ingestion may take a while; check progress with GET /ingest/{job_id}."
+            )
+        return None

@@ -1,0 +1,14 @@
+# Shared by the API and the worker: configuration, storage (Postgres + pgvector) and the job queue.
+# Direct dependencies are pinned to the versions the test suite runs on, so a build never picks up an
+# unreviewed release; Dependabot proposes upgrades (.github/dependabot.yml) and CI re-tests them.
+pydantic==2.13.4
+pydantic-settings==2.15.0  # litellm 1.102.0 requires >=2.14.1
+python-dotenv==1.2.2
+sqlalchemy[asyncio]==2.0.54
+psycopg[binary,pool]==3.3.6
+pgvector==0.5.0
+alembic==1.20.0
+procrastinate==3.9.0  # pinned: migrations/sql/procrastinate_3.9.0.sql is this version's schema
+httpx==0.28.1
+structlog==26.1.0  # one structured record per log line, with the request id bound by the middleware
+sentry-sdk==2.71.0  # optional error reporting: off unless SENTRY_DSN is set (src/observability/error_reporting.py)

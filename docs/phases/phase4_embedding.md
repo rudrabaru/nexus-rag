@@ -1,37 +1,58 @@
 # Phase 4: Embedding
 
 ## Overview
-The embedding phase transforms textual chunks into mathematical representations, enabling similarity search algorithms to locate relevant context based on user queries. The system uses a unified, API-first embedding approach for both dense (semantic) vectors and sparse (keyword) indexing.
+The embedding phase turns each chunk into a vector so that semantically similar text can be found for a query. Embedding is **API-first and provider-swappable**: the model is chosen per *index*, never mixed within one, and no embedding model runs inside the API process.
 
 ## Core Implementation Logic
 
-### Dense Embeddings
-The system delegates all dense vector generation to the **Jina Embeddings v3** API (`jina-embeddings-v3`), a highly optimized external multilingual embedding service.
+### One index, one embedding model
+Vectors from different models live in different spaces; a cosine similarity between a Voyage vector and an Ollama vector is meaningless. The system therefore makes the model a property of an **index**, identified as `provider:model` (for example `voyage:voyage-4`):
 
-- **Asymmetric Encoding:** The system uses task-aware encoding. Chunks processed during ingestion are encoded with a passage-specific task profile, optimizing them to be retrieved. User queries are encoded with a query-specific task profile, optimizing them for searching. This asymmetric approach is critical for high-fidelity late-interaction models.
-- **Batching & Concurrency:** Chunks are grouped into specific batches of 50 and sent in parallel to the external embedding service to maximize throughput without exceeding payload limits.
-- **Resiliency & Partial Success:** The system employs exponential backoff and retry logic (up to 3 retries) to absorb transient network failures or API rate limits. If rate limits persist after retries, the pipeline isolates the failed chunk batches without aborting the entire document. Successfully embedded chunks are committed to cloud vector storage, while the job status transitions to partial success and records an explicit diagnostic error reason in the document metadata.
-- **Zero RAM Footprint:** No local embedding model is loaded into memory. All dense embedding computation is remote. This is a deliberate architectural tradeoff that frees significant RAM for the web server and document processing pipeline, allowing the entire system to run comfortably on resource-constrained micro-instances.
-- **Query Embedding Cache:** To avoid redundant external API calls for repeated or near-identical queries, a fixed-capacity (500-entry) MD5-keyed in-memory cache stores recently computed query embeddings. Cache hits serve queries entirely from memory at near-zero latency.
+- Every chunk row records its `index_id` and `embedding_model`, and every index has a row in `embedding_indexes` (provider, model, dimension).
+- Every search is scoped to one index, dense **and** sparse. Keeping the keyword search on the same rows means hybrid fusion never mixes two copies of the same chunk.
+- The chunk id starts with the document's id, and the chunk key is `(tenant_id, index_id, chunk_id)`, so the same corpus can exist in two indexes at once. That is what makes an embedding comparison a controlled experiment: same chunks, same text, only the model differs.
+- A query embedder must match the store's index; constructing a retriever with a mismatched pair fails immediately rather than returning nonsense.
+- Embedding is **not** a search dimension in evaluation sweeps. Changing it means building a new index, which is done once per corpus, not per query.
 
-### Sparse Indexing
-Sparse keyword search is implemented via **SQLite FTS5** (Full-Text Search extension 5), an embedded, high-performance full-text search database engine.
+### Providers
+Providers differ only in wire format, so each is a small function that builds an `Embedder` (endpoint, request body, response reader, limits) rather than a class in a hierarchy (`src/embedding/providers.py`).
 
-- During ingestion, every chunk's text is inserted into a local virtual table alongside its metadata.
-- The index applies stemming algorithms natively (e.g., matching "running" with "run") to handle morphological variations.
-- Results are scored using industry-standard BM25 algorithms built directly into the database engine.
-- **Incremental Updates:** Unlike traditional in-memory keyword search libraries that require a full rebuild of the index after every document is added, this embedded relational database approach supports continuous, incremental inserts. This makes it highly resilient and suited for a long-running microservice.
+| Provider | Default model | Role | Free allowance |
+|---|---|---|---|
+| **Voyage** (default) | `voyage-4` (1024-dim) | Hosted default | 200M tokens per model, one-time. **3 requests/min and 10K tokens/min without a payment method** (verified 2026-09-26); adding a payment method raises the limits and the free tokens still apply |
+| **Ollama** | `bge-m3` (1024-dim) | Local index for the optional GPU worker | Unlimited, local |
+| **Cloudflare** | `bge-m3` (1024-dim, `@cf/baai/bge-m3`) | Hosted alternative to Voyage, through Workers AI's OpenAI-compatible `/ai/v1/embeddings` | Free plan, no payment method: 10,000 neurons a day at 1,075 neurons per million input tokens, about 9M tokens a day, and 3,000 requests a minute (Cloudflare's pricing and limits pages, read 2026-10-06). Past the daily allowance requests fail until 00:00 UTC |
 
-### Metadata Injection
-Every generated embedding is permanently tagged and stored in the vector database with rich metadata:
-- **Tenant ID and Visibility:** Ensures strict security filtering at the database level.
-- **Source Document and URL:** Provides the bedrock for accurate citations.
-- **Heading Path:** Injected as a structured list, allowing the generation phase to cite exact section-level hierarchy.
-- **Chunk Type:** Identifies whether the chunk is text, code, table, or mixed, enabling observability and potential type-specific retrieval boosting.
+Both produce 1024-dimensional vectors, the width of the `chunks.embedding` column. A model with another width is refused with an explicit error instead of failing on insert.
 
-### Chunk Size Enforcement
-Before embedding, the system enforces a hard token limit on every chunk to ensure it safely fits within the maximum context window of the external embedding API, preventing outright ingestion failures due to oversized blocks.
+**Cloudflare is wired but not yet measured.** The provider (`EMBEDDING_PROVIDER=cloudflare`, with `CLOUDFLARE_ACCOUNT_ID` and `CLOUDFLARE_API_TOKEN`) is tested against a fake server only. Still to establish on a real account: that the output is 1024-dimensional (a wrong width is refused with an error), the real per-request batch and token limits (its documentation states none; the 50 texts and 100,000 tokens per request are conservative experiment values), throughput, and whether `bge-m3` retrieves as well as `voyage-4` on the same chunks. Because each model is its own index, that last question is answered by embedding one corpus twice and comparing the two indexes with the evaluation engine (Phase 6). Queries must use the index's own model, so a Cloudflare index can serve hosted chat queries (unlike a laptop-only Ollama index).
+
+### Asymmetric encoding
+Retrieval models embed queries and documents differently (Voyage `input_type`). Callers always state which side they are embedding: chunks as `document`, queries as `query`. Using the wrong side silently lowers recall, so it is an explicit argument, not a default.
+
+### What is embedded
+The embedded text is the chunk prefixed with its document and heading path: `[Document > Section > Subsection]\n<chunk text>`. The prefix gives short chunks the context of where they sit.
+
+### Pacing, retries and partial success
+- **Client-side pacing.** Voyage's no-payment-method limits (3 RPM / 10K TPM) are enforced before sending, with a sliding one-minute window. Sending as fast as possible and backing off on 429s would spend the same wall-clock time in penalties. The window is thread-based, not asyncio-based, because each ingestion job runs its own event loop. Token counts for pacing are estimated at ~3 characters per token (over-estimating English) because the API image carries no tokenizer.
+- **Request splitting.** No request exceeds the per-request token cap or the per-minute window: a request larger than the window could never be admitted.
+- **Retries.** One shared loop (`src/retry.py`, also used by the HTTP rerankers) retries 408/5xx and network errors with backoff of 1, 2, 4 seconds, honouring `Retry-After`. A 429 means the minute's budget is spent, so it waits a whole window (or as long as the provider asks): the earlier 2/4/8 s backoff spent every attempt inside one minute. Errors retrying cannot fix (a bad key, an unknown model, a wrong vector width) stop the run at once, with a message that carries the HTTP status but not the provider's text.
+- **Checkpoints.** At the card-free Voyage limit one ingestion is hours of paced requests. Every completed request is saved to `embedding_checkpoints` (vector, provider-reported tokens) keyed by job and chunk, with a hash of exactly what was embedded and into which index. A retry of the same job reuses a vector only when that hash matches, so a changed chunker or provider can never reuse a stale one, and sends only the unfinished requests. Checkpoints are deleted in the commit that stores the chunks, or when the job fails. Cost: one staging table; saving a checkpoint is best-effort and never fails the run.
+- **Partial success.** A batch that still fails is recorded by chunk index; the document commits the chunks that did embed and the job ends as `partial_success` with the reason. A run where nothing embedded raises, so the job is retried.
+
+### Switching the embedding model
+Changing `EMBEDDING_PROVIDER` / `EMBEDDING_MODEL` points both ingestion and search at a different index, which starts empty: documents are re-ingested with the new model rather than copied between indexes. The API warns at startup when its index holds no chunks.
+
+### Storage: one row per chunk in Postgres
+Each embedded chunk is one row of `chunks` in Postgres (Neon): text, vector (`halfvec(1024)`, HNSW) and a generated full-text column (`tsvector`, GIN).
+- **One write, two indexes.** The keyword index is computed from the same row, so dense and sparse cannot diverge.
+- **Idempotent upserts** on `(tenant_id, index_id, chunk_id)`.
+- **Cascading deletes** from the document.
+- **`halfvec`** halves storage (~2 KB per chunk) under Neon's 1 GB free tier; round-trip cosine stays above 0.9999.
+- **One HNSW graph for all indexes.** Searches filter by `index_id` with iterative scans. With a second large index, a partial HNSW index per `index_id` would keep each graph model-pure; at one active index plus a transitional copy this is not yet worth the DDL.
 
 ## Design Philosophy & Tradeoffs
-- **Network Dependency:** All dense embedding generation requires outbound API calls. A network partition will cause ingestion to fail gracefully (with retries), but there is no local fallback embedding model.
-- **API Rate Limits vs. Partial Indexing:** Heavy, sustained ingestion loads may encounter third-party API rate limits. Rather than failing an entire document when an embedding batch is rate-limited, the system opts for partial indexing. This preserves all successfully embedded chunks for immediate retrieval while surfacing diagnostic error reasons to the user for observability.
+- **Why Voyage as the default:** the alternative hosted embedder considered (Jina) draws on a one-time grant shared by embeddings, reranking and the reader, which drains permanently. Voyage's grant is larger (200M tokens per model; a 2,000-chunk corpus is about 1.4M tokens).
+- **The cost of card-free Voyage:** 3 RPM is shared by the whole account, so query embedding (one request per uncached query) competes with ingestion, and a chat burst beyond 3 queries/minute waits for the window. Adding a payment method removes this without spending money while the free tokens last. The local Ollama index is the alternative that has no limit at all.
+- **Network dependency:** hosted embedding needs outbound calls; there is no silent local fallback, because falling back to a different model would put vectors from two spaces into one index.
+- **Cost accounting with the query cache:** a cached query embedding costs no tokens, so chat reports zero embedding tokens on a hit. The cache also remembers each query's token count, and the evaluation engine charges every configuration that count, so a later configuration in a sweep is not made to look cheaper than an earlier one (Phase 6). Experiments also keep each query's embedding in Postgres (`query_embeddings`, migration 0008), so a rerun, a resume or a further experiment over the same questions does not spend the provider's rate limit again: 41 test questions cost about 14 minutes at the card-free Voyage limit the first time and nothing afterwards. Only the evaluation path stores them; a chat question is never kept. The vector is stored losslessly (float4, as the provider returned it) under a hash of the normalised text and the index, and the first stored vector wins.

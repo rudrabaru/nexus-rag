@@ -1,0 +1,56 @@
+# The parse worker: parses, chunks and embeds documents (src/jobs/tasks.py). It never serves
+# HTTP traffic and never contacts a website: it only claims jobs from the ingest queue and reads
+# their sources from Postgres. Deliberately a separate image from the API: this is the only place
+# document-parsing dependencies (Docling, torch, PyMuPDF) are installed. It runs on the
+# maintainer's machine on demand (no free host has the memory), so run it with --no-healthcheck.
+FROM python:3.11-slim
+
+# libgl1 / libglib2.0-0 / libxcb1: shared libraries OpenCV (used by Docling's layout and OCR
+# models) loads at runtime and the slim base image lacks ("libxcb.so.1: cannot open").
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libgl1 \
+    libglib2.0-0 \
+    libxcb1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --uid 10001 nexus
+WORKDIR /app
+
+# Model caches live in fixed directories that the unprivileged runtime user owns, and are filled
+# at build time: a worker that downloads models on first use would contact hosts other than
+# Neon, the model providers and Voyage.
+ENV HF_HOME=/opt/models/huggingface \
+    TIKTOKEN_CACHE_DIR=/opt/models/tiktoken
+
+# CPU-only torch first, so Docling's dependency resolves to it instead of the multi-gigabyte CUDA build.
+RUN pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch torchvision
+
+COPY requirements-base.txt requirements-worker.txt ./
+RUN pip install --no-cache-dir -r requirements-worker.txt
+
+# Bake Docling's models (layout, table structure, OCR) and the chunker's tokenizer into the image
+# with one warm-up conversion, so a cold start does not download ~0.5 GB before its first document.
+RUN python -c "import pymupdf; d = pymupdf.open(); d.new_page().insert_text((72, 72), 'warm-up'); d.save('/tmp/w.pdf')" \
+    && python -c "from docling.document_converter import DocumentConverter; DocumentConverter().convert('/tmp/w.pdf')" \
+    && python -c "import tiktoken; tiktoken.get_encoding('cl100k_base')" \
+    && rm /tmp/w.pdf \
+    && chown -R nexus /opt/models
+
+# Application code only. alembic.ini and migrations/ are included: the worker verifies the schema
+# revision at startup, same as the API (src/db/schema_version.py).
+COPY src ./src
+COPY migrations ./migrations
+COPY alembic.ini ./
+
+ENV PYTHONIOENCODING=utf-8 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+USER nexus
+
+# Exec form, so the worker is PID 1 and receives SIGTERM for a graceful shutdown. WORKER_CONCURRENCY
+# is read from the environment by the launcher. Docling itself runs one document at a time per
+# process (src/parsing/files.py) whatever the concurrency, so peak memory stays at one document's.
+# Append --drain to exit when the queue is empty instead of waiting for jobs.
+CMD ["python", "-m", "src.jobs.workers", "ingest"]
