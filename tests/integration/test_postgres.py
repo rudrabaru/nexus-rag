@@ -15,7 +15,7 @@ from src.stores.api_keys import AuthStore
 from src.stores.tenants import add_embedding_tokens
 from tests.integration.helpers import Stores
 from src.stores.query_log import QueryLogStore
-from src.stores.jobs import complete_job
+from src.stores.job_transitions import complete_job
 from src.db.schema import EMBEDDING_DIMENSION, chunks, embedding_indexes, pipeline_events, query_logs, tenants
 from src.db.schema_version import ALEMBIC_INI, assert_schema_current
 from src.retrieving.chunk_store import ChunkStore

@@ -6,7 +6,7 @@ from src.jobs.contract import IngestionRequest
 from src.retrieving.chunk_writes import delete_stale_chunks, write_chunks
 from src.stores.checkpoints import delete_checkpoints
 from src.stores.fetches import delete_fetched_pages
-from src.stores.jobs import complete_job, delete_ingest_source
+from src.stores.job_transitions import complete_job, delete_ingest_source
 from src.stores.tenants import add_embedding_tokens
 
 

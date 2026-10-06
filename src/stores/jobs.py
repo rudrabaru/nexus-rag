@@ -1,68 +1,14 @@
 from typing import Any, Dict, Optional, Tuple
 
-from sqlalchemy import bindparam, case, delete, func, literal, select, update
-from sqlalchemy.dialects.postgresql import JSONB, insert
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy import case, delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert
+from sqlalchemy.engine import Engine
 
 from src.db.rows import row_to_dict, utcnow
 from src.db.schema import chunks, documents, ingest_sources, jobs
 from src.stores.checkpoints import delete_checkpoints
 from src.stores.fetches import delete_fetched_pages
-
-TERMINAL_STATUSES = ("complete", "failed")
-ACTIVE_STATUSES = ("queued", "processing")
-PARTIAL_SUCCESS_DEFAULT_ERROR = "Some chunks or pages failed processing (e.g., API rate limits or crawling errors)."
-
-
-def _merged_metadata(new_meta: Dict[str, Any]):
-    """Merges keys into jobs.metadata atomically in SQL (JSONB ||), with no read-modify-write race."""
-    return func.coalesce(jobs.c.metadata, literal({}, JSONB)).op("||")(bindparam("new_meta", new_meta, type_=JSONB))
-
-
-def _error_from_metadata(meta: Optional[Dict[str, Any]]) -> Optional[str]:
-    if isinstance(meta, dict):
-        return meta.get("error_reason") or meta.get("error")
-    return None
-
-
-def _doc_of_job(job_id: str):
-    return select(jobs.c.doc_id).where(jobs.c.job_id == job_id).scalar_subquery()
-
-
-def complete_job(
-    conn: Connection,
-    job_id: str,
-    stats: Dict[str, Any],
-    status: str = "complete",
-    metadata: Optional[Dict[str, Any]] = None,
-    error: Optional[str] = None,
-) -> None:
-    """
-    Marks a job complete (or partial_success) and records the document's final stats, on the
-    caller's transaction. A complete job clears the document's error: a failed earlier attempt
-    must not outlive a success.
-    """
-    now = utcnow()
-    if metadata is not None:
-        conn.execute(update(jobs).where(jobs.c.job_id == job_id).values(metadata=_merged_metadata(metadata)))
-
-    if error is None and status == "partial_success":
-        stored = conn.execute(select(jobs.c.metadata).where(jobs.c.job_id == job_id)).scalar_one_or_none()
-        error = _error_from_metadata(metadata) or _error_from_metadata(stored) or PARTIAL_SUCCESS_DEFAULT_ERROR
-
-    conn.execute(
-        update(jobs).where(jobs.c.job_id == job_id).values(status=status, progress_pct=100, finished_at=now, error=error)
-    )
-    conn.execute(
-        update(documents)
-        .where(documents.c.doc_id == _doc_of_job(job_id))
-        .values(status=status, updated_at=now, stats=stats, error=error)
-    )
-
-
-def delete_ingest_source(conn: Connection, job_id: str) -> None:
-    conn.execute(delete(ingest_sources).where(ingest_sources.c.job_id == job_id))
-
+from src.stores.job_transitions import ACTIVE_STATUSES, TERMINAL_STATUSES, delete_ingest_source, doc_of_job, merged_metadata
 
 class JobStore:
     """Ingestion job rows, the document status they drive, and uploads waiting for the worker."""
@@ -127,14 +73,14 @@ class JobStore:
         elif error is not None:
             values["error"] = error
         if metadata is not None:
-            values["metadata"] = _merged_metadata(metadata)
+            values["metadata"] = merged_metadata(metadata)
 
         with self._engine.begin() as conn:
             conn.execute(update(jobs).where(jobs.c.job_id == job_id).values(**values))
             if status == "complete":  # e.g. a resume with nothing left to do: the document is complete too
                 conn.execute(
                     update(documents)
-                    .where(documents.c.doc_id == _doc_of_job(job_id))
+                    .where(documents.c.doc_id == doc_of_job(job_id))
                     .values(status="complete", error=None, updated_at=utcnow())
                 )
 
@@ -145,14 +91,14 @@ class JobStore:
         re-ingested keeps serving its previous chunks, and carries the error as a note.
         """
         now = utcnow()
-        has_chunks = select(chunks.c.chunk_id).where(chunks.c.doc_id == _doc_of_job(job_id)).exists()
+        has_chunks = select(chunks.c.chunk_id).where(chunks.c.doc_id == doc_of_job(job_id)).exists()
         with self._engine.begin() as conn:
             conn.execute(
                 update(jobs).where(jobs.c.job_id == job_id).values(status="failed", finished_at=now, error=error)
             )
             conn.execute(
                 update(documents)
-                .where(documents.c.doc_id == _doc_of_job(job_id))
+                .where(documents.c.doc_id == doc_of_job(job_id))
                 .values(status=case((has_chunks, documents.c.status), else_="failed"), error=error, updated_at=now)
             )
             delete_ingest_source(conn, job_id)
@@ -173,7 +119,7 @@ class JobStore:
                 .where(jobs.c.job_id == job_id)
                 .values(
                     doc_id=duplicate_of, status="complete", progress_pct=100, finished_at=utcnow(),
-                    metadata=_merged_metadata({"duplicate_of": duplicate_of}),
+                    metadata=merged_metadata({"duplicate_of": duplicate_of}),
                 )
             )
             delete_ingest_source(conn, job_id)
