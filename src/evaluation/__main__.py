@@ -3,6 +3,7 @@
     python -m src.evaluation resume EXPERIMENT_ID          # continue a paused or interrupted one
     python -m src.evaluation report EXPERIMENT_ID [--json FILE] [--details] [--fail-on-regression]
     python -m src.evaluation list [--tenant T]
+    python -m src.evaluation estimate SPEC.json            # what the spec asks of each provider, before running it
 
 Results live in Postgres (DATABASE_URL); --json exports a report. --fail-on-regression is a gate for
 CI and exits 1 unless the experiment is evidence: it must be complete, at least --min-valid of every
@@ -20,6 +21,7 @@ from src.config import get_settings
 from src.evaluation import store
 from src.evaluation.dataset import resolve_dataset
 from src.evaluation.engine import run_experiment
+from src.evaluation.estimate import DEFAULT_MAX_DAYS, estimate
 from src.evaluation.ground_truth import missing_chunk_ids
 from src.evaluation.report import build_report, gate_failures, render
 from src.evaluation.spec import ExperimentSpec
@@ -56,6 +58,11 @@ def main(argv=None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     run = commands.add_parser("run", help="create an experiment from a spec file and run it")
     run.add_argument("spec")
+    sizing = commands.add_parser("estimate", help="what a spec will ask of each provider against their limits; runs nothing")
+    sizing.add_argument("spec")
+    sizing.add_argument("--max-days", type=int, default=DEFAULT_MAX_DAYS)
+    run.add_argument("--max-days", type=int, default=DEFAULT_MAX_DAYS, help="refuse a run needing more days of a provider's allowance")
+    run.add_argument("--ignore-limits", action="store_true", help="run even when the estimate says a provider's limits will not allow it to finish")
     resume = commands.add_parser("resume", help="continue an experiment")
     resume.add_argument("experiment_id")
     report = commands.add_parser("report", help="print an experiment's report")
@@ -81,13 +88,23 @@ def main(argv=None) -> int:
             print(f"{e['experiment_id']}  {e['status']:<9} {e['created_at'][:19]}  {e['tenant_id']:<20} {e['name']}")
         return 0
 
-    if args.command == "run":
+    if args.command in ("run", "estimate"):
         spec = ExperimentSpec(**json.loads(Path(args.spec).read_text(encoding="utf-8")))
         absent = missing_keys(spec, get_settings())
         if absent:
             print(f"The experiment's models need keys that are not set: {', '.join(absent)}. Nothing was created or run.")
             return 2
         dataset = resolve_dataset(engine, spec.tenant_id, spec.dataset, spec.relevance)
+        sizing = estimate(spec, [q.query for q in dataset.queries], get_settings())
+        print(sizing.render())
+        problems = sizing.problems(args.max_days)
+        if args.command == "estimate":
+            print("\n" + "\n".join(problems) if problems else "\nWithin the limits.")
+            return 1 if problems else 0
+        if problems and not args.ignore_limits:
+            print("\nRefusing to start; nothing was created:\n  " + "\n  ".join(problems))
+            print("Shrink the experiment (fewer trials or queries), use a model with more room, or pass --ignore-limits.")
+            return 2
         if spec.relevance == "chunk":
             missing = missing_chunk_ids(engine, spec.tenant_id, (i for q in dataset.queries for i in q.source_chunk_ids))
             if missing:
